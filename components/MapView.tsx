@@ -1,6 +1,6 @@
 "use client";
 
-import Map, { Marker, type MapRef } from "react-map-gl/maplibre";
+import Map, { Marker, AttributionControl, type MapRef } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useCallback, useEffect, useRef } from "react";
 import type { Place } from "@/lib/types";
@@ -57,6 +57,15 @@ export default function MapView({
   const onLoad = useCallback(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
+
+    // MapLibre renders the attribution <details> expanded on load — collapse it
+    // to a quiet ⓘ (tapping still opens it). Keeps it legally visible, out of
+    // the way of the title + the bottom dock.
+    const attrib = map.getContainer().querySelector<HTMLDetailsElement>(".maplibregl-ctrl-attrib");
+    if (attrib) {
+      attrib.removeAttribute("open");
+      attrib.classList.remove("maplibregl-compact-show");
+    }
     const ink = "#55565a"; // neutral gray ink labels
     const halo = "rgba(247,247,245,0.95)";
     const LAND = "#f3f3f0"; // neutral off-white (barely warm)
@@ -98,11 +107,16 @@ export default function MapView({
       ref={mapRef}
       initialViewState={DEFAULT_VIEW}
       mapStyle={MAP_STYLE}
-      attributionControl={{ compact: true }}
+      attributionControl={false}
       onLoad={onLoad}
       onClick={() => onSelect(null)}
       style={{ position: "absolute", inset: 0 }}
     >
+      {/* Attribution is legally required — park it top-right (the only corner the
+          bottom dock doesn't cover). No `compact` prop: explicit compact starts
+          EXPANDED, so we let the responsive mode collapse it to a closed ⓘ on
+          this narrow (<640px) map. */}
+      <AttributionControl position="top-right" />
       {places.map((p, i) => {
         const state = displayState(p);
         const active = p.id === selectedId;

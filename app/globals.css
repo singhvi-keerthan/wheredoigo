@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* ============================================================
-   NIGHTFALL — warm dark chrome over a light paper map.
+   IM HUNGRY — warm dark chrome over a light paper map.
    Benchmark feel: Beli (photo-forward, ranked, social warmth) +
    Partiful (playful, rounded, springy delight). The map + photos
    carry colour; chrome is warm-neutral and tactile.
@@ -141,24 +141,20 @@ body {
   scrollbar-width: none;
 }
 
-/* MapLibre attribution + controls — toned to the warm shell */
-.maplibregl-ctrl-attrib {
-  background: rgba(27, 24, 29, 0.86) !important;
+/* MapLibre attribution — quiet ⓘ chip, top-right, toned to the warm shell.
+   It ships expanded; onLoad collapses the <details> to just the ⓘ (taps still
+   expand it). Stays legally visible. */
+.maplibregl-ctrl-attrib.maplibregl-compact {
+  background: rgba(27, 24, 29, 0.82) !important;
   color: var(--text-tertiary) !important;
-  border-radius: 8px !important;
+  border-radius: 999px !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
 }
 .maplibregl-ctrl-attrib a {
   color: var(--text-secondary) !important;
 }
-.maplibregl-ctrl-group {
-  background: var(--bg-raised) !important;
-  border: 1px solid var(--border) !important;
-  border-radius: 12px !important;
-  box-shadow: var(--shadow-pop) !important;
-  overflow: hidden;
-}
-.maplibregl-ctrl-group button + button {
-  border-top: 1px solid var(--border) !important;
+.maplibregl-ctrl-attrib-button {
+  background-color: rgba(27, 24, 29, 0.82) !important;
 }
 
 /* cmdk */
