@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  X, Navigation, Heart, Ban, Star, Plus, ImagePlus, Trash2, Clock, Check,
+  X, Navigation, Heart, Ban, Star, Plus, ImagePlus, Camera, Trash2, Clock, Check,
 } from "lucide-react";
 import {
   usePlace, updatePlace, addVisit, toggleFavorite, toggleNeverAgain, setTags, addPhoto, removePhoto,
@@ -19,7 +19,10 @@ const STALE_MS = 30 * 24 * 60 * 60 * 1000; // re-enrich after ~30 days
 export default function PlaceDetail({ id, onClose }: { id: string | null; onClose: () => void }) {
   const place = usePlace(id);
   const customTags = useCustomTags();
-  const fileRef = useRef<HTMLInputElement>(null);
+  const uploadRef = useRef<HTMLInputElement>(null); // place photo — library
+  const cameraRef = useRef<HTMLInputElement>(null); // place photo — camera
+  const vUploadRef = useRef<HTMLInputElement>(null); // visit photo — library
+  const vCameraRef = useRef<HTMLInputElement>(null); // visit photo — camera
   const enrichedRef = useRef<string | null>(null);
   const [editingTags, setEditingTags] = useState(false);
   const [editingNote, setEditingNote] = useState(false);
@@ -28,6 +31,7 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
   const [vWho, setVWho] = useState("");
   const [vNotes, setVNotes] = useState("");
   const [vRating, setVRating] = useState<number | null>(null);
+  const [vPhoto, setVPhoto] = useState<string | null>(null); // pending visit photo (dataUrl)
 
   // Refresh Google rating / price / hours when a linked place opens and its
   // cached data is missing or stale (~30 days). Runs once per place per open.
@@ -70,6 +74,7 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
     );
   };
 
+  // Place-scoped photo (library or camera — same handler).
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -82,9 +87,22 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
     e.target.value = "";
   };
 
+  // Visit-scoped photo — held until the visit is logged, then attached to it.
+  const onVisitFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setVPhoto(await resizeImage(file));
+    } catch {
+      /* ignore bad image */
+    }
+    e.target.value = "";
+  };
+
   const logVisit = () => {
-    addVisit(place.id, { visitedOn: vDate, whoWith: vWho.trim(), notes: vNotes.trim(), rating: vRating });
-    setVWho(""); setVNotes(""); setVRating(null); setVDate(today());
+    const v = addVisit(place.id, { visitedOn: vDate, whoWith: vWho.trim(), notes: vNotes.trim(), rating: vRating });
+    if (v && vPhoto) addPhoto(place.id, { dataUrl: vPhoto, source: "mine", scope: "visit", visitId: v.id });
+    setVWho(""); setVNotes(""); setVRating(null); setVDate(today()); setVPhoto(null);
     setLoggingVisit(false);
   };
 
@@ -153,18 +171,22 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
             </div>
           )}
 
-          {/* photo — big full-width block (empty state prompts an upload) */}
+          {/* photo — big full-width block; empty state offers upload + camera
+              (stacked on mobile, side-by-side on desktop's free width) */}
           <div className="mt-3.5">
             {place.photos.length === 0 ? (
-              <button
-                onClick={() => fileRef.current?.click()}
-                className="press grid w-full place-items-center gap-1.5"
-                style={{ height: 188, borderRadius: "var(--radius)", border: "1px dashed var(--border-strong)", color: "var(--text-tertiary)" }}
+              <div
+                className="grid w-full place-items-center gap-3 px-4"
+                style={{ minHeight: 172, borderRadius: "var(--radius)", border: "1px dashed var(--border-strong)" }}
               >
-                <ImagePlus size={22} />
-                <span className="text-[13px]">place photo</span>
-                <span className="text-[11.5px]" style={{ color: "var(--text-secondary)" }}>+ upload first</span>
-              </button>
+                <div className="flex items-center gap-1.5" style={{ color: "var(--text-tertiary)" }}>
+                  <ImagePlus size={18} /> <span className="text-[13px]">Add a photo</span>
+                </div>
+                <div className="flex w-full max-w-[320px] flex-col gap-2 sm:flex-row">
+                  <PhotoBtn onClick={() => uploadRef.current?.click()} icon={<ImagePlus size={15} />} label="Upload" />
+                  <PhotoBtn onClick={() => cameraRef.current?.click()} icon={<Camera size={15} />} label="Take photo" />
+                </div>
+              </div>
             ) : (
               <>
                 <div className="relative w-full overflow-hidden" style={{ height: 188, borderRadius: "var(--radius)" }}>
@@ -193,16 +215,26 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
                     </div>
                   ))}
                   <button
-                    onClick={() => fileRef.current?.click()}
+                    onClick={() => uploadRef.current?.click()}
+                    aria-label="Upload photo"
                     className="grid h-16 w-16 shrink-0 place-items-center"
                     style={{ borderRadius: "var(--radius-sm)", border: "1px dashed var(--border-strong)", color: "var(--text-tertiary)" }}
                   >
                     <ImagePlus size={16} />
                   </button>
+                  <button
+                    onClick={() => cameraRef.current?.click()}
+                    aria-label="Take photo"
+                    className="grid h-16 w-16 shrink-0 place-items-center"
+                    style={{ borderRadius: "var(--radius-sm)", border: "1px dashed var(--border-strong)", color: "var(--text-tertiary)" }}
+                  >
+                    <Camera size={16} />
+                  </button>
                 </div>
               </>
             )}
-            <input ref={fileRef} type="file" accept="image/*" hidden onChange={onFile} />
+            <input ref={uploadRef} type="file" accept="image/*" hidden onChange={onFile} />
+            <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={onFile} />
           </div>
 
           {/* primary + preference actions */}
@@ -363,6 +395,27 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
                   <input value={vWho} onChange={(e) => setVWho(e.target.value)} placeholder="Who with" className="input-dark flex-1" />
                 </div>
                 <input value={vNotes} onChange={(e) => setVNotes(e.target.value)} placeholder="What you ate, how it was…" className="input-dark" />
+
+                {/* attach a photo to this visit */}
+                {vPhoto ? (
+                  <div className="relative h-16 w-16 overflow-hidden" style={{ borderRadius: "var(--radius-sm)" }}>
+                    <img src={vPhoto} alt="" className="h-full w-full object-cover" />
+                    <button
+                      onClick={() => setVPhoto(null)}
+                      aria-label="Remove photo"
+                      className="absolute right-0.5 top-0.5 grid h-5 w-5 place-items-center rounded-full"
+                      style={{ background: "rgba(6,8,13,0.7)", color: "#fff" }}
+                    >
+                      <Trash2 size={10} />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <PhotoBtn onClick={() => vUploadRef.current?.click()} icon={<ImagePlus size={15} />} label="Upload" />
+                    <PhotoBtn onClick={() => vCameraRef.current?.click()} icon={<Camera size={15} />} label="Take photo" />
+                  </div>
+                )}
+
                 <div className="flex items-center justify-between">
                   <Stars value={vRating} onSet={setVRating} />
                   <button
@@ -373,6 +426,8 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
                     <Plus size={13} strokeWidth={2.5} /> Log visit
                   </button>
                 </div>
+                <input ref={vUploadRef} type="file" accept="image/*" hidden onChange={onVisitFile} />
+                <input ref={vCameraRef} type="file" accept="image/*" capture="environment" hidden onChange={onVisitFile} />
               </div>
             ) : (
               <button
@@ -410,6 +465,24 @@ function Section({ title, action, children }: { title: string; action?: React.Re
       </div>
       {children}
     </section>
+  );
+}
+
+// Upload / Take-photo button — pair stacks on mobile, rows on desktop.
+function PhotoBtn({ onClick, icon, label }: { onClick: () => void; icon: React.ReactNode; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      className="press flex flex-1 items-center justify-center gap-1.5 py-2.5 text-[12.5px] font-semibold"
+      style={{
+        borderRadius: "var(--radius-chip)",
+        background: "var(--bg-elevated)",
+        color: "var(--text-primary)",
+        border: "1px solid var(--border-strong)",
+      }}
+    >
+      {icon} {label}
+    </button>
   );
 }
 

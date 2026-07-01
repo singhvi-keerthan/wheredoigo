@@ -116,9 +116,9 @@ export function setTags(id: string, tags: Tag[]) {
 }
 
 // Adding a visit is also the watchlist -> visited transition (append-only history).
-export function addVisit(id: string, visit: Omit<Visit, "id" | "createdAt">) {
+export function addVisit(id: string, visit: Omit<Visit, "id" | "createdAt">): Visit | undefined {
   const p = read().find((x) => x.id === id);
-  if (!p) return;
+  if (!p) return undefined;
   const v: Visit = { ...visit, id: uid(), createdAt: new Date().toISOString() };
   updatePlace(id, {
     status: "visited",
@@ -126,6 +126,7 @@ export function addVisit(id: string, visit: Omit<Visit, "id" | "createdAt">) {
     // first rating becomes your rating if none set yet
     myRating: p.myRating ?? visit.rating ?? p.myRating,
   });
+  return v; // caller can attach a visit-scoped photo to v.id
 }
 
 export function addPhoto(id: string, photo: Omit<Photo, "id" | "createdAt">) {
