@@ -63,7 +63,7 @@ export default function PlaceCard({
         <X size={14} strokeWidth={2.25} />
       </button>
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-6">
         {/* left: identity + name — tap to open */}
         <button onClick={onOpen} className="flex min-w-0 items-start gap-3.5 text-left sm:flex-1">
           <div
@@ -120,8 +120,9 @@ export default function PlaceCard({
           <ChevronRight size={18} className="shrink-0 self-center sm:hidden" style={{ color: "var(--text-tertiary)" }} />
         </button>
 
-        {/* right: photos — show + add (right of name on desktop, stacked on mobile) */}
-        <div className="scroll-quiet flex gap-2 overflow-x-auto pb-0.5 sm:w-[208px] sm:shrink-0">
+        {/* right: photos — show + add (right of name on desktop, stacked on mobile).
+            Wraps so added pictures fill this same space; sm:pt clears the ✕. */}
+        <div className="flex flex-wrap gap-2 sm:w-[204px] sm:shrink-0 sm:pt-8">
           {place.photos.map((ph) => (
             <div key={ph.id} className="relative h-[60px] w-[60px] shrink-0 overflow-hidden" style={{ borderRadius: "var(--radius-sm)" }}>
               <img src={ph.dataUrl} alt="" className="h-full w-full object-cover" />
