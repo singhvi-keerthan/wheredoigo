@@ -156,10 +156,10 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
                 <div
                   key={ph.id}
                   onClick={() => setRevealId((cur) => (cur === ph.id ? null : ph.id))}
-                  className="relative w-full cursor-pointer overflow-hidden"
-                  style={{ borderRadius: "var(--radius)" }}
+                  className="relative mx-auto w-full cursor-pointer overflow-hidden"
+                  style={{ borderRadius: "var(--radius)", aspectRatio: "3 / 4", maxHeight: "68vh", maxWidth: "calc(68vh * 3 / 4)" }}
                 >
-                  <img src={ph.dataUrl} alt="" className="block h-auto w-full" />
+                  <img src={ph.dataUrl} alt="" className="block h-full w-full object-cover" />
                   {revealed && (
                     <div className="absolute inset-0 grid place-items-center" style={{ background: "rgba(6,8,13,0.45)" }}>
                       <button
