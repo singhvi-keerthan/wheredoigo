@@ -1,20 +1,21 @@
 "use client";
 
 import { Heart } from "lucide-react";
+import type { ReactNode } from "react";
 
-// Photo-disc pin: a round place thumbnail (or category emoji fallback) inside a
-// status-coloured ring, on a small stem. Selected pins grow + lift with a halo.
+// Photo-disc pin: a round place thumbnail (or category SVG glyph fallback) inside
+// a status-coloured ring, on a small stem. Selected pins grow + lift with a halo.
 // Favorites get a heart badge. This is the headline visual — photo-forward,
 // instantly recognisable, Beli-meets-map.
 export default function Pin({
   photoUrl,
-  emoji,
+  glyph,
   color,
   active,
   favorite,
 }: {
   photoUrl?: string;
-  emoji: string;
+  glyph: ReactNode;
   color: string;
   active: boolean;
   favorite?: boolean;
@@ -55,9 +56,9 @@ export default function Pin({
         {!photoUrl && (
           <span
             className="grid h-full w-full place-items-center"
-            style={{ fontSize: active ? 22 : 18, lineHeight: 1 }}
+            style={{ color: "var(--text-primary)" }}
           >
-            {emoji}
+            {glyph}
           </span>
         )}
       </span>

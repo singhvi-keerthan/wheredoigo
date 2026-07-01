@@ -5,9 +5,9 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { useCallback, useEffect, useRef } from "react";
 import type { Place } from "@/lib/types";
 import { displayState } from "@/lib/types";
-import { placeEmoji } from "@/lib/icons";
 import { DEFAULT_VIEW } from "@/lib/seed";
 import Pin from "./Pin";
+import PlaceGlyph from "./PlaceGlyph";
 
 // Keyless light vector style (CARTO positron), retuned to warm ivory/paper.
 const MAP_STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
@@ -143,7 +143,7 @@ export default function MapView({
               )}
               <Pin
                 photoUrl={p.photos[0]?.dataUrl}
-                emoji={placeEmoji(p)}
+                glyph={<PlaceGlyph place={p} size={active ? 21 : 17} strokeWidth={2.25} />}
                 color={cssVar(STATE_VAR[state])}
                 active={active}
                 favorite={state === "favorite"}

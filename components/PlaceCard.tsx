@@ -3,7 +3,7 @@
 import { Star, Navigation, X, ChevronRight } from "lucide-react";
 import type { Place } from "@/lib/types";
 import { leadPrice, leadRating, stateMeta, directionsUrl } from "@/lib/format";
-import { placeEmoji } from "@/lib/icons";
+import PlaceGlyph from "./PlaceGlyph";
 
 // Docked card shown when a pin is selected. Photo-forward, rounded, with a Beli
 // style status pill + score. Tap the body to open the full detail drawer.
@@ -56,7 +56,9 @@ export default function PlaceCard({
             background: photo ? `center/cover url(${photo})` : "var(--bg-elevated)",
           }}
         >
-          {!photo && <span style={{ fontSize: 30, lineHeight: 1 }}>{placeEmoji(place)}</span>}
+          {!photo && (
+            <PlaceGlyph place={place} size={30} strokeWidth={1.9} style={{ color: "var(--text-secondary)" }} />
+          )}
         </div>
 
         <div className="min-w-0 flex-1">
