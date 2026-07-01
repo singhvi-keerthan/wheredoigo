@@ -82,8 +82,8 @@ export default function PlaceCard({
                 className="inline-flex items-center gap-1 px-1.5 py-[2px]"
                 style={{
                   borderRadius: "var(--radius-chip)",
-                  background: rating.mine ? "var(--accent-soft)" : "var(--bg-elevated)",
-                  color: rating.mine ? "var(--accent)" : "var(--text-secondary)",
+                  background: "var(--bg-elevated)",
+                  color: rating.mine ? "var(--star)" : "var(--text-secondary)",
                 }}
               >
                 <Star size={11} strokeWidth={0} fill="currentColor" />
@@ -121,7 +121,7 @@ export default function PlaceCard({
         target="_blank"
         rel="noreferrer"
         className="press mt-3.5 flex items-center justify-center gap-2 py-3 text-[14px] font-bold"
-        style={{ background: "var(--accent)", color: "var(--accent-ink)", borderRadius: "var(--radius-chip)" }}
+        style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
       >
         <Navigation size={15} strokeWidth={2.5} fill="currentColor" />
         Directions

@@ -135,10 +135,10 @@ export const DISPLAY_STATE_META: Record<
   DisplayState,
   { label: string; color: string }
 > = {
-  never_again: { label: "Skip", color: "#5b6470" },
-  favorite: { label: "Favorite", color: "#bd362c" },
-  visited: { label: "Been", color: "#7a4e86" },
-  watchlist: { label: "Watchlist", color: "#c9942f" },
+  never_again: { label: "Skip", color: "oklch(0.60 0.02 265)" },
+  favorite: { label: "Favorite", color: "oklch(0.60 0.17 15)" },
+  visited: { label: "Been", color: "oklch(0.62 0.13 150)" },
+  watchlist: { label: "Watchlist", color: "oklch(0.72 0.14 78)" },
 };
 
 // Pin color / label resolves status + flags by priority.

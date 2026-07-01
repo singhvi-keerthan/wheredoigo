@@ -138,27 +138,11 @@ export default function MapView({
               className="light-on relative block"
               style={{ animationDelay: `${Math.min(i, 12) * 55 + 150}ms` }}
             >
-              {active && (
-                <span
-                  className="animate-pop pointer-events-none absolute left-1/2 -translate-x-1/2 whitespace-nowrap px-2.5 py-1 text-[11.5px] font-semibold"
-                  style={{
-                    bottom: "calc(100% + 5px)",
-                    borderRadius: "var(--radius-chip)",
-                    background: "var(--bg-raised)",
-                    color: "var(--text-primary)",
-                    border: "1px solid var(--border-strong)",
-                    boxShadow: "var(--shadow-pop)",
-                  }}
-                >
-                  {p.name}
-                </span>
-              )}
               <Pin
-                photoUrl={p.photos[0]?.dataUrl}
-                glyph={<PlaceGlyph place={p} size={active ? 21 : 17} strokeWidth={2.25} />}
+                name={p.name}
+                glyph={<PlaceGlyph place={p} size={17} strokeWidth={2.4} />}
                 color={cssVar(STATE_VAR[state])}
                 active={active}
-                favorite={state === "favorite"}
               />
             </button>
           </Marker>

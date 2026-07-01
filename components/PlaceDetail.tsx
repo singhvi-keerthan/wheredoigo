@@ -91,8 +91,19 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
         style={{ background: "var(--bg-raised)", borderTopLeftRadius: "var(--radius-lg)", borderTopRightRadius: "var(--radius-lg)", boxShadow: "var(--shadow-sheet)" }}
         onClick={(e) => e.stopPropagation()}
       >
+        {/* state-colour top wash (color system): the ONE place colour appears in
+            the sheet — 20% of the state hue, fading over ~210px. */}
+        <div
+          className="pointer-events-none absolute inset-x-0 top-0"
+          style={{
+            height: 210,
+            background: `linear-gradient(180deg, color-mix(in srgb, ${meta.color} 20%, transparent), transparent)`,
+            borderTopLeftRadius: "var(--radius-lg)",
+            borderTopRightRadius: "var(--radius-lg)",
+          }}
+        />
         {/* handle + close */}
-        <div className="sticky top-0 z-10 px-5 pt-2" style={{ background: "var(--bg-raised)" }}>
+        <div className="sticky top-0 z-10 px-5 pt-2">
           <div className="mx-auto mb-2 h-[5px] w-10 rounded-full" style={{ background: "var(--ink-line)" }} />
           <button
             onClick={onClose}
@@ -125,7 +136,7 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
             <div className="mt-1.5 flex items-center gap-1.5 text-[12px]">
               <Clock size={12} style={{ color: "var(--text-tertiary)" }} />
               {open !== null && (
-                <span className="font-semibold" style={{ color: open ? "var(--s-watchlist)" : "var(--text-tertiary)" }}>
+                <span className="font-semibold" style={{ color: open ? "var(--text-primary)" : "var(--text-tertiary)" }}>
                   {open ? "Open now" : "Closed"}
                 </span>
               )}
@@ -167,7 +178,7 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
             <a
               href={directionsUrl(place)} target="_blank" rel="noreferrer"
               className="press flex items-center justify-center gap-2 py-3 text-[14px] font-bold"
-              style={{ background: "var(--accent)", color: "var(--accent-ink)", borderRadius: "var(--radius-chip)" }}
+              style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
             >
               <Navigation size={15} strokeWidth={2.5} fill="currentColor" /> Directions
             </a>
@@ -269,7 +280,7 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
                 <button
                   onClick={logVisit}
                   className="press flex items-center gap-1.5 px-4 py-2 text-[12.5px] font-bold"
-                  style={{ background: "var(--accent)", color: "var(--accent-ink)", borderRadius: "var(--radius-chip)" }}
+                  style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
                 >
                   <Plus size={13} strokeWidth={2.5} /> Log visit
                 </button>
@@ -285,7 +296,7 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
                         </span>
                         {v.whoWith && <span style={{ color: "var(--text-tertiary)" }}>· {v.whoWith}</span>}
                         {v.rating != null && (
-                          <span className="ml-auto inline-flex items-center gap-0.5" style={{ color: "var(--accent)" }}>
+                          <span className="ml-auto inline-flex items-center gap-0.5" style={{ color: "var(--star)" }}>
                             <Star size={11} fill="currentColor" strokeWidth={0} /> {v.rating}
                           </span>
                         )}
@@ -340,8 +351,8 @@ function Stars({ value, onSet }: { value: number | null; onSet: (n: number) => v
           <Star
             size={20}
             strokeWidth={1.5}
-            fill={value != null && n <= Math.round(value) ? "var(--accent)" : "none"}
-            style={{ color: value != null && n <= Math.round(value) ? "var(--accent)" : "var(--text-tertiary)" }}
+            fill={value != null && n <= Math.round(value) ? "var(--star)" : "none"}
+            style={{ color: value != null && n <= Math.round(value) ? "var(--star)" : "var(--star-empty)" }}
           />
         </button>
       ))}
@@ -385,10 +396,11 @@ function TagGroup({
               onClick={() => onToggle(value)}
               className="press inline-flex items-center gap-1 px-3 py-[7px] text-[12px] font-medium transition-colors"
               style={{
+                // tags are NEUTRAL, never a state/accent hue (tag ≠ state)
                 borderRadius: "var(--radius-chip)",
-                background: on ? "var(--accent)" : "var(--bg-elevated)",
-                color: on ? "var(--accent-ink)" : "var(--text-secondary)",
-                border: `1px solid ${on ? "var(--accent)" : "var(--border)"}`,
+                background: on ? "oklch(0.97 0 0)" : "var(--bg-elevated)",
+                color: on ? "oklch(0.16 0.006 260)" : "var(--text-secondary)",
+                border: `1px solid ${on ? "oklch(0.97 0 0)" : "var(--border)"}`,
               }}
             >
               {on && <Check size={11} strokeWidth={3} />}
@@ -416,7 +428,7 @@ function TagGroup({
               borderRadius: "var(--radius-chip)",
               background: "var(--bg-elevated)",
               color: "var(--text-primary)",
-              border: "1px solid var(--accent)",
+              border: "1px solid var(--border-strong)",
             }}
           />
         ) : (
@@ -426,7 +438,7 @@ function TagGroup({
             style={{
               borderRadius: "var(--radius-chip)",
               background: "transparent",
-              color: "var(--accent)",
+              color: "var(--text-secondary)",
               border: "1px dashed var(--border-strong)",
             }}
           >

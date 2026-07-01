@@ -1,83 +1,62 @@
 "use client";
 
-import { Heart } from "lucide-react";
 import type { ReactNode } from "react";
 
-// Photo-disc pin: a round place thumbnail (or category SVG glyph fallback) inside
-// a status-coloured ring, on a small stem. Selected pins grow + lift with a halo.
-// Favorites get a heart badge. This is the headline visual — photo-forward,
-// instantly recognisable, Beli-meets-map.
+// Label-sticker pin (color system §pins): a white card carrying a state-coloured
+// type-disc (white glyph) + the place name, on a pointer. Colour = STATE, glyph =
+// TYPE — never mixed. Selected grows slightly and gets a state-coloured hairline.
 export default function Pin({
-  photoUrl,
+  name,
   glyph,
   color,
   active,
-  favorite,
 }: {
-  photoUrl?: string;
+  name: string;
   glyph: ReactNode;
   color: string;
   active: boolean;
-  favorite?: boolean;
 }) {
-  const size = active ? 50 : 40;
-
   return (
     <div
-      className="relative grid place-items-center transition-[width,height] duration-200"
-      style={{ width: size, height: size + 7 }}
+      className="inline-flex flex-col items-center"
+      style={{ transform: active ? "scale(1.06)" : "none", transition: "transform .12s ease" }}
     >
-      {/* stem */}
-      <span
-        className="absolute left-1/2 -translate-x-1/2"
+      <div
+        className="inline-flex items-center gap-2"
         style={{
-          bottom: 0,
-          width: 0,
-          height: 0,
-          borderLeft: "5px solid transparent",
-          borderRight: "5px solid transparent",
-          borderTop: `7px solid ${color}`,
-          filter: "drop-shadow(0 2px 2px rgba(0,0,0,0.35))",
-        }}
-      />
-      {/* disc */}
-      <span
-        className="absolute left-1/2 top-0 -translate-x-1/2 overflow-hidden rounded-full transition-all duration-200"
-        style={{
-          width: size,
-          height: size,
-          background: photoUrl ? `center/cover url(${photoUrl})` : "var(--bg-raised)",
-          border: `${active ? 3 : 2.5}px solid ${color}`,
-          boxShadow: active
-            ? `0 0 0 3px rgba(255,255,255,0.9), 0 8px 18px rgba(0,0,0,0.45)`
-            : `0 3px 8px rgba(0,0,0,0.4)`,
+          height: 40,
+          padding: "5px 15px 5px 5px",
+          borderRadius: 13,
+          background: "#fff",
+          border: active ? `1.5px solid ${color}` : "1.5px solid transparent",
+          boxShadow: "0 8px 18px -8px rgba(0,0,0,0.45)",
         }}
       >
-        {!photoUrl && (
-          <span
-            className="grid h-full w-full place-items-center"
-            style={{ color: "var(--text-primary)" }}
-          >
-            {glyph}
-          </span>
-        )}
-      </span>
-
-      {favorite && (
         <span
-          className="absolute z-10 grid place-items-center rounded-full"
-          style={{
-            top: -2,
-            right: -1,
-            width: 17,
-            height: 17,
-            background: "var(--s-favorite)",
-            border: "1.5px solid var(--bg-base)",
-          }}
+          className="flex items-center justify-center"
+          style={{ width: 30, height: 30, borderRadius: 9, background: color, color: "#fff" }}
         >
-          <Heart size={9} fill="#fff" strokeWidth={0} />
+          {glyph}
         </span>
-      )}
+        <span
+          className="max-w-[150px] truncate"
+          style={{ fontSize: 13, fontWeight: 600, letterSpacing: "-0.01em", color: "oklch(0.2 0.01 260)" }}
+        >
+          {name}
+        </span>
+      </div>
+      {/* pointer */}
+      <span
+        style={{
+          width: 0,
+          height: 0,
+          borderLeft: "7px solid transparent",
+          borderRight: "7px solid transparent",
+          borderTop: "9px solid #fff",
+          marginTop: -1,
+          filter: "drop-shadow(0 3px 2px rgba(0,0,0,0.18))",
+        }}
+      />
     </div>
   );
 }

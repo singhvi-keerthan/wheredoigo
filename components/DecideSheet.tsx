@@ -17,24 +17,56 @@ const PRESETS: { label: string; query: DecideQuery }[] = [
   { label: "Tried & loved", query: { intent: "Tried & loved", lifecycle: "favorites" } },
 ];
 
-// Local keyword parse — fallback when the Gemini NL route is unavailable.
+// Local keyword parse — fallback when the Gemini NL route is unavailable. Mirrors
+// the model's guardrails: negated terms ("no bars", "not italian") go to exclude
+// fields rather than inverting into positives, and "tonight" is not open-now.
+const NEG_BEFORE = /\b(no|not|non|without|avoid|skip|except|hate|dislike)\b[\s\w-]{0,12}$/;
+
+// Split matched vocabulary into wanted vs avoided by looking for a negation word
+// just before each hit. Scans EVERY occurrence: any negated mention excludes;
+// any plain mention includes (a value can legitimately end up in both).
+function classify(vals: string[], t: string): { inc: string[]; exc: string[] } {
+  const inc: string[] = [];
+  const exc: string[] = [];
+  for (const v of vals) {
+    const needle = t.includes(v) ? v : t.includes(v.replace("-", " ")) ? v.replace("-", " ") : null;
+    if (!needle) continue;
+    let negated = false;
+    let plain = false;
+    for (let i = t.indexOf(needle); i !== -1; i = t.indexOf(needle, i + 1)) {
+      if (NEG_BEFORE.test(t.slice(Math.max(0, i - 16), i))) negated = true;
+      else plain = true;
+    }
+    if (negated) exc.push(v);
+    if (plain) inc.push(v);
+  }
+  return { inc, exc };
+}
+
 function parseFallback(text: string): DecideQuery {
   const t = text.toLowerCase();
-  const pick = (vals: string[]) => vals.filter((v) => t.includes(v.replace("-", " ")) || t.includes(v));
   const q: DecideQuery = { intent: text.trim().slice(0, 40), lifecycle: "any" };
-  const types = pick(TAG_OPTIONS.type);
-  const cuisines = pick(TAG_OPTIONS.cuisine);
-  const occasions = pick(TAG_OPTIONS.occasion);
-  const vibes = pick(TAG_OPTIONS.vibe);
-  const practical = pick(TAG_OPTIONS.practical);
-  if (types.length) q.types = types;
-  if (cuisines.length) q.cuisines = cuisines;
-  if (occasions.length) q.occasions = occasions;
-  if (vibes.length) q.vibes = vibes;
-  if (practical.length) q.practical = practical;
-  if (/\bnew\b|never been|haven't been/.test(t)) q.lifecycle = "watchlist";
+
+  const fields: { ns: keyof typeof TAG_OPTIONS; inc: keyof DecideQuery; exc: keyof DecideQuery }[] = [
+    { ns: "type", inc: "types", exc: "excludeTypes" },
+    { ns: "cuisine", inc: "cuisines", exc: "excludeCuisines" },
+    { ns: "occasion", inc: "occasions", exc: "excludeOccasions" },
+    { ns: "vibe", inc: "vibes", exc: "excludeVibes" },
+    { ns: "practical", inc: "practical", exc: "excludePractical" },
+  ];
+  for (const { ns, inc, exc } of fields) {
+    const { inc: want, exc: avoid } = classify(TAG_OPTIONS[ns], t);
+    if (want.length) (q[inc] as string[]) = want;
+    if (avoid.length) (q[exc] as string[]) = avoid;
+  }
+
+  // Coarse cheap/fancy → the fine-dining vibe (no invented rupee number).
+  if (/\bcheap|affordable|budget\b/.test(t)) (q.excludeVibes = [...(q.excludeVibes ?? []), "fine-dining"]);
+  if (/\bfancy|splurge|upscale\b/.test(t)) (q.vibes = [...(q.vibes ?? []), "fine-dining"]);
+
+  if (/\bnew\b|never been|haven't been|untried/.test(t)) q.lifecycle = "watchlist";
   if (/favou?rite|go-?to|loved|usual/.test(t)) q.lifecycle = "favorites";
-  if (/open now|right now|tonight|still open/.test(t)) q.openNow = true;
+  if (/open now|right now|still open|open right/.test(t)) q.openNow = true;
   const budget = t.match(/(?:under|below|max|upto|up to|<)\s*₹?\s*(\d{2,5})/);
   if (budget) q.maxBudget = +budget[1];
   return q;
@@ -150,7 +182,7 @@ export default function DecideSheet({
               onClick={ask}
               disabled={thinking || !nl.trim()}
               className="press flex items-center gap-1.5 px-3.5 py-2 text-[12.5px] font-bold disabled:opacity-40"
-              style={{ background: "var(--accent)", color: "var(--accent-ink)", borderRadius: "var(--radius-chip)" }}
+              style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
             >
               {thinking ? <RefreshCw size={13} className="animate-spin" /> : <Sparkles size={13} strokeWidth={2.25} />}
               Ask
@@ -168,9 +200,9 @@ export default function DecideSheet({
                   className="press shrink-0 px-3.5 py-2 text-[12.5px] font-semibold transition-colors"
                   style={{
                     borderRadius: "var(--radius-chip)",
-                    background: on ? "var(--accent)" : "transparent",
-                    color: on ? "var(--accent-ink)" : "var(--text-secondary)",
-                    border: `1px solid ${on ? "var(--accent)" : "var(--border-strong)"}`,
+                    background: on ? "oklch(0.97 0 0)" : "transparent",
+                    color: on ? "oklch(0.16 0.006 260)" : "var(--text-secondary)",
+                    border: `1px solid ${on ? "oklch(0.97 0 0)" : "var(--border-strong)"}`,
                   }}
                 >
                   {p.label}
@@ -272,7 +304,7 @@ function HeroPick({
 
         <div className="mt-1.5 flex items-center gap-3.5 text-[12.5px]" style={{ fontFamily: "var(--font-mono)" }}>
           {rating.value != null && (
-            <span className="inline-flex items-center gap-1" style={{ color: rating.mine ? "var(--accent)" : "var(--text-secondary)" }}>
+            <span className="inline-flex items-center gap-1" style={{ color: rating.mine ? "var(--star)" : "var(--text-secondary)" }}>
               ★ {rating.value.toFixed(1)}
               <span style={{ color: "var(--text-tertiary)" }}>{rating.mine ? "you" : "ggl"}</span>
             </span>
@@ -286,7 +318,7 @@ function HeroPick({
             <span
               key={r}
               className="px-2 py-[3px] text-[11px]"
-              style={{ borderRadius: "var(--radius-chip)", background: "var(--accent-soft)", color: "var(--accent)" }}
+              style={{ borderRadius: "var(--radius-chip)", background: "var(--bg-elevated)", color: "var(--text-secondary)" }}
             >
               {r}
             </span>
@@ -299,7 +331,7 @@ function HeroPick({
             target="_blank"
             rel="noreferrer"
             className="press flex items-center justify-center gap-2 py-3 text-[14px] font-bold"
-            style={{ background: "var(--accent)", color: "var(--accent-ink)", borderRadius: "var(--radius-chip)" }}
+            style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
           >
             <Navigation size={15} strokeWidth={2.5} fill="currentColor" /> Directions
           </a>
