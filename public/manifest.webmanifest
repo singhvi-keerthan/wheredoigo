@@ -1,0 +1,17 @@
+{
+  "name": "Nightfall — your going-out brain",
+  "short_name": "Nightfall",
+  "description": "A private map of every place you've been and want to go.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#080b11",
+  "theme_color": "#080b11",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
