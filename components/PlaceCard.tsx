@@ -65,24 +65,27 @@ export default function PlaceCard({
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-6">
         {/* left: identity + name — tap to open */}
-        <button onClick={onOpen} className="flex min-w-0 items-center gap-3.5 text-left sm:flex-1">
-          <div
-            className="relative grid h-[76px] w-[76px] shrink-0 place-items-center overflow-hidden"
-            style={{ borderRadius: "var(--radius)", border: "1px solid var(--border)", background: "var(--bg-elevated)" }}
-          >
-            <PlaceGlyph place={place} size={30} strokeWidth={1.9} style={{ color: "var(--text-secondary)" }} />
-          </div>
-
-          <div className="min-w-0 flex-1">
+        <button onClick={onOpen} className="flex min-w-0 items-start gap-3.5 text-left sm:flex-1">
+          {/* left column: category glyph with the status pill stacked below it */}
+          <div className="flex shrink-0 flex-col items-center gap-2">
+            <div
+              className="relative grid h-[76px] w-[76px] place-items-center overflow-hidden"
+              style={{ borderRadius: "var(--radius)", border: "1px solid var(--border)", background: "var(--bg-elevated)" }}
+            >
+              <PlaceGlyph place={place} size={30} strokeWidth={1.9} style={{ color: "var(--text-secondary)" }} />
+            </div>
             <span
               className="inline-flex items-center gap-1.5 px-2 py-[3px] text-[11px] font-bold"
               style={{ borderRadius: "var(--radius-chip)", background: meta.color, color: "#fff" }}
             >
               {meta.label}
             </span>
+          </div>
 
+          {/* right: name starts the line, then score, then wrapped tags */}
+          <div className="min-w-0 flex-1">
             <h2
-              className="mt-1.5 truncate text-[26px] leading-[1.02] tracking-[-0.005em]"
+              className="truncate text-[26px] leading-[1.02] tracking-[-0.005em]"
               style={{ fontFamily: "var(--font-serif)", color: "var(--text-primary)" }}
             >
               {place.name}
@@ -102,12 +105,13 @@ export default function PlaceCard({
               <span style={{ color: "var(--text-secondary)" }}>{price.label}</span>
             </div>
 
+            {/* tags — capped width; wrap (stack) beyond it so photos keep their room */}
             {place.tags.length > 0 && (
-              <div className="no-bar mt-2 flex gap-1.5 overflow-x-auto">
-                {place.tags.slice(0, 6).map((t) => (
+              <div className="mt-2 flex max-w-[300px] flex-wrap gap-1.5">
+                {place.tags.slice(0, 8).map((t) => (
                   <span
                     key={t.namespace + t.value}
-                    className="shrink-0 px-2.5 py-[4px] text-[11.5px]"
+                    className="px-2.5 py-[4px] text-[11.5px]"
                     style={{ borderRadius: "var(--radius-chip)", background: "var(--bg-elevated)", color: "var(--text-secondary)" }}
                   >
                     {t.value}
