@@ -5,15 +5,15 @@ import {
   X, Navigation, Heart, Ban, Star, Plus, ImagePlus, Camera, Trash2, Clock, Check,
 } from "lucide-react";
 import {
-  usePlace, updatePlace, addVisit, toggleFavorite, toggleNeverAgain, setTags, addPhoto, removePhoto,
+  usePlace, updatePlace, toggleFavorite, toggleNeverAgain, setTags, addPhoto, removePhoto,
   useCustomTags, addCustomTag,
 } from "@/lib/store";
 import { TAG_OPTIONS, NAMESPACE_LABELS, isOpenNow, type TagNamespace, type Tag } from "@/lib/types";
 import { stateMeta, priceSigns, directionsUrl, relativeDate } from "@/lib/format";
 import { getPlaceDetails } from "@/lib/places";
 import { resizeImage } from "@/lib/image";
+import PlaceWizard from "./PlaceWizard";
 
-const today = () => new Date().toISOString().slice(0, 10);
 const STALE_MS = 30 * 24 * 60 * 60 * 1000; // re-enrich after ~30 days
 
 export default function PlaceDetail({ id, onClose }: { id: string | null; onClose: () => void }) {
@@ -21,17 +21,11 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
   const customTags = useCustomTags();
   const uploadRef = useRef<HTMLInputElement>(null); // place photo — library
   const cameraRef = useRef<HTMLInputElement>(null); // place photo — camera
-  const vUploadRef = useRef<HTMLInputElement>(null); // visit photo — library
-  const vCameraRef = useRef<HTMLInputElement>(null); // visit photo — camera
   const enrichedRef = useRef<string | null>(null);
   const [editingTags, setEditingTags] = useState(false);
   const [editingNote, setEditingNote] = useState(false);
-  const [loggingVisit, setLoggingVisit] = useState(false);
-  const [vDate, setVDate] = useState(today());
-  const [vWho, setVWho] = useState("");
-  const [vNotes, setVNotes] = useState("");
-  const [vRating, setVRating] = useState<number | null>(null);
-  const [vPhoto, setVPhoto] = useState<string | null>(null); // pending visit photo (dataUrl)
+  const [visitWizard, setVisitWizard] = useState(false); // guided watchlist → visited form
+  const [revealId, setRevealId] = useState<string | null>(null); // tap a photo → show delete
 
   // Refresh Google rating / price / hours when a linked place opens and its
   // cached data is missing or stale (~30 days). Runs once per place per open.
@@ -87,26 +81,8 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
     e.target.value = "";
   };
 
-  // Visit-scoped photo — held until the visit is logged, then attached to it.
-  const onVisitFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      setVPhoto(await resizeImage(file));
-    } catch {
-      /* ignore bad image */
-    }
-    e.target.value = "";
-  };
-
-  const logVisit = () => {
-    const v = addVisit(place.id, { visitedOn: vDate, whoWith: vWho.trim(), notes: vNotes.trim(), rating: vRating });
-    if (v && vPhoto) addPhoto(place.id, { dataUrl: vPhoto, source: "mine", scope: "visit", visitId: v.id });
-    setVWho(""); setVNotes(""); setVRating(null); setVDate(today()); setVPhoto(null);
-    setLoggingVisit(false);
-  };
-
   return (
+    <>
     <div className="fixed inset-0 z-40" style={{ background: "rgba(6,7,10,0.62)" }} onClick={onClose}>
       <div
         className="scroll-quiet absolute inset-x-0 bottom-0 max-h-[92dvh] overflow-y-auto pb-[max(1.5rem,env(safe-area-inset-bottom))]"
@@ -171,9 +147,34 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
             </div>
           )}
 
-          {/* photo — big full-width block; empty state offers upload + camera
-              (stacked on mobile, side-by-side on desktop's free width) */}
-          <div className="mt-3.5">
+          {/* photos — full-width, fit to width. Tap a photo to reveal Delete;
+              tap again (or the scrim) to dismiss. Add options sit below. */}
+          <div className="mt-3.5 flex flex-col gap-2">
+            {place.photos.map((ph) => {
+              const revealed = revealId === ph.id;
+              return (
+                <div
+                  key={ph.id}
+                  onClick={() => setRevealId((cur) => (cur === ph.id ? null : ph.id))}
+                  className="relative w-full cursor-pointer overflow-hidden"
+                  style={{ borderRadius: "var(--radius)" }}
+                >
+                  <img src={ph.dataUrl} alt="" className="block h-auto w-full" />
+                  {revealed && (
+                    <div className="absolute inset-0 grid place-items-center" style={{ background: "rgba(6,8,13,0.45)" }}>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); removePhoto(place.id, ph.id); setRevealId(null); }}
+                        className="press flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-bold"
+                        style={{ borderRadius: "var(--radius-chip)", background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)" }}
+                      >
+                        <Trash2 size={15} /> Delete photo
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
             {place.photos.length === 0 ? (
               <div
                 className="grid w-full place-items-center gap-3 px-4"
@@ -188,50 +189,10 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
                 </div>
               </div>
             ) : (
-              <>
-                <div className="relative w-full overflow-hidden" style={{ height: 188, borderRadius: "var(--radius)" }}>
-                  <img src={place.photos[0].dataUrl} alt="" className="h-full w-full object-cover" />
-                  <button
-                    onClick={() => removePhoto(place.id, place.photos[0].id)}
-                    aria-label="Remove photo"
-                    className="absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-full"
-                    style={{ background: "rgba(6,8,13,0.7)", color: "#fff" }}
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-                <div className="scroll-quiet mt-2 flex gap-2 overflow-x-auto pb-1">
-                  {place.photos.slice(1).map((ph) => (
-                    <div key={ph.id} className="relative h-16 w-16 shrink-0 overflow-hidden" style={{ borderRadius: "var(--radius-sm)" }}>
-                      <img src={ph.dataUrl} alt="" className="h-full w-full object-cover" />
-                      <button
-                        onClick={() => removePhoto(place.id, ph.id)}
-                        aria-label="Remove photo"
-                        className="absolute right-0.5 top-0.5 grid h-5 w-5 place-items-center rounded-full"
-                        style={{ background: "rgba(6,8,13,0.7)", color: "#fff" }}
-                      >
-                        <Trash2 size={10} />
-                      </button>
-                    </div>
-                  ))}
-                  <button
-                    onClick={() => uploadRef.current?.click()}
-                    aria-label="Upload photo"
-                    className="grid h-16 w-16 shrink-0 place-items-center"
-                    style={{ borderRadius: "var(--radius-sm)", border: "1px dashed var(--border-strong)", color: "var(--text-tertiary)" }}
-                  >
-                    <ImagePlus size={16} />
-                  </button>
-                  <button
-                    onClick={() => cameraRef.current?.click()}
-                    aria-label="Take photo"
-                    className="grid h-16 w-16 shrink-0 place-items-center"
-                    style={{ borderRadius: "var(--radius-sm)", border: "1px dashed var(--border-strong)", color: "var(--text-tertiary)" }}
-                  >
-                    <Camera size={16} />
-                  </button>
-                </div>
-              </>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <PhotoBtn onClick={() => uploadRef.current?.click()} icon={<ImagePlus size={15} />} label="Upload" />
+                <PhotoBtn onClick={() => cameraRef.current?.click()} icon={<Camera size={15} />} label="Take photo" />
+              </div>
             )}
             <input ref={uploadRef} type="file" accept="image/*" hidden onChange={onFile} />
             <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={onFile} />
@@ -264,7 +225,7 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
           <Section title="Your take">
             {!visited ? (
               <button
-                onClick={() => updatePlace(place.id, { status: "visited" })}
+                onClick={() => setVisitWizard(true)}
                 className="press flex w-full items-center justify-center gap-2 py-3 text-[14px] font-semibold"
                 style={{ borderRadius: "var(--radius-chip)", border: "1px solid var(--border-strong)", color: "var(--text-primary)" }}
               >
@@ -388,60 +349,21 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
               </ul>
             )}
 
-            {loggingVisit ? (
-              <div className="mt-1 flex flex-col gap-2">
-                <div className="flex gap-2">
-                  <input type="date" value={vDate} onChange={(e) => setVDate(e.target.value)} className="input-dark" />
-                  <input value={vWho} onChange={(e) => setVWho(e.target.value)} placeholder="Who with" className="input-dark flex-1" />
-                </div>
-                <input value={vNotes} onChange={(e) => setVNotes(e.target.value)} placeholder="What you ate, how it was…" className="input-dark" />
-
-                {/* attach a photo to this visit */}
-                {vPhoto ? (
-                  <div className="relative h-16 w-16 overflow-hidden" style={{ borderRadius: "var(--radius-sm)" }}>
-                    <img src={vPhoto} alt="" className="h-full w-full object-cover" />
-                    <button
-                      onClick={() => setVPhoto(null)}
-                      aria-label="Remove photo"
-                      className="absolute right-0.5 top-0.5 grid h-5 w-5 place-items-center rounded-full"
-                      style={{ background: "rgba(6,8,13,0.7)", color: "#fff" }}
-                    >
-                      <Trash2 size={10} />
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-2 sm:flex-row">
-                    <PhotoBtn onClick={() => vUploadRef.current?.click()} icon={<ImagePlus size={15} />} label="Upload" />
-                    <PhotoBtn onClick={() => vCameraRef.current?.click()} icon={<Camera size={15} />} label="Take photo" />
-                  </div>
-                )}
-
-                <div className="flex items-center justify-between">
-                  <Stars value={vRating} onSet={setVRating} />
-                  <button
-                    onClick={logVisit}
-                    className="press flex items-center gap-1.5 px-4 py-2 text-[12.5px] font-bold"
-                    style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
-                  >
-                    <Plus size={13} strokeWidth={2.5} /> Log visit
-                  </button>
-                </div>
-                <input ref={vUploadRef} type="file" accept="image/*" hidden onChange={onVisitFile} />
-                <input ref={vCameraRef} type="file" accept="image/*" capture="environment" hidden onChange={onVisitFile} />
-              </div>
-            ) : (
-              <button
-                onClick={() => setLoggingVisit(true)}
-                className="press mt-1 flex items-center gap-2 text-[13px] font-semibold"
-                style={{ color: "var(--text-secondary)" }}
-              >
-                <Plus size={15} strokeWidth={2.5} /> Log a visit
-              </button>
-            )}
+            <button
+              onClick={() => setVisitWizard(true)}
+              className="press mt-1 flex items-center gap-2 text-[13px] font-semibold"
+              style={{ color: "var(--text-secondary)" }}
+            >
+              <Plus size={15} strokeWidth={2.5} /> Log a visit
+            </button>
           </Section>
         </div>
       </div>
     </div>
+    {visitWizard && (
+      <PlaceWizard placeId={place.id} mode="visit" onClose={() => setVisitWizard(false)} />
+    )}
+    </>
   );
 }
 
