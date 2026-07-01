@@ -1,6 +1,6 @@
 "use client";
 
-import Map, { Marker, NavigationControl, type MapRef } from "react-map-gl/maplibre";
+import Map, { Marker, type MapRef } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useCallback, useEffect, useRef } from "react";
 import type { Place } from "@/lib/types";
@@ -103,8 +103,6 @@ export default function MapView({
       onClick={() => onSelect(null)}
       style={{ position: "absolute", inset: 0 }}
     >
-      <NavigationControl position="bottom-right" showCompass={false} />
-
       {places.map((p, i) => {
         const state = displayState(p);
         const active = p.id === selectedId;
