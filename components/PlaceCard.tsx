@@ -1,9 +1,9 @@
 "use client";
 
 import { useRef } from "react";
-import { Star, Navigation, X, ChevronRight, ImagePlus, Camera, Trash2 } from "lucide-react";
-import type { Place } from "@/lib/types";
-import { addPhoto, removePhoto } from "@/lib/store";
+import { Star, Navigation, X, ChevronRight, ImagePlus, Camera, Trash2, Check, Ban } from "lucide-react";
+import { displayState, type Place } from "@/lib/types";
+import { addPhoto, removePhoto, updatePlace, toggleNeverAgain } from "@/lib/store";
 import { resizeImage } from "@/lib/image";
 import { leadPrice, leadRating, stateMeta, directionsUrl } from "@/lib/format";
 import PlaceGlyph from "./PlaceGlyph";
@@ -23,6 +23,7 @@ export default function PlaceCard({
   const meta = stateMeta(place);
   const rating = leadRating(place);
   const price = leadPrice(place);
+  const watchlist = displayState(place) === "watchlist"; // show quick Been/Skip
   const uploadRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
 
@@ -124,9 +125,9 @@ export default function PlaceCard({
           <ChevronRight size={18} className="shrink-0 self-center sm:hidden" style={{ color: "var(--text-tertiary)" }} />
         </button>
 
-        {/* right: photos — show + add (right of name on desktop, stacked on mobile).
-            Wraps so added pictures fill this same space; sm:pt clears the ✕. */}
-        <div className="flex flex-wrap gap-2 sm:w-[204px] sm:shrink-0 sm:pt-8">
+        {/* right: photos — show + add. On desktop a right column beside the name;
+            on mobile stacked below, indented to line up under the name. */}
+        <div className="flex flex-wrap gap-2 pl-[90px] sm:w-[204px] sm:shrink-0 sm:pl-0 sm:pt-1">
           {place.photos.map((ph) => (
             <div key={ph.id} className="relative h-[60px] w-[60px] shrink-0 overflow-hidden" style={{ borderRadius: "var(--radius-sm)" }}>
               <img src={ph.dataUrl} alt="" className="h-full w-full object-cover" />
@@ -162,11 +163,31 @@ export default function PlaceCard({
       <input ref={uploadRef} type="file" accept="image/*" hidden onChange={onFile} />
       <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={onFile} />
 
+      {/* watchlist → quick log: been here / skip it (no drawer) */}
+      {watchlist && (
+        <div className="mt-3.5 grid grid-cols-2 gap-2">
+          <button
+            onClick={() => updatePlace(place.id, { status: "visited" })}
+            className="press flex items-center justify-center gap-1.5 py-3 text-[13.5px] font-semibold"
+            style={{ borderRadius: "var(--radius-chip)", border: "1px solid var(--border-strong)", color: "var(--text-primary)" }}
+          >
+            <Check size={15} strokeWidth={2.5} /> Been here
+          </button>
+          <button
+            onClick={() => toggleNeverAgain(place.id)}
+            className="press flex items-center justify-center gap-1.5 py-3 text-[13.5px] font-semibold"
+            style={{ borderRadius: "var(--radius-chip)", border: "1px solid var(--border-strong)", color: "var(--text-secondary)" }}
+          >
+            <Ban size={15} strokeWidth={2.5} /> Skip
+          </button>
+        </div>
+      )}
+
       <a
         href={directionsUrl(place)}
         target="_blank"
         rel="noreferrer"
-        className="press mt-3.5 flex items-center justify-center gap-2 py-3 text-[14px] font-bold"
+        className={`press ${watchlist ? "mt-2" : "mt-3.5"} flex items-center justify-center gap-2 py-3 text-[14px] font-bold`}
         style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
       >
         <Navigation size={15} strokeWidth={2.5} fill="currentColor" />
