@@ -65,7 +65,7 @@ export default function PlaceCard({
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-6">
         {/* left: identity + name — tap to open */}
-        <button onClick={onOpen} className="flex min-w-0 items-start gap-3.5 text-left sm:flex-1">
+        <button onClick={onOpen} className="flex min-w-0 items-center gap-3.5 text-left sm:flex-1">
           <div
             className="relative grid h-[76px] w-[76px] shrink-0 place-items-center overflow-hidden"
             style={{ borderRadius: "var(--radius)", border: "1px solid var(--border)", background: "var(--bg-elevated)" }}
