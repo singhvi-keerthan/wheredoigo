@@ -1,17 +1,16 @@
 "use client";
 
 import { useRef } from "react";
-import { Star, Navigation, X, ChevronRight, Clock, ImagePlus } from "lucide-react";
+import { Star, Navigation, X, ChevronRight, ImagePlus, Camera, Trash2 } from "lucide-react";
 import type { Place } from "@/lib/types";
-import { isOpenNow } from "@/lib/types";
-import { addPhoto } from "@/lib/store";
+import { addPhoto, removePhoto } from "@/lib/store";
 import { resizeImage } from "@/lib/image";
-import { leadPrice, stateMeta, directionsUrl } from "@/lib/format";
+import { leadPrice, leadRating, stateMeta, directionsUrl } from "@/lib/format";
 import PlaceGlyph from "./PlaceGlyph";
 
-// Docked peek card shown when a pin is selected. Fills the width: photo + a rich
-// detail column (both ratings, price, open-now, address, tags) with Directions
-// on the right (desktop) / full-width below (mobile). Tap the body → full detail.
+// Docked card shown when a pin is selected. Original order kept — status + name
+// + score on the left. The photos option (show + add) fills the free space on
+// the RIGHT of the name (desktop) / stacked above Directions (mobile).
 export default function PlaceCard({
   place,
   onOpen,
@@ -22,15 +21,11 @@ export default function PlaceCard({
   onClose: () => void;
 }) {
   const meta = stateMeta(place);
+  const rating = leadRating(place);
   const price = leadPrice(place);
-  const photo = place.photos[0]?.dataUrl;
-  const open = isOpenNow(place.openingPeriods);
-  const tags = place.tags.slice(0, 8);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const uploadRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
 
-  // Quick-add a place photo straight from the card. A plain file input (no
-  // `capture`) lets mobile offer Take Photo / Library natively; desktop opens
-  // the picker. The full Upload/Take-photo pair lives in the detail sheet.
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -56,7 +51,7 @@ export default function PlaceCard({
       <button
         onClick={onClose}
         aria-label="Close"
-        className="mx-auto mb-3 block h-[5px] w-10 rounded-full sm:hidden"
+        className="mx-auto mb-3 block h-[5px] w-10 rounded-full"
         style={{ background: "var(--ink-line)" }}
       />
       <button
@@ -68,78 +63,51 @@ export default function PlaceCard({
         <X size={14} strokeWidth={2.25} />
       </button>
 
-      {/* one horizontal band on desktop; stacks on mobile */}
-      <div className="mx-auto flex max-w-[1100px] flex-col gap-3 pt-1 sm:flex-row sm:items-center sm:gap-6">
-        <div className="flex min-w-0 items-center gap-4 sm:flex-1">
-          {/* photo / glyph tile — with a quick add-photo badge */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6">
+        {/* left: identity + name — tap to open */}
+        <button onClick={onOpen} className="flex min-w-0 items-start gap-3.5 text-left sm:flex-1">
           <div
-            className="relative grid h-[84px] w-[84px] shrink-0 place-items-center overflow-hidden sm:h-[104px] sm:w-[104px]"
-            style={{
-              borderRadius: "var(--radius)",
-              border: "1px solid var(--border)",
-              background: photo ? `center/cover url(${photo})` : "var(--bg-elevated)",
-            }}
+            className="relative grid h-[76px] w-[76px] shrink-0 place-items-center overflow-hidden"
+            style={{ borderRadius: "var(--radius)", border: "1px solid var(--border)", background: "var(--bg-elevated)" }}
           >
-            {!photo && (
-              <PlaceGlyph place={place} size={34} strokeWidth={1.9} style={{ color: "var(--text-secondary)" }} />
-            )}
-            <button
-              onClick={() => fileRef.current?.click()}
-              aria-label={photo ? "Add another photo" : "Add a photo"}
-              className="press absolute bottom-1 right-1 grid h-[26px] w-[26px] place-items-center rounded-full"
-              style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", boxShadow: "0 2px 8px rgba(0,0,0,0.4)" }}
-            >
-              <ImagePlus size={14} strokeWidth={2.25} />
-            </button>
+            <PlaceGlyph place={place} size={30} strokeWidth={1.9} style={{ color: "var(--text-secondary)" }} />
           </div>
-          <input ref={fileRef} type="file" accept="image/*" hidden onChange={onFile} />
 
-          <button onClick={onOpen} className="min-w-0 flex-1 text-left">
+          <div className="min-w-0 flex-1">
             <span
-              className="inline-flex items-center gap-1.5 px-2 py-[3px] text-[10.5px] font-bold uppercase tracking-[0.05em]"
-              style={{ borderRadius: "var(--radius-chip)", background: "rgba(255,255,255,0.08)", color: "var(--text-secondary)" }}
+              className="inline-flex items-center gap-1.5 px-2 py-[3px] text-[11px] font-bold"
+              style={{ borderRadius: "var(--radius-chip)", background: meta.color, color: "#fff" }}
             >
-              <span className="h-[6px] w-[6px] rounded-full" style={{ background: meta.color }} />
               {meta.label}
             </span>
 
             <h2
-              className="mt-1 truncate text-[26px] leading-[1.02] tracking-[-0.005em] sm:text-[30px]"
+              className="mt-1.5 truncate text-[26px] leading-[1.02] tracking-[-0.005em]"
               style={{ fontFamily: "var(--font-serif)", color: "var(--text-primary)" }}
             >
               {place.name}
             </h2>
 
-            {/* metrics row — both ratings, price, open-now */}
-            <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12.5px]" style={{ fontFamily: "var(--font-mono)" }}>
-              {place.myRating != null && (
-                <Metric star value={place.myRating.toFixed(1)} tag="you" mine />
-              )}
-              {place.googleRating != null && (
-                <Metric star value={place.googleRating.toFixed(1)} tag="ggl" />
-              )}
-              {price.label && <span style={{ color: "var(--text-secondary)" }}>{price.label}</span>}
-              {open !== null && (
-                <span className="inline-flex items-center gap-1" style={{ color: "var(--text-secondary)" }}>
-                  <Clock size={11} style={{ color: "var(--text-tertiary)" }} />
-                  {open ? "Open now" : "Closed"}
+            <div className="mt-1.5 flex items-center gap-2.5 text-[12.5px]" style={{ fontFamily: "var(--font-mono)" }}>
+              {rating.value != null && (
+                <span
+                  className="inline-flex items-center gap-1 px-1.5 py-[2px]"
+                  style={{ borderRadius: "var(--radius-chip)", background: "var(--bg-elevated)", color: rating.mine ? "var(--star)" : "var(--text-secondary)" }}
+                >
+                  <Star size={11} strokeWidth={0} fill="currentColor" />
+                  {rating.value.toFixed(1)}
+                  <span style={{ color: "var(--text-tertiary)" }}>{rating.mine ? "you" : "ggl"}</span>
                 </span>
               )}
+              <span style={{ color: "var(--text-secondary)" }}>{price.label}</span>
             </div>
 
-            {place.address && (
-              <p className="mt-1 truncate text-[12px]" style={{ color: "var(--text-tertiary)" }}>
-                {place.address}
-              </p>
-            )}
-
-            {/* tags — wrap into the freed space */}
-            {tags.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {tags.map((t) => (
+            {place.tags.length > 0 && (
+              <div className="no-bar mt-2 flex gap-1.5 overflow-x-auto">
+                {place.tags.slice(0, 6).map((t) => (
                   <span
                     key={t.namespace + t.value}
-                    className="px-2.5 py-[3px] text-[11.5px]"
+                    className="shrink-0 px-2.5 py-[4px] text-[11.5px]"
                     style={{ borderRadius: "var(--radius-chip)", background: "var(--bg-elevated)", color: "var(--text-secondary)" }}
                   >
                     {t.value}
@@ -147,45 +115,58 @@ export default function PlaceCard({
                 ))}
               </div>
             )}
-          </button>
+          </div>
 
           <ChevronRight size={18} className="shrink-0 self-center sm:hidden" style={{ color: "var(--text-tertiary)" }} />
-        </div>
+        </button>
 
-        {/* Directions — right rail on desktop, full-width below on mobile */}
-        <div className="flex shrink-0 flex-col gap-2 sm:w-[190px]">
-          <a
-            href={directionsUrl(place)}
-            target="_blank"
-            rel="noreferrer"
-            className="press flex items-center justify-center gap-2 py-3 text-[14px] font-bold"
-            style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
-          >
-            <Navigation size={15} strokeWidth={2.5} fill="currentColor" />
-            Directions
-          </a>
+        {/* right: photos — show + add (right of name on desktop, stacked on mobile) */}
+        <div className="scroll-quiet flex gap-2 overflow-x-auto pb-0.5 sm:w-[208px] sm:shrink-0">
+          {place.photos.map((ph) => (
+            <div key={ph.id} className="relative h-[60px] w-[60px] shrink-0 overflow-hidden" style={{ borderRadius: "var(--radius-sm)" }}>
+              <img src={ph.dataUrl} alt="" className="h-full w-full object-cover" />
+              <button
+                onClick={() => removePhoto(place.id, ph.id)}
+                aria-label="Remove photo"
+                className="absolute right-0.5 top-0.5 grid h-5 w-5 place-items-center rounded-full"
+                style={{ background: "rgba(6,8,13,0.7)", color: "#fff" }}
+              >
+                <Trash2 size={10} />
+              </button>
+            </div>
+          ))}
           <button
-            onClick={onOpen}
-            className="press hidden items-center justify-center gap-1.5 py-2.5 text-[13px] font-semibold sm:flex"
-            style={{ borderRadius: "var(--radius-chip)", border: "1px solid var(--border-strong)", color: "var(--text-primary)" }}
+            onClick={() => uploadRef.current?.click()}
+            aria-label="Upload photo"
+            className="press grid h-[60px] w-[60px] shrink-0 place-items-center"
+            style={{ borderRadius: "var(--radius-sm)", border: "1px dashed var(--border-strong)", color: "var(--text-tertiary)" }}
           >
-            Details <ChevronRight size={14} />
+            <ImagePlus size={17} />
+          </button>
+          <button
+            onClick={() => cameraRef.current?.click()}
+            aria-label="Take photo"
+            className="press grid h-[60px] w-[60px] shrink-0 place-items-center"
+            style={{ borderRadius: "var(--radius-sm)", border: "1px dashed var(--border-strong)", color: "var(--text-tertiary)" }}
+          >
+            <Camera size={17} />
           </button>
         </div>
       </div>
-    </div>
-  );
-}
 
-function Metric({ value, tag, star, mine }: { value: string; tag: string; star?: boolean; mine?: boolean }) {
-  return (
-    <span
-      className="inline-flex items-center gap-1 px-1.5 py-[2px]"
-      style={{ borderRadius: "var(--radius-chip)", background: "var(--bg-elevated)", color: mine ? "var(--star)" : "var(--text-secondary)" }}
-    >
-      {star && <Star size={11} strokeWidth={0} fill="currentColor" />}
-      {value}
-      <span style={{ color: "var(--text-tertiary)" }}>{tag}</span>
-    </span>
+      <input ref={uploadRef} type="file" accept="image/*" hidden onChange={onFile} />
+      <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={onFile} />
+
+      <a
+        href={directionsUrl(place)}
+        target="_blank"
+        rel="noreferrer"
+        className="press mt-3.5 flex items-center justify-center gap-2 py-3 text-[14px] font-bold"
+        style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
+      >
+        <Navigation size={15} strokeWidth={2.5} fill="currentColor" />
+        Directions
+      </a>
+    </div>
   );
 }
