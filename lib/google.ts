@@ -15,6 +15,7 @@ export interface GooglePlace {
   placeId: string;
   name: string;
   address: string;
+  area: string; // neighbourhood / locality, from addressComponents ("Jayanagar")
   lat: number;
   lng: number;
   googleRating: number | null;
@@ -26,17 +27,35 @@ export interface GooglePlace {
 
 // Field mask shared by search + details. No `photos` field on purpose —
 // the Photos SKU is the tightest free bucket; we enrich text/rating/hours only.
+// addressComponents powers the `area` label + area search.
 export const FIELD_MASK_DETAIL =
-  "id,displayName,formattedAddress,location,rating,priceLevel,types,regularOpeningHours";
+  "id,displayName,formattedAddress,addressComponents,location,rating,priceLevel,types,regularOpeningHours";
 export const FIELD_MASK_SEARCH =
-  "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.priceLevel,places.types,places.regularOpeningHours";
+  "places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location,places.rating,places.priceLevel,places.types,places.regularOpeningHours";
+
+// The address-component types that best name a "neighbourhood", best-first. For
+// Bengaluru, sublocality_level_1 is the Jayanagar/Koramangala granularity. No
+// `locality` fallback on purpose — that would surface the whole city ("Bengaluru")
+// as the neighbourhood; better to leave area blank than mislabel it.
+const AREA_COMPONENT_TYPES = ["sublocality_level_1", "sublocality", "neighborhood"];
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+function pickArea(components: any[]): string {
+  if (!Array.isArray(components)) return "";
+  for (const t of AREA_COMPONENT_TYPES) {
+    const c = components.find((comp) => comp?.types?.includes(t));
+    const label = c?.longText ?? c?.shortText;
+    if (label) return label; // skip to the next type if this component has no text
+  }
+  return "";
+}
+
 export function mapGooglePlace(p: any): GooglePlace {
   return {
     placeId: p.id,
     name: p.displayName?.text ?? "",
     address: p.formattedAddress ?? "",
+    area: pickArea(p.addressComponents),
     lat: p.location?.latitude ?? 0,
     lng: p.location?.longitude ?? 0,
     googleRating: typeof p.rating === "number" ? p.rating : null,

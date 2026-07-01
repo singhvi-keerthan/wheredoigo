@@ -8,6 +8,7 @@ import MapView from "./MapView";
 import PlaceCard from "./PlaceCard";
 import PlaceDetail from "./PlaceDetail";
 import CommandPalette from "./CommandPalette";
+import AddPlaceSheet from "./AddPlaceSheet";
 import DecideSheet from "./DecideSheet";
 
 type FilterKey = "all" | DisplayState;
@@ -51,6 +52,7 @@ export default function AppShell() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterKey>("all");
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const [decideOpen, setDecideOpen] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
 
@@ -114,7 +116,7 @@ export default function AppShell() {
       ) : (
         <div className="fixed inset-x-0 bottom-0 z-10">
           {/* filter rail — Decide (white action) + a dark-glass underline tray */}
-          <div className="flex items-center gap-3 overflow-x-auto px-5 pb-2.5 scroll-quiet">
+          <div className="flex items-center gap-2.5 overflow-x-auto px-5 pb-2 scroll-quiet">
             <button
               onClick={() => setDecideOpen(true)}
               className="press shrink-0"
@@ -122,10 +124,10 @@ export default function AppShell() {
                 ...WHITE_ACTION,
                 display: "inline-flex",
                 alignItems: "center",
-                height: 44,
-                padding: "0 20px",
-                borderRadius: 20,
-                fontSize: 14.5,
+                height: 40,
+                padding: "0 17px",
+                borderRadius: 18,
+                fontSize: 14,
                 fontWeight: 640,
                 letterSpacing: "-0.01em",
                 cursor: "pointer",
@@ -141,9 +143,9 @@ export default function AppShell() {
                 ...GLASS,
                 display: "inline-flex",
                 alignItems: "center",
-                gap: 5,
-                padding: 6,
-                borderRadius: 22,
+                gap: 4,
+                padding: 5,
+                borderRadius: 20,
               }}
             >
               {FILTERS.map((f) => {
@@ -159,9 +161,9 @@ export default function AppShell() {
                       alignItems: "center",
                       justifyContent: "center",
                       gap: 3,
-                      height: 38,
-                      padding: "0 15px",
-                      borderRadius: 15,
+                      height: 34,
+                      padding: "0 13px",
+                      borderRadius: 13,
                       background: "transparent",
                       border: "none",
                       cursor: "pointer",
@@ -186,22 +188,21 @@ export default function AppShell() {
             </div>
           </div>
 
-          {/* search dock — drag handle + glass search + white add */}
-          <div style={{ width: 38, height: 4, borderRadius: 3, background: "rgba(60,64,74,0.55)", margin: "0 auto 12px" }} />
-          <div className="flex items-center gap-3 px-[18px] pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+          {/* search dock — glass search + white add */}
+          <div className="flex items-center gap-2.5 px-[18px] pb-[max(1.25rem,env(safe-area-inset-bottom))]">
             <button
               onClick={() => setPaletteOpen(true)}
-              className="press flex flex-1 items-center gap-3 text-left"
-              style={{ ...GLASS, height: 56, padding: "0 8px", borderRadius: 20, cursor: "text" }}
+              className="press flex flex-1 items-center gap-2.5 text-left"
+              style={{ ...GLASS, height: 50, padding: "0 7px", borderRadius: 18, cursor: "text" }}
             >
               <span
                 className="flex shrink-0 items-center justify-center"
-                style={{ width: 40, height: 40, borderRadius: "50%", background: "oklch(0.32 0.01 260)", color: "oklch(0.95 0 0)" }}
+                style={{ width: 36, height: 36, borderRadius: "50%", background: "oklch(0.32 0.01 260)", color: "oklch(0.95 0 0)" }}
               >
-                <Search size={18} strokeWidth={2.25} />
+                <Search size={17} strokeWidth={2.25} />
               </span>
-              <span className="flex-1" style={{ fontSize: 16, color: "oklch(0.6 0.01 260)", letterSpacing: "-0.01em" }}>
-                Search a place
+              <span className="flex-1" style={{ fontSize: 15, color: "oklch(0.6 0.01 260)", letterSpacing: "-0.01em" }}>
+                Search your places
               </span>
               <kbd
                 className="inline-flex items-center"
@@ -220,12 +221,12 @@ export default function AppShell() {
               </kbd>
             </button>
             <button
-              onClick={() => setPaletteOpen(true)}
+              onClick={() => setAddOpen(true)}
               aria-label="Add a place"
               className="press flex shrink-0 items-center justify-center"
-              style={{ ...WHITE_ACTION, width: 56, height: 56, borderRadius: 20, cursor: "pointer" }}
+              style={{ ...WHITE_ACTION, width: 50, height: 50, borderRadius: 18, cursor: "pointer" }}
             >
-              <Plus size={26} strokeWidth={2.5} />
+              <Plus size={24} strokeWidth={2.5} />
             </button>
           </div>
         </div>
@@ -236,6 +237,16 @@ export default function AppShell() {
         onClose={() => setPaletteOpen(false)}
         onPick={(id) => setSelectedId(id)}
       />
+
+      {addOpen && (
+        <AddPlaceSheet
+          open={addOpen}
+          onClose={() => setAddOpen(false)}
+          // Adding just drops the pin + selects it. Its type/cuisine tags come
+          // auto-derived from Google, so it's searchable with no form to fill.
+          onAdded={(id) => setSelectedId(id)}
+        />
+      )}
 
       {decideOpen && (
         <DecideSheet

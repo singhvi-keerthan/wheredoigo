@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  X, Navigation, Heart, Ban, Star, Plus, ImagePlus, Camera, Trash2, Clock, Check,
+  X, Navigation, Heart, Ban, Star, Plus, ImagePlus, Camera, Trash2, MapPin, Check,
 } from "lucide-react";
 import {
   usePlace, updatePlace, toggleFavorite, toggleNeverAgain, setTags, addPhoto, removePhoto,
@@ -46,6 +46,7 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
         googleTypes: g.googleTypes,
         openingPeriods: g.openingPeriods,
         hoursText: g.hoursText,
+        ...(g.area ? { area: g.area } : {}),
         enrichedAt: new Date().toISOString(),
       });
     });
@@ -131,17 +132,22 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
           {place.address && (
             <p className="mt-0.5 text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>{place.address}</p>
           )}
-          {(open !== null || todayHours) && (
+          {(place.area || open !== null || todayHours) && (
             <div className="mt-1.5 flex items-center gap-1.5 text-[12px]">
-              <Clock size={12} style={{ color: "var(--text-tertiary)" }} />
+              {place.area && (
+                <span className="inline-flex items-center gap-1 font-semibold" style={{ color: "var(--text-secondary)" }}>
+                  <MapPin size={12} strokeWidth={2.25} style={{ color: "var(--text-tertiary)" }} />
+                  {place.area}
+                </span>
+              )}
               {open !== null && (
                 <span className="font-semibold" style={{ color: open ? "var(--text-primary)" : "var(--text-tertiary)" }}>
-                  {open ? "Open now" : "Closed"}
+                  {place.area ? "· " : ""}{open ? "Open now" : "Closed"}
                 </span>
               )}
               {todayHours && (
                 <span style={{ color: "var(--text-tertiary)" }}>
-                  {open !== null ? "· " : ""}{todayHours.replace(/^[A-Za-z]+:\s*/, "")}
+                  {open !== null || place.area ? "· " : ""}{todayHours.replace(/^[A-Za-z]+:\s*/, "")}
                 </span>
               )}
             </div>

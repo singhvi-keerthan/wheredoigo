@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef } from "react";
-import { Star, Navigation, X, ChevronRight, ImagePlus, Camera, Trash2, Check, Ban } from "lucide-react";
+import { Star, Navigation, X, ChevronRight, ImagePlus, Camera, Trash2, Check, Ban, MapPin } from "lucide-react";
 import { displayState, type Place } from "@/lib/types";
 import { addPhoto, removePhoto, updatePlace, toggleNeverAgain } from "@/lib/store";
 import { resizeImage } from "@/lib/image";
@@ -93,6 +93,12 @@ export default function PlaceCard({
             </h2>
 
             <div className="mt-1.5 flex items-center gap-2.5 text-[12.5px]" style={{ fontFamily: "var(--font-mono)" }}>
+              {place.area && (
+                <span className="inline-flex items-center gap-1" style={{ color: "var(--text-tertiary)" }}>
+                  <MapPin size={11} strokeWidth={2} />
+                  {place.area}
+                </span>
+              )}
               {rating.value != null && (
                 <span
                   className="inline-flex items-center gap-1 px-1.5 py-[2px]"

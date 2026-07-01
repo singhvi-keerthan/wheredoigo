@@ -5,6 +5,7 @@ import { X, Sparkles, Navigation, RefreshCw, ArrowRight, Clock } from "lucide-re
 import { usePlaces } from "@/lib/store";
 import { TAG_OPTIONS, isOpenNow } from "@/lib/types";
 import { rankPlaces, EMPTY_QUERY, type DecideQuery } from "@/lib/decide";
+import { keywordsFromText } from "@/lib/decide-prompt";
 import { stateMeta, leadRating, leadPrice, directionsUrl } from "@/lib/format";
 
 // Intent presets — one tap sets a structured query. No proximity, by design.
@@ -69,6 +70,19 @@ function parseFallback(text: string): DecideQuery {
   if (/open now|right now|still open|open right/.test(t)) q.openNow = true;
   const budget = t.match(/(?:under|below|max|upto|up to|<)\s*₹?\s*(\d{2,5})/);
   if (budget) q.maxBudget = +budget[1];
+
+  // Quality asks → boostRatings (rank up on a private sub-rating dimension).
+  const boost: string[] = [];
+  if (/ambian|ambien|atmosphere/.test(t)) boost.push("ambiance");
+  if (/delicious|tasty|amazing food|great food|best food|incredible food/.test(t)) boost.push("food");
+  if (/great service|good service|attentive|friendly staff/.test(t)) boost.push("service");
+  if (/value for money|worth it|good value|great value|bang for buck/.test(t)) boost.push("value");
+  if (boost.length) q.boostRatings = boost;
+
+  // Distinctive free-text terms → matched against your notes by the ranker.
+  const kw = keywordsFromText(text);
+  if (kw.length) q.keywords = kw;
+
   return q;
 }
 

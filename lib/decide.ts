@@ -1,4 +1,4 @@
-import type { Place, TagNamespace } from "./types";
+import type { Place, TagNamespace, RatingDimension } from "./types";
 import { isOpenNow } from "./types";
 import { leadRating } from "./format";
 
@@ -19,8 +19,25 @@ export interface DecideQuery {
   occasions?: string[];
   vibes?: string[];
   practical?: string[];
+  // Hard negatives — "no bars", "not italian", "nothing too fancy". A place is
+  // dropped entirely if it carries any excluded tag value. Kept namespace-parallel
+  // to the positive fields so the model (and sanitizer) can mirror them 1:1.
+  excludeTypes?: string[];
+  excludeCuisines?: string[];
+  excludeOccasions?: string[];
+  excludeVibes?: string[];
+  excludePractical?: string[];
   maxBudget?: number | null; // per person (₹)
   openNow?: boolean;
+  // Quality asks ("great ambiance", "good value") → rank places rated high on
+  // these private sub-dimensions UP. Soft: never hides a place, just floats the
+  // strong ones. Values are RatingDimension keys.
+  boostRatings?: string[];
+  // Distinctive free-text terms (a dish, a source like "insta", a descriptor)
+  // that the controlled tags don't capture — matched against your own notes/name
+  // on each place, so "the pizza place from insta" finds the one you noted that
+  // about. From Gemini, or the keyword fallback.
+  keywords?: string[];
 }
 
 export interface Ranked {
@@ -62,6 +79,25 @@ const PREFS: { ns: TagNamespace; key: keyof DecideQuery }[] = [
   { ns: "practical", key: "practical" },
 ];
 
+const EXCLUDES: { ns: TagNamespace; key: keyof DecideQuery }[] = [
+  { ns: "type", key: "excludeTypes" },
+  { ns: "cuisine", key: "excludeCuisines" },
+  { ns: "occasion", key: "excludeOccasions" },
+  { ns: "vibe", key: "excludeVibes" },
+  { ns: "practical", key: "excludePractical" },
+];
+
+// A place is excluded when it carries any tag value the query said to avoid.
+function isExcluded(p: Place, query: DecideQuery): boolean {
+  for (const { ns, key } of EXCLUDES) {
+    const avoid = query[key] as string[] | undefined;
+    if (avoid && avoid.length && tagValues(p, ns).some((v) => avoid.includes(v))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function rankPlaces(
   places: Place[],
   query: DecideQuery,
@@ -78,6 +114,9 @@ export function rankPlaces(
     if (query.lifecycle === "watchlist" && p.status !== "watchlist") continue;
     if (query.lifecycle === "visited" && p.status !== "visited") continue;
     if (query.lifecycle === "favorites" && !p.favorite) continue;
+
+    // Hard negatives — "no bars", "not italian", "nothing too fancy".
+    if (isExcluded(p, query)) continue;
 
     // Budget hard cap — only when we actually know your spend.
     if (
@@ -136,6 +175,30 @@ export function rankPlaces(
         if (hit && reasons.length < 3) reasons.push(`Good for ${hit}`);
       } else if (m === false) {
         score -= 10;
+      }
+    }
+
+    // Quality boost — a place rated high on an asked dimension floats up. Soft
+    // (additive), so nothing is filtered out; a small library still returns.
+    if (query.boostRatings?.length && p.ratings) {
+      for (const dim of query.boostRatings) {
+        const v = p.ratings[dim as RatingDimension];
+        if (typeof v === "number") {
+          score += v * 6; // 5★ ≈ +30, on par with a strong preference match
+          if (v >= 4 && reasons.length < 3) reasons.push(`Great ${dim}`);
+        }
+      }
+    }
+
+    // Note/keyword match — the most specific signal there is: it's literally the
+    // reason you saved the place. Matched against your own note + the name.
+    if (query.keywords?.length) {
+      const hay = `${p.notes} ${p.name}`.toLowerCase();
+      let hits = 0;
+      for (const kw of query.keywords) if (kw.length >= 3 && hay.includes(kw)) hits++;
+      if (hits) {
+        score += Math.min(hits, 3) * 15;
+        if (reasons.length < 3) reasons.push("Matches your note");
       }
     }
 

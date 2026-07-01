@@ -21,6 +21,18 @@ export interface Tag {
   value: string;
 }
 
+// Sub-rating dimensions captured on a visit. The overall rating (place.myRating)
+// is the ONLY one shown in the UI; these four are private signal the assistant
+// mines to answer quality-specific asks ("great ambiance", "good value").
+export type RatingDimension = "food" | "ambiance" | "service" | "value";
+export const RATING_DIMENSIONS: RatingDimension[] = ["food", "ambiance", "service", "value"];
+export const RATING_LABELS: Record<RatingDimension, string> = {
+  food: "Food",
+  ambiance: "Ambiance",
+  service: "Service",
+  value: "Value", // value-for-money: 5 = great value, not "expensive"
+};
+
 export interface Visit {
   id: string;
   visitedOn: string; // ISO date (yyyy-mm-dd)
@@ -51,13 +63,15 @@ export interface Place {
   googlePlaceId: string | null;
   name: string;
   address: string;
+  area?: string; // neighbourhood / locality ("Jayanagar") — from Google, powers area search
   lat: number;
   lng: number;
   status: PlaceStatus;
   favorite: boolean; // preference flag, overlays visited
   neverAgain: boolean; // preference flag, overlays visited
 
-  myRating: number | null; // 0–5, set once visited
+  myRating: number | null; // 0–5, set once visited — the ONE shown rating
+  ratings?: Partial<Record<RatingDimension, number>>; // 1–5 per dimension; private, assistant-only
   googleRating: number | null; // cached reference
   myBudgetPerPerson: number | null; // your logged spend / person
   googlePriceLevel: number | null; // 0–4 ($ signs)
