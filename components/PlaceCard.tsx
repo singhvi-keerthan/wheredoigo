@@ -1,12 +1,14 @@
 "use client";
 
-import { Star, Navigation, X, ChevronRight } from "lucide-react";
+import { Star, Navigation, X, ChevronRight, Clock } from "lucide-react";
 import type { Place } from "@/lib/types";
-import { leadPrice, leadRating, stateMeta, directionsUrl } from "@/lib/format";
+import { isOpenNow } from "@/lib/types";
+import { leadPrice, stateMeta, directionsUrl } from "@/lib/format";
 import PlaceGlyph from "./PlaceGlyph";
 
-// Docked card shown when a pin is selected. Photo-forward, rounded, with a Beli
-// style status pill + score. Tap the body to open the full detail drawer.
+// Docked peek card shown when a pin is selected. Fills the width: photo + a rich
+// detail column (both ratings, price, open-now, address, tags) with Directions
+// on the right (desktop) / full-width below (mobile). Tap the body → full detail.
 export default function PlaceCard({
   place,
   onOpen,
@@ -17,13 +19,14 @@ export default function PlaceCard({
   onClose: () => void;
 }) {
   const meta = stateMeta(place);
-  const rating = leadRating(place);
   const price = leadPrice(place);
   const photo = place.photos[0]?.dataUrl;
+  const open = isOpenNow(place.openingPeriods);
+  const tags = place.tags.slice(0, 8);
 
   return (
     <div
-      className="animate-rise relative px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2"
+      className="animate-rise relative px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2 sm:px-6"
       style={{
         background: "var(--bg-raised)",
         boxShadow: "var(--shadow-sheet)",
@@ -34,98 +37,127 @@ export default function PlaceCard({
       <button
         onClick={onClose}
         aria-label="Close"
-        className="mx-auto mb-3 block h-[5px] w-10 rounded-full"
+        className="mx-auto mb-3 block h-[5px] w-10 rounded-full sm:hidden"
         style={{ background: "var(--ink-line)" }}
       />
       <button
         onClick={onClose}
         aria-label="Close"
-        className="press absolute right-4 top-3 grid h-7 w-7 place-items-center rounded-full"
+        className="press absolute right-4 top-3 z-10 grid h-7 w-7 place-items-center rounded-full"
         style={{ background: "var(--bg-elevated)", color: "var(--text-tertiary)" }}
       >
         <X size={14} strokeWidth={2.25} />
       </button>
 
-      <button onClick={onOpen} className="flex w-full items-center gap-3.5 text-left">
-        {/* photo / emoji tile */}
-        <div
-          className="relative grid h-[76px] w-[76px] shrink-0 place-items-center overflow-hidden"
-          style={{
-            borderRadius: "var(--radius)",
-            border: "1px solid var(--border)",
-            background: photo ? `center/cover url(${photo})` : "var(--bg-elevated)",
-          }}
-        >
-          {!photo && (
-            <PlaceGlyph place={place} size={30} strokeWidth={1.9} style={{ color: "var(--text-secondary)" }} />
-          )}
-        </div>
-
-        <div className="min-w-0 flex-1">
-          <span
-            className="inline-flex items-center gap-1.5 px-2 py-[3px] text-[11px] font-bold"
-            style={{ borderRadius: "var(--radius-chip)", background: meta.color, color: "#fff" }}
+      {/* one horizontal band on desktop; stacks on mobile */}
+      <div className="mx-auto flex max-w-[1100px] flex-col gap-3 pt-1 sm:flex-row sm:items-center sm:gap-6">
+        <button onClick={onOpen} className="flex min-w-0 items-center gap-4 text-left sm:flex-1">
+          {/* photo / glyph tile */}
+          <div
+            className="relative grid h-[84px] w-[84px] shrink-0 place-items-center overflow-hidden sm:h-[104px] sm:w-[104px]"
+            style={{
+              borderRadius: "var(--radius)",
+              border: "1px solid var(--border)",
+              background: photo ? `center/cover url(${photo})` : "var(--bg-elevated)",
+            }}
           >
-            {meta.label}
-          </span>
-
-          <h2
-            className="mt-1.5 truncate text-[26px] leading-[1.02] tracking-[-0.005em]"
-            style={{ fontFamily: "var(--font-serif)", color: "var(--text-primary)" }}
-          >
-            {place.name}
-          </h2>
-
-          <div className="mt-1.5 flex items-center gap-2.5 text-[12.5px]" style={{ fontFamily: "var(--font-mono)" }}>
-            {rating.value != null && (
-              <span
-                className="inline-flex items-center gap-1 px-1.5 py-[2px]"
-                style={{
-                  borderRadius: "var(--radius-chip)",
-                  background: "var(--bg-elevated)",
-                  color: rating.mine ? "var(--star)" : "var(--text-secondary)",
-                }}
-              >
-                <Star size={11} strokeWidth={0} fill="currentColor" />
-                {rating.value.toFixed(1)}
-                <span style={{ color: "var(--text-tertiary)" }}>{rating.mine ? "you" : "ggl"}</span>
-              </span>
+            {!photo && (
+              <PlaceGlyph place={place} size={34} strokeWidth={1.9} style={{ color: "var(--text-secondary)" }} />
             )}
-            <span style={{ color: "var(--text-secondary)" }}>{price.label}</span>
           </div>
-        </div>
 
-        <ChevronRight size={18} className="shrink-0 self-center" style={{ color: "var(--text-tertiary)" }} />
-      </button>
-
-      {place.tags.length > 0 && (
-        <div className="no-bar mt-3 flex gap-1.5 overflow-x-auto">
-          {place.tags.slice(0, 6).map((t) => (
+          <div className="min-w-0 flex-1">
             <span
-              key={t.namespace + t.value}
-              className="shrink-0 px-2.5 py-[4px] text-[11.5px]"
-              style={{
-                borderRadius: "var(--radius-chip)",
-                background: "var(--bg-elevated)",
-                color: "var(--text-secondary)",
-              }}
+              className="inline-flex items-center gap-1.5 px-2 py-[3px] text-[10.5px] font-bold uppercase tracking-[0.05em]"
+              style={{ borderRadius: "var(--radius-chip)", background: "rgba(255,255,255,0.08)", color: "var(--text-secondary)" }}
             >
-              {t.value}
+              <span className="h-[6px] w-[6px] rounded-full" style={{ background: meta.color }} />
+              {meta.label}
             </span>
-          ))}
-        </div>
-      )}
 
-      <a
-        href={directionsUrl(place)}
-        target="_blank"
-        rel="noreferrer"
-        className="press mt-3.5 flex items-center justify-center gap-2 py-3 text-[14px] font-bold"
-        style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
-      >
-        <Navigation size={15} strokeWidth={2.5} fill="currentColor" />
-        Directions
-      </a>
+            <h2
+              className="mt-1 truncate text-[26px] leading-[1.02] tracking-[-0.005em] sm:text-[30px]"
+              style={{ fontFamily: "var(--font-serif)", color: "var(--text-primary)" }}
+            >
+              {place.name}
+            </h2>
+
+            {/* metrics row — both ratings, price, open-now */}
+            <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12.5px]" style={{ fontFamily: "var(--font-mono)" }}>
+              {place.myRating != null && (
+                <Metric star value={place.myRating.toFixed(1)} tag="you" mine />
+              )}
+              {place.googleRating != null && (
+                <Metric star value={place.googleRating.toFixed(1)} tag="ggl" />
+              )}
+              {price.label && <span style={{ color: "var(--text-secondary)" }}>{price.label}</span>}
+              {open !== null && (
+                <span className="inline-flex items-center gap-1" style={{ color: "var(--text-secondary)" }}>
+                  <Clock size={11} style={{ color: "var(--text-tertiary)" }} />
+                  {open ? "Open now" : "Closed"}
+                </span>
+              )}
+            </div>
+
+            {place.address && (
+              <p className="mt-1 truncate text-[12px]" style={{ color: "var(--text-tertiary)" }}>
+                {place.address}
+              </p>
+            )}
+
+            {/* tags — wrap into the freed space */}
+            {tags.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {tags.map((t) => (
+                  <span
+                    key={t.namespace + t.value}
+                    className="px-2.5 py-[3px] text-[11.5px]"
+                    style={{ borderRadius: "var(--radius-chip)", background: "var(--bg-elevated)", color: "var(--text-secondary)" }}
+                  >
+                    {t.value}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <ChevronRight size={18} className="shrink-0 self-center sm:hidden" style={{ color: "var(--text-tertiary)" }} />
+        </button>
+
+        {/* Directions — right rail on desktop, full-width below on mobile */}
+        <div className="flex shrink-0 flex-col gap-2 sm:w-[190px]">
+          <a
+            href={directionsUrl(place)}
+            target="_blank"
+            rel="noreferrer"
+            className="press flex items-center justify-center gap-2 py-3 text-[14px] font-bold"
+            style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
+          >
+            <Navigation size={15} strokeWidth={2.5} fill="currentColor" />
+            Directions
+          </a>
+          <button
+            onClick={onOpen}
+            className="press hidden items-center justify-center gap-1.5 py-2.5 text-[13px] font-semibold sm:flex"
+            style={{ borderRadius: "var(--radius-chip)", border: "1px solid var(--border-strong)", color: "var(--text-primary)" }}
+          >
+            Details <ChevronRight size={14} />
+          </button>
+        </div>
+      </div>
     </div>
+  );
+}
+
+function Metric({ value, tag, star, mine }: { value: string; tag: string; star?: boolean; mine?: boolean }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-1.5 py-[2px]"
+      style={{ borderRadius: "var(--radius-chip)", background: "var(--bg-elevated)", color: mine ? "var(--star)" : "var(--text-secondary)" }}
+    >
+      {star && <Star size={11} strokeWidth={0} fill="currentColor" />}
+      {value}
+      <span style={{ color: "var(--text-tertiary)" }}>{tag}</span>
+    </span>
   );
 }
