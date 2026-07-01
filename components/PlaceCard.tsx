@@ -1,8 +1,11 @@
 "use client";
 
-import { Star, Navigation, X, ChevronRight, Clock } from "lucide-react";
+import { useRef } from "react";
+import { Star, Navigation, X, ChevronRight, Clock, ImagePlus } from "lucide-react";
 import type { Place } from "@/lib/types";
 import { isOpenNow } from "@/lib/types";
+import { addPhoto } from "@/lib/store";
+import { resizeImage } from "@/lib/image";
 import { leadPrice, stateMeta, directionsUrl } from "@/lib/format";
 import PlaceGlyph from "./PlaceGlyph";
 
@@ -23,6 +26,22 @@ export default function PlaceCard({
   const photo = place.photos[0]?.dataUrl;
   const open = isOpenNow(place.openingPeriods);
   const tags = place.tags.slice(0, 8);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  // Quick-add a place photo straight from the card. A plain file input (no
+  // `capture`) lets mobile offer Take Photo / Library natively; desktop opens
+  // the picker. The full Upload/Take-photo pair lives in the detail sheet.
+  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const dataUrl = await resizeImage(file);
+      addPhoto(place.id, { dataUrl, source: "mine", scope: "place", visitId: null });
+    } catch {
+      /* ignore bad image */
+    }
+    e.target.value = "";
+  };
 
   return (
     <div
@@ -51,8 +70,8 @@ export default function PlaceCard({
 
       {/* one horizontal band on desktop; stacks on mobile */}
       <div className="mx-auto flex max-w-[1100px] flex-col gap-3 pt-1 sm:flex-row sm:items-center sm:gap-6">
-        <button onClick={onOpen} className="flex min-w-0 items-center gap-4 text-left sm:flex-1">
-          {/* photo / glyph tile */}
+        <div className="flex min-w-0 items-center gap-4 sm:flex-1">
+          {/* photo / glyph tile — with a quick add-photo badge */}
           <div
             className="relative grid h-[84px] w-[84px] shrink-0 place-items-center overflow-hidden sm:h-[104px] sm:w-[104px]"
             style={{
@@ -64,9 +83,18 @@ export default function PlaceCard({
             {!photo && (
               <PlaceGlyph place={place} size={34} strokeWidth={1.9} style={{ color: "var(--text-secondary)" }} />
             )}
+            <button
+              onClick={() => fileRef.current?.click()}
+              aria-label={photo ? "Add another photo" : "Add a photo"}
+              className="press absolute bottom-1 right-1 grid h-[26px] w-[26px] place-items-center rounded-full"
+              style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", boxShadow: "0 2px 8px rgba(0,0,0,0.4)" }}
+            >
+              <ImagePlus size={14} strokeWidth={2.25} />
+            </button>
           </div>
+          <input ref={fileRef} type="file" accept="image/*" hidden onChange={onFile} />
 
-          <div className="min-w-0 flex-1">
+          <button onClick={onOpen} className="min-w-0 flex-1 text-left">
             <span
               className="inline-flex items-center gap-1.5 px-2 py-[3px] text-[10.5px] font-bold uppercase tracking-[0.05em]"
               style={{ borderRadius: "var(--radius-chip)", background: "rgba(255,255,255,0.08)", color: "var(--text-secondary)" }}
@@ -119,10 +147,10 @@ export default function PlaceCard({
                 ))}
               </div>
             )}
-          </div>
+          </button>
 
           <ChevronRight size={18} className="shrink-0 self-center sm:hidden" style={{ color: "var(--text-tertiary)" }} />
-        </button>
+        </div>
 
         {/* Directions — right rail on desktop, full-width below on mobile */}
         <div className="flex shrink-0 flex-col gap-2 sm:w-[190px]">
