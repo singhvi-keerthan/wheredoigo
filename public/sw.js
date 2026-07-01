@@ -1,8 +1,8 @@
-// Minimal service worker so Nightfall installs as a PWA and the shell works
+// Minimal service worker so "im hungry" installs as a PWA and the shell works
 // offline. Network-first for navigations (always get the latest build),
 // cache-first for static assets. Never touches /api or cross-origin (map tiles,
 // Google) — those always hit the network.
-const CACHE = "nightfall-v1";
+const CACHE = "imhungry-v1";
 const SHELL = ["/", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (e) => {

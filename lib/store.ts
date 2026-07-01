@@ -10,7 +10,7 @@ import { SEED_PLACES } from "./seed";
 // persistence layer for Supabase without changing the call sites.
 // ---------------------------------------------------------------------------
 
-const KEY = "nightfall.places.v1";
+const KEY = "imhungry.places.v1";
 
 let cache: Place[] | null = null;
 const listeners = new Set<() => void>();
@@ -40,7 +40,7 @@ function commit(next: Place[]) {
     window.localStorage.setItem(KEY, JSON.stringify(next));
   } catch (e) {
     // localStorage quota (photos are the usual culprit). Surface, don't crash.
-    console.warn("Nightfall: could not persist — storage may be full.", e);
+    console.warn("im hungry: could not persist — storage may be full.", e);
   }
   listeners.forEach((l) => l());
 }
@@ -146,7 +146,7 @@ export function removePhoto(placeId: string, photoId: string) {
 // UI. Persisting them here makes a tag you invent on one place available on all.
 
 type TagVocab = Record<TagNamespace, string[]>;
-const TAG_KEY = "nightfall.tags.v1";
+const TAG_KEY = "imhungry.tags.v1";
 const EMPTY_VOCAB: TagVocab = { type: [], cuisine: [], occasion: [], vibe: [], practical: [] };
 
 let tagCache: TagVocab | null = null;
@@ -169,7 +169,7 @@ function commitTags(next: TagVocab) {
   try {
     window.localStorage.setItem(TAG_KEY, JSON.stringify(next));
   } catch (e) {
-    console.warn("Nightfall: could not persist tags.", e);
+    console.warn("im hungry: could not persist tags.", e);
   }
   tagListeners.forEach((l) => l());
 }

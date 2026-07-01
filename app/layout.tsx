@@ -12,10 +12,10 @@ const monoData = Spline_Sans_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Nightfall — your going-out brain",
+  title: "im hungry — where are we eating?",
   description: "A private map of every place you've been and want to go.",
   manifest: "/manifest.webmanifest",
-  appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Nightfall" },
+  appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "im hungry" },
 };
 
 export const viewport: Viewport = {

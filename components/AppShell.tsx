@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Search, Sparkles, Plus } from "lucide-react";
+import { useMemo, useState, type CSSProperties } from "react";
+import { Search, Plus } from "lucide-react";
 import { usePlaces } from "@/lib/store";
 import { displayState, type DisplayState } from "@/lib/types";
 import MapView from "./MapView";
@@ -57,13 +57,13 @@ export default function AppShell() {
             className="text-[26px] font-medium leading-none tracking-[-0.015em]"
             style={{ fontFamily: "var(--font-display)", color: "#16181d" }}
           >
-            Nightfall
+            im hungry
           </h1>
           <p className="mt-1.5 text-[11px]" style={{ color: "#5b6470" }}>
             <span style={{ fontFamily: "var(--font-mono)", color: "#16181d", fontWeight: 500 }}>
               {places.length}
             </span>{" "}
-            places after dark · Bengaluru
+            places · Bengaluru
           </p>
         </div>
       </header>
@@ -75,44 +75,89 @@ export default function AppShell() {
         </div>
       ) : (
         <div className="fixed inset-x-0 bottom-0 z-10">
-          {/* filter rail — solid dark chips floating on the light map */}
-          <div className="flex items-center gap-2 overflow-x-auto px-5 pb-2.5 scroll-quiet">
+          {/* filter rail — Decide (held apart) + a frosted segmented tray */}
+          <div className="flex items-center gap-3 overflow-x-auto px-5 pb-2.5 scroll-quiet">
+            {/* Decide — the mode, a solid ink pill */}
             <button
               onClick={() => setDecideOpen(true)}
-              className="press flex shrink-0 items-center gap-1.5 px-3.5 py-2 text-[12.5px] font-bold"
+              className="press shrink-0"
               style={{
-                color: "#2a1505",
-                background: "var(--grad-hero)",
-                borderRadius: "var(--radius-chip)",
-                boxShadow: "0 4px 14px rgba(200,71,79,0.3)",
+                display: "inline-flex",
+                alignItems: "center",
+                height: 38,
+                padding: "0 17px",
+                borderRadius: 19,
+                background: "oklch(0.2 0.008 260)",
+                color: "oklch(0.97 0 0)",
+                fontSize: 13,
+                fontWeight: 600,
+                letterSpacing: "-0.01em",
+                boxShadow:
+                  "inset 0 1px 0 rgba(255,255,255,0.14), 0 8px 22px -8px rgba(0,0,0,0.5)",
               }}
             >
-              <Sparkles size={13} strokeWidth={2.5} />
               Decide
             </button>
-            <span className="h-4 w-px shrink-0" style={{ background: "rgba(0,0,0,0.14)" }} />
-            {FILTERS.map((f) => {
-              const on = filter === f.key;
-              return (
-                <button
-                  key={f.key}
-                  onClick={() => setFilter(f.key)}
-                  className="press flex shrink-0 items-center gap-1.5 px-3.5 py-2 text-[12.5px] font-semibold transition-colors"
-                  style={{
-                    borderRadius: "var(--radius-chip)",
-                    background: on ? "var(--accent)" : "var(--bg-raised)",
-                    color: on ? "var(--accent-ink)" : "var(--text-secondary)",
-                    border: `1px solid ${on ? "var(--accent)" : "var(--border-strong)"}`,
-                    boxShadow: "0 3px 12px rgba(0,0,0,0.3)",
-                  }}
-                >
-                  {f.swatch && (
-                    <span className="h-[8px] w-[8px] rounded-full" style={{ background: f.swatch }} />
-                  )}
-                  {f.label}
-                </button>
-              );
-            })}
+
+            {/* Filter tray — one frosted-glass segmented control */}
+            <div
+              className="shrink-0"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: 5,
+                borderRadius: 18,
+                border: "1px solid rgba(255,255,255,0.65)",
+                background: "rgba(255,255,255,0.52)",
+                backdropFilter: "blur(22px) saturate(1.3)",
+                WebkitBackdropFilter: "blur(22px) saturate(1.3)",
+                boxShadow:
+                  "inset 0 1px 0 rgba(255,255,255,0.8), 0 10px 28px -12px rgba(0,0,0,0.4)",
+              }}
+            >
+              {FILTERS.map((f) => {
+                const on = filter === f.key;
+                const c = f.swatch; // undefined for "all" — no pin colour
+                const style: CSSProperties = {
+                  display: "inline-flex",
+                  alignItems: "center",
+                  height: 30,
+                  padding: "0 12px",
+                  borderRadius: 13,
+                  fontSize: 13,
+                  fontWeight: 500,
+                  letterSpacing: "-0.01em",
+                  color: "oklch(0.36 0.012 260)",
+                  background: "transparent",
+                  transition: "background .15s ease",
+                };
+                if (on && !c) {
+                  // "All" active = neutral white lozenge
+                  style.fontWeight = 600;
+                  style.color = "oklch(0.2 0.01 260)";
+                  style.background = "rgba(255,255,255,0.96)";
+                  style.boxShadow = "0 2px 6px -2px rgba(0,0,0,0.18)";
+                } else if (on && c) {
+                  // category active = tinted in its pin colour
+                  style.fontWeight = 600;
+                  style.color = c;
+                  style.padding = "0 13px";
+                  style.background = `color-mix(in srgb, ${c} 16%, transparent)`;
+                  style.boxShadow = `inset 0 0 0 1px color-mix(in srgb, ${c} 40%, transparent)`;
+                }
+                return (
+                  <button
+                    key={f.key}
+                    onClick={() => setFilter(f.key)}
+                    className="press shrink-0"
+                    style={style}
+                  >
+                    {f.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {/* COMMAND ROW — search pill + an unmissable add button */}

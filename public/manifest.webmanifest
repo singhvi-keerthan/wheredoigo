@@ -1,6 +1,6 @@
 {
-  "name": "Nightfall — your going-out brain",
-  "short_name": "Nightfall",
+  "name": "im hungry — where are we eating?",
+  "short_name": "im hungry",
   "description": "A private map of every place you've been and want to go.",
   "start_url": "/",
   "display": "standalone",
