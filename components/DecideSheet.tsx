@@ -296,8 +296,8 @@ function HeroPick({
         </div>
 
         <h2
-          className="mt-1 text-[26px] font-medium leading-[1.05] tracking-[-0.01em]"
-          style={{ fontFamily: "var(--font-display)", color: "var(--text-primary)" }}
+          className="mt-1 text-[28px] leading-[1.02] tracking-[-0.005em]"
+          style={{ fontFamily: "var(--font-serif)", color: "var(--text-primary)" }}
         >
           {place.name}
         </h2>

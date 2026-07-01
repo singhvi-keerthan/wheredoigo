@@ -70,8 +70,8 @@ export default function PlaceCard({
           </span>
 
           <h2
-            className="mt-1.5 truncate text-[24px] font-medium leading-[1.05] tracking-[-0.01em]"
-            style={{ fontFamily: "var(--font-display)", color: "var(--text-primary)" }}
+            className="mt-1.5 truncate text-[26px] leading-[1.02] tracking-[-0.005em]"
+            style={{ fontFamily: "var(--font-serif)", color: "var(--text-primary)" }}
           >
             {place.name}
           </h2>

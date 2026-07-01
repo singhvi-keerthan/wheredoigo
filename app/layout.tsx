@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Spline_Sans_Mono } from "next/font/google";
+import { Spline_Sans_Mono, Instrument_Serif } from "next/font/google";
 import "./globals.css";
 import RegisterSW from "@/components/RegisterSW";
 
@@ -9,6 +9,14 @@ const monoData = Spline_Sans_Mono({
   variable: "--font-mono-data",
   subsets: ["latin"],
   weight: ["400", "500"],
+});
+
+// Place NAMES only — elegant serif (color-system spec).
+const serif = Instrument_Serif({
+  variable: "--font-serif",
+  subsets: ["latin"],
+  weight: "400",
+  style: ["normal", "italic"],
 });
 
 export const metadata: Metadata = {
@@ -30,7 +38,7 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${monoData.variable} h-full`}>
+    <html lang="en" className={`${monoData.variable} ${serif.variable} h-full`}>
       <head>
         <link
           rel="stylesheet"

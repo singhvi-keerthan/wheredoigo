@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  X, Navigation, Heart, Ban, Star, Plus, ImagePlus, Trash2, CalendarPlus, Clock, Check,
+  X, Navigation, Heart, Ban, Star, Plus, ImagePlus, Trash2, Clock, Check,
 } from "lucide-react";
 import {
   usePlace, updatePlace, addVisit, toggleFavorite, toggleNeverAgain, setTags, addPhoto, removePhoto,
@@ -21,6 +21,9 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
   const customTags = useCustomTags();
   const fileRef = useRef<HTMLInputElement>(null);
   const enrichedRef = useRef<string | null>(null);
+  const [editingTags, setEditingTags] = useState(false);
+  const [editingNote, setEditingNote] = useState(false);
+  const [loggingVisit, setLoggingVisit] = useState(false);
   const [vDate, setVDate] = useState(today());
   const [vWho, setVWho] = useState("");
   const [vNotes, setVNotes] = useState("");
@@ -82,17 +85,18 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
   const logVisit = () => {
     addVisit(place.id, { visitedOn: vDate, whoWith: vWho.trim(), notes: vNotes.trim(), rating: vRating });
     setVWho(""); setVNotes(""); setVRating(null); setVDate(today());
+    setLoggingVisit(false);
   };
 
   return (
-    <div className="fixed inset-0 z-40" style={{ background: "rgba(10,8,12,0.6)" }} onClick={onClose}>
+    <div className="fixed inset-0 z-40" style={{ background: "rgba(6,7,10,0.62)" }} onClick={onClose}>
       <div
         className="scroll-quiet absolute inset-x-0 bottom-0 max-h-[92dvh] overflow-y-auto pb-[max(1.5rem,env(safe-area-inset-bottom))]"
-        style={{ background: "var(--bg-raised)", borderTopLeftRadius: "var(--radius-lg)", borderTopRightRadius: "var(--radius-lg)", boxShadow: "var(--shadow-sheet)" }}
+        style={{ background: "var(--sheet)", borderTopLeftRadius: "var(--radius-lg)", borderTopRightRadius: "var(--radius-lg)", boxShadow: "var(--shadow-sheet)" }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* state-colour top wash (color system): the ONE place colour appears in
-            the sheet — 20% of the state hue, fading over ~210px. */}
+        {/* state-colour top wash: the ONE place colour in the sheet — 20% of the
+            state hue, fading over ~210px. */}
         <div
           className="pointer-events-none absolute inset-x-0 top-0"
           style={{
@@ -109,28 +113,29 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
             onClick={onClose}
             aria-label="Close"
             className="press absolute right-4 top-3 grid h-7 w-7 place-items-center rounded-full"
-            style={{ background: "var(--bg-elevated)", color: "var(--text-tertiary)" }}
+            style={{ background: "rgba(255,255,255,0.08)", color: "var(--text-secondary)" }}
           >
             <X size={14} strokeWidth={2.25} />
           </button>
         </div>
 
-        <div className="px-5">
+        <div className="relative px-5">
           {/* header */}
           <span
-            className="inline-flex items-center gap-1.5 px-2.5 py-[4px] text-[11px] font-bold"
-            style={{ borderRadius: "var(--radius-chip)", background: meta.color, color: "#fff" }}
+            className="inline-flex items-center gap-1.5 px-2.5 py-[4px] text-[10.5px] font-bold uppercase tracking-[0.06em]"
+            style={{ borderRadius: "var(--radius-chip)", background: "rgba(255,255,255,0.08)", color: "var(--text-secondary)" }}
           >
+            <span className="h-[6px] w-[6px] rounded-full" style={{ background: meta.color }} />
             {meta.label}
           </span>
           <h1
-            className="mt-1 text-[27px] font-medium leading-[1.05] tracking-[-0.01em]"
-            style={{ fontFamily: "var(--font-display)", color: "var(--text-primary)" }}
+            className="mt-2 text-[34px] leading-[1.02] tracking-[-0.005em]"
+            style={{ fontFamily: "var(--font-serif)", color: "var(--text-primary)" }}
           >
             {place.name}
           </h1>
           {place.address && (
-            <p className="mt-1 text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>{place.address}</p>
+            <p className="mt-0.5 text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>{place.address}</p>
           )}
           {(open !== null || todayHours) && (
             <div className="mt-1.5 flex items-center gap-1.5 text-[12px]">
@@ -148,28 +153,55 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
             </div>
           )}
 
-          {/* photos */}
-          <div className="scroll-quiet mt-3.5 flex gap-2 overflow-x-auto pb-1">
-            {place.photos.map((ph) => (
-              <div key={ph.id} className="relative h-24 w-24 shrink-0 overflow-hidden" style={{ borderRadius: "var(--radius-sm)" }}>
-                <img src={ph.dataUrl} alt="" className="h-full w-full object-cover" />
-                <button
-                  onClick={() => removePhoto(place.id, ph.id)}
-                  aria-label="Remove photo"
-                  className="absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-full"
-                  style={{ background: "rgba(6,8,13,0.7)", color: "#fff" }}
-                >
-                  <Trash2 size={12} />
-                </button>
-              </div>
-            ))}
-            <button
-              onClick={() => fileRef.current?.click()}
-              className="grid h-24 w-24 shrink-0 place-items-center"
-              style={{ borderRadius: "var(--radius-sm)", border: "1px dashed var(--border-strong)", color: "var(--text-tertiary)" }}
-            >
-              <ImagePlus size={20} />
-            </button>
+          {/* photo — big full-width block (empty state prompts an upload) */}
+          <div className="mt-3.5">
+            {place.photos.length === 0 ? (
+              <button
+                onClick={() => fileRef.current?.click()}
+                className="press grid w-full place-items-center gap-1.5"
+                style={{ height: 188, borderRadius: "var(--radius)", border: "1px dashed var(--border-strong)", color: "var(--text-tertiary)" }}
+              >
+                <ImagePlus size={22} />
+                <span className="text-[13px]">place photo</span>
+                <span className="text-[11.5px]" style={{ color: "var(--text-secondary)" }}>+ upload first</span>
+              </button>
+            ) : (
+              <>
+                <div className="relative w-full overflow-hidden" style={{ height: 188, borderRadius: "var(--radius)" }}>
+                  <img src={place.photos[0].dataUrl} alt="" className="h-full w-full object-cover" />
+                  <button
+                    onClick={() => removePhoto(place.id, place.photos[0].id)}
+                    aria-label="Remove photo"
+                    className="absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-full"
+                    style={{ background: "rgba(6,8,13,0.7)", color: "#fff" }}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+                <div className="scroll-quiet mt-2 flex gap-2 overflow-x-auto pb-1">
+                  {place.photos.slice(1).map((ph) => (
+                    <div key={ph.id} className="relative h-16 w-16 shrink-0 overflow-hidden" style={{ borderRadius: "var(--radius-sm)" }}>
+                      <img src={ph.dataUrl} alt="" className="h-full w-full object-cover" />
+                      <button
+                        onClick={() => removePhoto(place.id, ph.id)}
+                        aria-label="Remove photo"
+                        className="absolute right-0.5 top-0.5 grid h-5 w-5 place-items-center rounded-full"
+                        style={{ background: "rgba(6,8,13,0.7)", color: "#fff" }}
+                      >
+                        <Trash2 size={10} />
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    onClick={() => fileRef.current?.click()}
+                    className="grid h-16 w-16 shrink-0 place-items-center"
+                    style={{ borderRadius: "var(--radius-sm)", border: "1px dashed var(--border-strong)", color: "var(--text-tertiary)" }}
+                  >
+                    <ImagePlus size={16} />
+                  </button>
+                </div>
+              </>
+            )}
             <input ref={fileRef} type="file" accept="image/*" hidden onChange={onFile} />
           </div>
 
@@ -204,7 +236,7 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
                 className="press flex w-full items-center justify-center gap-2 py-3 text-[14px] font-semibold"
                 style={{ borderRadius: "var(--radius-chip)", border: "1px solid var(--border-strong)", color: "var(--text-primary)" }}
               >
-                <CalendarPlus size={15} /> Mark as been
+                Mark as been
               </button>
             ) : (
               <div className="flex flex-col gap-3">
@@ -233,80 +265,124 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
             </div>
           </Section>
 
-          {/* tags — fixed options + custom values you add on the fly */}
-          <Section title="Tags">
-            <div className="flex flex-col gap-3.5">
-              {(Object.keys(TAG_OPTIONS) as TagNamespace[]).map((ns) => {
-                const options = Array.from(new Set([...TAG_OPTIONS[ns], ...customTags[ns]]));
-                return (
-                  <TagGroup
-                    key={ns}
-                    label={NAMESPACE_LABELS[ns]}
-                    options={options}
-                    isOn={(value) => hasTag({ namespace: ns, value })}
-                    onToggle={(value) => toggleTag(ns, value)}
-                    onAdd={(raw) => {
-                      const value = addCustomTag(ns, raw);
-                      if (value && !hasTag({ namespace: ns, value })) toggleTag(ns, value);
-                    }}
-                  />
-                );
-              })}
-            </div>
+          {/* tags — compact chips + Edit reveals the full editor */}
+          <Section
+            title="Tags"
+            action={
+              <button onClick={() => setEditingTags((v) => !v)} className="press text-[12px] font-semibold" style={{ color: "var(--text-secondary)" }}>
+                {editingTags ? "Done" : "Edit"}
+              </button>
+            }
+          >
+            {editingTags ? (
+              <div className="flex flex-col gap-3.5">
+                {(Object.keys(TAG_OPTIONS) as TagNamespace[]).map((ns) => {
+                  const options = Array.from(new Set([...TAG_OPTIONS[ns], ...customTags[ns]]));
+                  return (
+                    <TagGroup
+                      key={ns}
+                      label={NAMESPACE_LABELS[ns]}
+                      options={options}
+                      isOn={(value) => hasTag({ namespace: ns, value })}
+                      onToggle={(value) => toggleTag(ns, value)}
+                      onAdd={(raw) => {
+                        const value = addCustomTag(ns, raw);
+                        if (value && !hasTag({ namespace: ns, value })) toggleTag(ns, value);
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            ) : place.tags.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {place.tags.map((t) => (
+                  <span
+                    key={t.namespace + t.value}
+                    className="px-3 py-[6px] text-[12px] font-medium"
+                    style={{ borderRadius: "var(--radius-chip)", background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)" }}
+                  >
+                    {t.value}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>No tags yet — Edit to add.</p>
+            )}
           </Section>
 
-          {/* notes */}
-          <Section title="Notes">
-            <textarea
-              defaultValue={place.notes}
-              onBlur={(e) => updatePlace(place.id, { notes: e.target.value })}
-              placeholder="What to order, who to bring, when to go…"
-              rows={3}
-              className="w-full resize-none bg-transparent text-[13.5px] leading-relaxed outline-none"
-              style={{ color: "var(--text-primary)" }}
-            />
+          {/* note — italic serif quote, tap to edit */}
+          <Section title="Note">
+            {editingNote || !place.notes ? (
+              <textarea
+                autoFocus={editingNote}
+                defaultValue={place.notes}
+                onBlur={(e) => { updatePlace(place.id, { notes: e.target.value }); setEditingNote(false); }}
+                placeholder="What to order, who to bring, when to go…"
+                rows={3}
+                className="w-full resize-none bg-transparent text-[13.5px] leading-relaxed outline-none"
+                style={{ color: "var(--text-primary)" }}
+              />
+            ) : (
+              <p
+                onClick={() => setEditingNote(true)}
+                className="cursor-text text-[16px] italic leading-snug"
+                style={{ fontFamily: "var(--font-serif)", color: "var(--text-primary)" }}
+              >
+                “{place.notes}”
+              </p>
+            )}
           </Section>
 
           {/* timeline */}
           <Section title="Visits">
-            <div className="flex flex-col gap-2">
-              <div className="flex gap-2">
-                <input type="date" value={vDate} onChange={(e) => setVDate(e.target.value)} className="input-dark" />
-                <input value={vWho} onChange={(e) => setVWho(e.target.value)} placeholder="Who with" className="input-dark flex-1" />
-              </div>
-              <input value={vNotes} onChange={(e) => setVNotes(e.target.value)} placeholder="What you ate, how it was…" className="input-dark" />
-              <div className="flex items-center justify-between">
-                <Stars value={vRating} onSet={setVRating} />
-                <button
-                  onClick={logVisit}
-                  className="press flex items-center gap-1.5 px-4 py-2 text-[12.5px] font-bold"
-                  style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
-                >
-                  <Plus size={13} strokeWidth={2.5} /> Log visit
-                </button>
-              </div>
-
-              {place.visits.length > 0 && (
-                <ul className="mt-2 flex flex-col">
-                  {place.visits.map((v) => (
-                    <li key={v.id} className="border-l py-2 pl-3" style={{ borderColor: "var(--ink-line)" }}>
-                      <div className="flex items-center gap-2 text-[12px]">
-                        <span className="font-[family-name:var(--font-mono)]" style={{ color: "var(--text-secondary)" }}>
-                          {relativeDate(v.visitedOn)}
+            {place.visits.length > 0 && (
+              <ul className="mb-1 flex flex-col">
+                {place.visits.map((v) => (
+                  <li key={v.id} className="border-l py-2 pl-3" style={{ borderColor: "var(--ink-line)" }}>
+                    <div className="flex items-center gap-2 text-[12px]">
+                      <span className="font-semibold" style={{ color: "var(--text-primary)" }}>
+                        {relativeDate(v.visitedOn)}
+                      </span>
+                      {v.whoWith && <span style={{ color: "var(--text-tertiary)" }}>· {v.whoWith}</span>}
+                      {v.rating != null && (
+                        <span className="ml-auto inline-flex items-center gap-0.5" style={{ color: "var(--star)" }}>
+                          <Star size={11} fill="currentColor" strokeWidth={0} /> {v.rating}
                         </span>
-                        {v.whoWith && <span style={{ color: "var(--text-tertiary)" }}>· {v.whoWith}</span>}
-                        {v.rating != null && (
-                          <span className="ml-auto inline-flex items-center gap-0.5" style={{ color: "var(--star)" }}>
-                            <Star size={11} fill="currentColor" strokeWidth={0} /> {v.rating}
-                          </span>
-                        )}
-                      </div>
-                      {v.notes && <p className="mt-0.5 text-[13px]" style={{ color: "var(--text-primary)" }}>{v.notes}</p>}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+                      )}
+                    </div>
+                    {v.notes && <p className="mt-0.5 text-[13px]" style={{ color: "var(--text-secondary)" }}>{v.notes}</p>}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {loggingVisit ? (
+              <div className="mt-1 flex flex-col gap-2">
+                <div className="flex gap-2">
+                  <input type="date" value={vDate} onChange={(e) => setVDate(e.target.value)} className="input-dark" />
+                  <input value={vWho} onChange={(e) => setVWho(e.target.value)} placeholder="Who with" className="input-dark flex-1" />
+                </div>
+                <input value={vNotes} onChange={(e) => setVNotes(e.target.value)} placeholder="What you ate, how it was…" className="input-dark" />
+                <div className="flex items-center justify-between">
+                  <Stars value={vRating} onSet={setVRating} />
+                  <button
+                    onClick={logVisit}
+                    className="press flex items-center gap-1.5 px-4 py-2 text-[12.5px] font-bold"
+                    style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
+                  >
+                    <Plus size={13} strokeWidth={2.5} /> Log visit
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setLoggingVisit(true)}
+                className="press mt-1 flex items-center gap-2 text-[13px] font-semibold"
+                style={{ color: "var(--text-secondary)" }}
+              >
+                <Plus size={15} strokeWidth={2.5} /> Log a visit
+              </button>
+            )}
           </Section>
         </div>
       </div>
@@ -317,18 +393,21 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
 function pillStyle(on: boolean, color: string): React.CSSProperties {
   return {
     borderRadius: "var(--radius-chip)",
-    background: on ? color : "transparent",
+    background: on ? color : "rgba(255,255,255,0.06)",
     color: on ? "#fff" : "var(--text-secondary)",
     border: `1px solid ${on ? color : "var(--border-strong)"}`,
   };
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
     <section className="mt-5 border-t pt-4" style={{ borderColor: "var(--ink-line)" }}>
-      <h2 className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--text-tertiary)" }}>
-        {title}
-      </h2>
+      <div className="mb-2.5 flex items-center justify-between">
+        <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--text-tertiary)" }}>
+          {title}
+        </h2>
+        {action}
+      </div>
       {children}
     </section>
   );
