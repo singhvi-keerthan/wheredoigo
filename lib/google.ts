@@ -23,15 +23,17 @@ export interface GooglePlace {
   googleTypes: string[];
   openingPeriods: OpeningPeriod[];
   hoursText: string[];
+  photoName: string | null; // first photo resource name (fetched once, on save)
 }
 
-// Field mask shared by search + details. No `photos` field on purpose —
-// the Photos SKU is the tightest free bucket; we enrich text/rating/hours only.
+// Field mask shared by search + details. `photos` here is just the resource
+// NAME (free with the response); the metered Photo media call happens once per
+// saved place via /api/places/photo — never on redisplay.
 // addressComponents powers the `area` label + area search.
 export const FIELD_MASK_DETAIL =
-  "id,displayName,formattedAddress,addressComponents,location,rating,priceLevel,types,regularOpeningHours";
+  "id,displayName,formattedAddress,addressComponents,location,rating,priceLevel,types,regularOpeningHours,photos";
 export const FIELD_MASK_SEARCH =
-  "places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location,places.rating,places.priceLevel,places.types,places.regularOpeningHours";
+  "places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location,places.rating,places.priceLevel,places.types,places.regularOpeningHours,places.photos";
 
 // The address-component types that best name a "neighbourhood", best-first. For
 // Bengaluru, sublocality_level_1 is the Jayanagar/Koramangala granularity. No
@@ -85,6 +87,7 @@ export function mapGooglePlace(p: any): GooglePlace {
     hoursText: Array.isArray(p.regularOpeningHours?.weekdayDescriptions)
       ? p.regularOpeningHours.weekdayDescriptions
       : [],
+    photoName: typeof p.photos?.[0]?.name === "string" ? p.photos[0].name : null,
   };
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */

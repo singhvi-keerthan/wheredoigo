@@ -13,6 +13,7 @@
  * over-eager open-now.
  */
 import { buildDecideInstruction, DECIDE_SCHEMA, sanitizeQuery } from "../lib/decide-prompt";
+import { parseFallback } from "../lib/decide-fallback";
 import type { DecideQuery } from "../lib/decide";
 
 type Case = {
@@ -77,6 +78,11 @@ const CASES: Case[] = [
   { prompt: "good for big groups with parking", expect: { practical: ["groups", "parking"] } },
   { prompt: "pet friendly place", expect: { practical: ["pet-friendly"] } },
   { prompt: "needs a reservation, fine dining", expect: { practical: ["reservation-needed"], vibes: ["fine-dining"] } },
+
+  // ---- area ("near X" → geocodable neighbourhood name) ----
+  { prompt: "chill café near jayanagar", expect: { types: ["café"], area: "jayanagar" } },
+  { prompt: "dinner around koramangala with friends", expect: { area: "koramangala", occasions: ["friends"] } },
+  { prompt: "in the mood for something spicy", expect: {}, forbid: ["area"], note: "'in the mood' is not a place" },
 
   // ---- combos / robustness ----
   {
@@ -184,14 +190,35 @@ async function callGemini(key: string, prompt: string): Promise<DecideQuery> {
 }
 
 async function main() {
-  const key = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-  if (!key) {
-    console.error("✗ GOOGLE_GENERATIVE_AI_API_KEY is not set — cannot run the eval.");
-    process.exit(1);
-  }
+  const offline = process.argv.includes("--offline");
 
   const limitArg = process.argv.indexOf("--limit");
   const cases = limitArg > -1 ? CASES.slice(0, Number(process.argv[limitArg + 1]) || CASES.length) : CASES;
+
+  // --offline: grade the local parseFallback (what runs when Gemini is down or
+  // keyless) against the same dataset. Informational — the fallback is cruder
+  // by design, so this reports a rate instead of gating.
+  if (offline) {
+    let pass = 0;
+    for (const c of cases) {
+      const fails = grade(parseFallback(c.prompt), c);
+      if (fails.length === 0) {
+        pass++;
+        console.log(`✓ ${c.prompt}`);
+      } else {
+        console.log(`✗ ${c.prompt}`);
+        for (const f of fails) console.log(`    ${f}`);
+      }
+    }
+    console.log(`\n── offline fallback: ${pass}/${cases.length} (${((pass / cases.length) * 100).toFixed(1)}%) — informational ──`);
+    return;
+  }
+
+  const key = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  if (!key) {
+    console.error("✗ GOOGLE_GENERATIVE_AI_API_KEY is not set — cannot run the eval (use --offline for the fallback parser).");
+    process.exit(1);
+  }
 
   let pass = 0;
   const failed: { prompt: string; fails: string[] }[] = [];

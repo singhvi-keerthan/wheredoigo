@@ -1,4 +1,5 @@
 import { buildDecideInstruction, DECIDE_SCHEMA, sanitizeQuery } from "@/lib/decide-prompt";
+import { crossOrigin, forbidden } from "@/lib/api-guard";
 
 // Optional NL layer for Decide mode. Parses free text ("date night, something
 // new, under 1500, open now") into a structured DecideQuery using Gemini with a
@@ -9,6 +10,7 @@ import { buildDecideInstruction, DECIDE_SCHEMA, sanitizeQuery } from "@/lib/deci
 // Prompt, schema, and sanitizer live in lib/decide-prompt.ts so the eval harness
 // (scripts/eval-decide.ts) exercises exactly what ships here.
 export async function POST(request: Request) {
+  if (crossOrigin(request)) return forbidden();
   const key = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!key) return Response.json({ error: "no_key" }, { status: 200 });
 
@@ -22,10 +24,11 @@ export async function POST(request: Request) {
 
   try {
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`,
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        // Key in a header, not the query string — query params land in proxy logs.
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
         body: JSON.stringify({
           contents: [{ parts: [{ text: buildDecideInstruction(prompt) }] }],
           generationConfig: {

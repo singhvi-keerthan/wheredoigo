@@ -2,20 +2,61 @@
 
 import type { ReactNode } from "react";
 
-// Label-sticker pin (color system §pins): a white card carrying a state-coloured
-// type-disc (white glyph) + the place name, on a pointer. Colour = STATE, glyph =
-// TYPE — never mixed. Selected grows slightly and gets a state-coloured hairline.
+// Colour = STATE, glyph = TYPE — never mixed. Three zoom-dependent renders so a
+// growing map degrades gracefully instead of turning into overlapping name
+// cards (MapView picks the variant; selected pins are always "full"):
+//   full — the label-sticker: white card, state-coloured type-disc, place name.
+//   disc — just the state-coloured type-disc (mid zoom).
+//   dot  — a small state-coloured dot (city-wide zoom).
+export type PinVariant = "full" | "disc" | "dot";
+
 export default function Pin({
   name,
   glyph,
   color,
   active,
+  variant = "full",
 }: {
   name: string;
   glyph: ReactNode;
   color: string;
   active: boolean;
+  variant?: PinVariant;
 }) {
+  if (variant === "dot") {
+    return (
+      <span
+        className="block rounded-full"
+        style={{
+          width: 13,
+          height: 13,
+          background: color,
+          border: "2px solid #fff",
+          boxShadow: "0 2px 6px rgba(0,0,0,0.35)",
+        }}
+      />
+    );
+  }
+
+  if (variant === "disc") {
+    return (
+      <span
+        className="flex items-center justify-center"
+        style={{
+          width: 32,
+          height: 32,
+          borderRadius: 10,
+          background: color,
+          color: "#fff",
+          border: "2px solid #fff",
+          boxShadow: "0 4px 10px rgba(0,0,0,0.3)",
+        }}
+      >
+        {glyph}
+      </span>
+    );
+  }
+
   return (
     <div
       className="inline-flex flex-col items-center"

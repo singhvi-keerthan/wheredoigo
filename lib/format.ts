@@ -1,4 +1,4 @@
-import type { Place } from "./types";
+import type { Photo, Place } from "./types";
 import { displayState, DISPLAY_STATE_META } from "./types";
 
 // ₹ signs from Google price level (0–4) or your logged budget.
@@ -33,11 +33,24 @@ export function stateMeta(p: Place) {
 
 export function directionsUrl(p: Place): string {
   if (p.googlePlaceId) {
-    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+    // dir (not search) so the button actually starts navigation to the place.
+    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
       p.name
-    )}&query_place_id=${p.googlePlaceId}`;
+    )}&destination_place_id=${p.googlePlaceId}`;
   }
   return `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}`;
+}
+
+// Your uploads first, Google's photo as fallback; photos still hydrating from
+// IndexedDB (empty dataUrl) are skipped.
+export function photosSorted(p: Place): Photo[] {
+  return p.photos
+    .filter((ph) => ph.dataUrl)
+    .sort((a, b) => (a.source === b.source ? 0 : a.source === "mine" ? -1 : 1));
+}
+
+export function coverPhoto(p: Place): Photo | null {
+  return photosSorted(p)[0] ?? null;
 }
 
 export function relativeDate(iso: string): string {

@@ -3,10 +3,11 @@
 import { useRef } from "react";
 import { Star, Navigation, X, ChevronRight, ImagePlus, Camera, Trash2, Check, Ban, MapPin } from "lucide-react";
 import { displayState, type Place } from "@/lib/types";
-import { addPhoto, removePhoto, updatePlace, toggleNeverAgain } from "@/lib/store";
+import { addPhoto, removePhoto, addVisit, toggleNeverAgain } from "@/lib/store";
 import { resizeImage } from "@/lib/image";
-import { leadPrice, leadRating, stateMeta, directionsUrl } from "@/lib/format";
+import { leadPrice, leadRating, stateMeta, directionsUrl, photosSorted } from "@/lib/format";
 import PlaceGlyph from "./PlaceGlyph";
+import { useSheetDrag } from "./useSheetDrag";
 
 // Docked card shown when a pin is selected. Original order kept — status + name
 // + score on the left. The photos option (show + add) fills the free space on
@@ -26,6 +27,7 @@ export default function PlaceCard({
   const watchlist = displayState(place) === "watchlist"; // show quick Been/Skip
   const uploadRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
+  const { sheetRef, handleProps } = useSheetDrag(onClose);
 
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -41,6 +43,7 @@ export default function PlaceCard({
 
   return (
     <div
+      ref={sheetRef}
       className="animate-rise relative px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2 sm:px-6"
       style={{
         background: "var(--bg-raised)",
@@ -52,7 +55,8 @@ export default function PlaceCard({
       <button
         onClick={onClose}
         aria-label="Close"
-        className="mx-auto mb-3 block h-[5px] w-10 rounded-full"
+        {...handleProps}
+        className="mx-auto mb-3 block h-[5px] w-10 touch-none rounded-full"
         style={{ background: "var(--ink-line)" }}
       />
       <button
@@ -134,7 +138,7 @@ export default function PlaceCard({
         {/* right: photos — show + add. On desktop a right column beside the name;
             on mobile stacked below, indented to line up under the name. */}
         <div className="flex flex-wrap gap-2 pl-[90px] sm:w-[204px] sm:shrink-0 sm:pl-0 sm:pt-1">
-          {place.photos.map((ph) => (
+          {photosSorted(place).map((ph) => (
             <div key={ph.id} className="relative h-[60px] w-[60px] shrink-0 overflow-hidden" style={{ borderRadius: "var(--radius-sm)" }}>
               <img src={ph.dataUrl} alt="" className="h-full w-full object-cover" />
               <button
@@ -173,7 +177,17 @@ export default function PlaceCard({
       {watchlist && (
         <div className="mt-3.5 grid grid-cols-2 gap-2">
           <button
-            onClick={() => updatePlace(place.id, { status: "visited" })}
+            // Visited is always an appended visit (the timeline invariant), not
+            // a bare status flip — quick action logs a minimal one dated today;
+            // rating/notes can be added from the detail sheet.
+            onClick={() =>
+              addVisit(place.id, {
+                visitedOn: new Date().toISOString().slice(0, 10),
+                whoWith: "",
+                notes: "",
+                rating: null,
+              })
+            }
             className="press flex items-center justify-center gap-1.5 py-3 text-[13.5px] font-semibold"
             style={{ borderRadius: "var(--radius-chip)", border: "1px solid var(--border-strong)", color: "var(--text-primary)" }}
           >

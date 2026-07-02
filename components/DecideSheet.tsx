@@ -3,12 +3,15 @@
 import { useMemo, useState } from "react";
 import { X, Sparkles, Navigation, RefreshCw, ArrowRight, Clock } from "lucide-react";
 import { usePlaces } from "@/lib/store";
-import { TAG_OPTIONS, isOpenNow } from "@/lib/types";
+import { isOpenNow } from "@/lib/types";
 import { rankPlaces, EMPTY_QUERY, type DecideQuery } from "@/lib/decide";
-import { keywordsFromText } from "@/lib/decide-prompt";
-import { stateMeta, leadRating, leadPrice, directionsUrl } from "@/lib/format";
+import { parseFallback } from "@/lib/decide-fallback";
+import { geocodeArea } from "@/lib/places";
+import { stateMeta, leadRating, leadPrice, directionsUrl, coverPhoto } from "@/lib/format";
+import { useSheetDrag } from "./useSheetDrag";
 
-// Intent presets — one tap sets a structured query. No proximity, by design.
+// Intent presets — one tap sets a structured query. Proximity only enters via a
+// typed "near {area}" ask, never implicitly.
 const PRESETS: { label: string; query: DecideQuery }[] = [
   { label: "Surprise me", query: { intent: "Surprise me", lifecycle: "any" } },
   { label: "Something new", query: { intent: "Something new", lifecycle: "watchlist" } },
@@ -17,74 +20,6 @@ const PRESETS: { label: string; query: DecideQuery }[] = [
   { label: "Coffee", query: { intent: "Coffee", types: ["café"] } },
   { label: "Tried & loved", query: { intent: "Tried & loved", lifecycle: "favorites" } },
 ];
-
-// Local keyword parse — fallback when the Gemini NL route is unavailable. Mirrors
-// the model's guardrails: negated terms ("no bars", "not italian") go to exclude
-// fields rather than inverting into positives, and "tonight" is not open-now.
-const NEG_BEFORE = /\b(no|not|non|without|avoid|skip|except|hate|dislike)\b[\s\w-]{0,12}$/;
-
-// Split matched vocabulary into wanted vs avoided by looking for a negation word
-// just before each hit. Scans EVERY occurrence: any negated mention excludes;
-// any plain mention includes (a value can legitimately end up in both).
-function classify(vals: string[], t: string): { inc: string[]; exc: string[] } {
-  const inc: string[] = [];
-  const exc: string[] = [];
-  for (const v of vals) {
-    const needle = t.includes(v) ? v : t.includes(v.replace("-", " ")) ? v.replace("-", " ") : null;
-    if (!needle) continue;
-    let negated = false;
-    let plain = false;
-    for (let i = t.indexOf(needle); i !== -1; i = t.indexOf(needle, i + 1)) {
-      if (NEG_BEFORE.test(t.slice(Math.max(0, i - 16), i))) negated = true;
-      else plain = true;
-    }
-    if (negated) exc.push(v);
-    if (plain) inc.push(v);
-  }
-  return { inc, exc };
-}
-
-function parseFallback(text: string): DecideQuery {
-  const t = text.toLowerCase();
-  const q: DecideQuery = { intent: text.trim().slice(0, 40), lifecycle: "any" };
-
-  const fields: { ns: keyof typeof TAG_OPTIONS; inc: keyof DecideQuery; exc: keyof DecideQuery }[] = [
-    { ns: "type", inc: "types", exc: "excludeTypes" },
-    { ns: "cuisine", inc: "cuisines", exc: "excludeCuisines" },
-    { ns: "occasion", inc: "occasions", exc: "excludeOccasions" },
-    { ns: "vibe", inc: "vibes", exc: "excludeVibes" },
-    { ns: "practical", inc: "practical", exc: "excludePractical" },
-  ];
-  for (const { ns, inc, exc } of fields) {
-    const { inc: want, exc: avoid } = classify(TAG_OPTIONS[ns], t);
-    if (want.length) (q[inc] as string[]) = want;
-    if (avoid.length) (q[exc] as string[]) = avoid;
-  }
-
-  // Coarse cheap/fancy → the fine-dining vibe (no invented rupee number).
-  if (/\bcheap|affordable|budget\b/.test(t)) (q.excludeVibes = [...(q.excludeVibes ?? []), "fine-dining"]);
-  if (/\bfancy|splurge|upscale\b/.test(t)) (q.vibes = [...(q.vibes ?? []), "fine-dining"]);
-
-  if (/\bnew\b|never been|haven't been|untried/.test(t)) q.lifecycle = "watchlist";
-  if (/favou?rite|go-?to|loved|usual/.test(t)) q.lifecycle = "favorites";
-  if (/open now|right now|still open|open right/.test(t)) q.openNow = true;
-  const budget = t.match(/(?:under|below|max|upto|up to|<)\s*₹?\s*(\d{2,5})/);
-  if (budget) q.maxBudget = +budget[1];
-
-  // Quality asks → boostRatings (rank up on a private sub-rating dimension).
-  const boost: string[] = [];
-  if (/ambian|ambien|atmosphere/.test(t)) boost.push("ambiance");
-  if (/delicious|tasty|amazing food|great food|best food|incredible food/.test(t)) boost.push("food");
-  if (/great service|good service|attentive|friendly staff/.test(t)) boost.push("service");
-  if (/value for money|worth it|good value|great value|bang for buck/.test(t)) boost.push("value");
-  if (boost.length) q.boostRatings = boost;
-
-  // Distinctive free-text terms → matched against your notes by the ranker.
-  const kw = keywordsFromText(text);
-  if (kw.length) q.keywords = kw;
-
-  return q;
-}
 
 export default function DecideSheet({
   open,
@@ -102,6 +37,7 @@ export default function DecideSheet({
   const [cursor, setCursor] = useState(0);
   const [nl, setNl] = useState("");
   const [thinking, setThinking] = useState(false);
+  const { sheetRef, handleProps } = useSheetDrag(onClose);
 
   const ranked = useMemo(() => rankPlaces(places, query, seed), [places, query, seed]);
   const hero = ranked[cursor] ?? ranked[0] ?? null;
@@ -127,6 +63,7 @@ export default function DecideSheet({
     const text = nl.trim();
     if (!text) return;
     setThinking(true);
+    let q: DecideQuery;
     try {
       const res = await fetch("/api/decide", {
         method: "POST",
@@ -134,17 +71,34 @@ export default function DecideSheet({
         body: JSON.stringify({ prompt: text }),
       });
       const data = await res.json();
-      applyQuery(data.query ?? parseFallback(text));
+      q = data.query ?? parseFallback(text);
     } catch {
-      applyQuery(parseFallback(text));
-    } finally {
-      setThinking(false);
+      q = parseFallback(text);
     }
+    // "near jayanagar" → resolve the neighbourhood to a centroid the ranker can
+    // use; if it doesn't geocode to an area, drop the constraint rather than
+    // filter on garbage.
+    if (q.area) {
+      try {
+        const hit = await geocodeArea(q.area);
+        if (hit) {
+          q.areaCenter = { lat: hit.lat, lng: hit.lng };
+          q.area = hit.name;
+        } else {
+          delete q.area;
+        }
+      } catch {
+        delete q.area;
+      }
+    }
+    applyQuery(q);
+    setThinking(false);
   };
 
   return (
     <div className="fixed inset-0 z-50" style={{ background: "rgba(10,8,12,0.64)" }} onClick={onClose}>
       <div
+        ref={sheetRef}
         className="scroll-quiet absolute inset-x-0 bottom-0 max-h-[94dvh] overflow-y-auto pb-[max(1.5rem,env(safe-area-inset-bottom))]"
         style={{
           background: "var(--bg-raised)",
@@ -156,7 +110,9 @@ export default function DecideSheet({
       >
         {/* handle + close */}
         <div className="sticky top-0 z-10 px-5 pt-2" style={{ background: "var(--bg-raised)" }}>
-          <div className="mx-auto mb-2 h-[4px] w-10 rounded-full" style={{ background: "var(--ink-line)" }} />
+          <div {...handleProps} className="flex cursor-grab touch-none justify-center pb-2 pt-0.5">
+            <div className="h-[4px] w-10 rounded-full" style={{ background: "var(--ink-line)" }} />
+          </div>
           <button
             onClick={onClose}
             aria-label="Close"
@@ -291,14 +247,15 @@ function HeroPick({
   const rating = leadRating(place);
   const price = leadPrice(place);
   const open = isOpenNow(place.openingPeriods);
+  const cover = coverPhoto(place);
 
   return (
     <div
       className="animate-rise mt-4 overflow-hidden"
       style={{ borderRadius: "var(--radius)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)" }}
     >
-      {place.photos[0] && (
-        <div className="h-36 w-full" style={{ background: `center/cover url(${place.photos[0].dataUrl})` }} />
+      {cover && (
+        <div className="h-36 w-full" style={{ background: `center/cover url(${cover.dataUrl})` }} />
       )}
       <div className="p-4">
         <div className="flex items-center gap-1.5">

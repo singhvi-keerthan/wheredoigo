@@ -111,9 +111,9 @@ Fixed namespaces so tags don't rot and filters are obvious. Auto-fill what Googl
 |---|---|---|
 | Framework | **Next.js (App Router) as a PWA** | Familiar (Nexie site), deploys free on Vercel, good PWA story |
 | Hosting | **Vercel** free tier | Known, $0, instant |
-| **Map render** | **MapLibre GL + OpenFreeMap tiles** | **No API key, renders instantly, $0, custom styling.** No Google map-load SKU at all. |
+| **Map render** | **MapLibre GL + CARTO Positron style** (retuned to light paper on load) | **No API key, renders instantly, $0, custom styling.** No Google map-load SKU at all. |
 | Place data | **Google Places API** (Autocomplete + Place Details + Photos) | Auto-enrich only. **Optional** — app boots and runs with mock enrichment until a key is added. |
-| **Persistence (v1)** | **Local-first** — browser store (localStorage for records, photos resized client-side) | Runs with **zero credentials**, single device, no auth needed. |
+| **Persistence (v1)** | **Local-first** — records in localStorage, photo bytes in IndexedDB (client-resized), JSON export/import backup | Runs with **zero credentials**, single device, no auth needed. |
 | Auth (v1) | **None** | v1 is single-device, local-only. Data never leaves the browser, so there is nothing to gate. |
 | PWA | manifest + service worker | Installable, full-screen on iPhone |
 
@@ -125,8 +125,8 @@ The UI is treated as a first-class system, not a skin. **The map is the canvas; 
 
 | Concern | Approach |
 |---|---|
-| Map render | **MapLibre GL** via **`react-map-gl/maplibre`** (React-managed view state + markers), OpenFreeMap tiles |
-| Component primitives | **shadcn/ui** (customizable, accessible — styled to our aesthetic, *not* left at defaults) |
+| Map render | **MapLibre GL** via **`react-map-gl/maplibre`** (React-managed view state + markers), CARTO Positron style |
+| Component primitives | Hand-rolled on Tailwind (shadcn dropped — the surface count didn't justify it); tokens + rules in `DESIGN_SYSTEM.md` |
 | Search / add | **cmdk command palette** — fast, forgiving, headless. Primary entry point for search, add, and quick actions. |
 | Place detail + edit | **Drawer** on mobile / **Dialog** on desktop (shadcn responsive pattern). Detail is organized into **tabs/sections**, not one long scroll. |
 | Filters | Chips inline + a dedicated panel. **Decide** is its own mode, not the filter panel. |

@@ -2,11 +2,11 @@
 
 import Map, { Marker, AttributionControl, type MapRef } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Place } from "@/lib/types";
 import { displayState } from "@/lib/types";
 import { DEFAULT_VIEW } from "@/lib/seed";
-import Pin from "./Pin";
+import Pin, { type PinVariant } from "./Pin";
 import PlaceGlyph from "./PlaceGlyph";
 
 // Keyless light vector style (CARTO positron), retuned to warm ivory/paper.
@@ -25,6 +25,15 @@ function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#fff";
 }
 
+// Zoom → pin detail. The 40px label-sticker pins collide into soup on a
+// city-wide view once the map grows, so pins degrade: name cards up close,
+// glyph discs at mid zoom, dots city-wide. A small library (≤14 visible) keeps
+// full stickers at every zoom — today's feel, unchanged.
+const DENSITY_FULL_MAX = 14;
+function bandFor(zoom: number): PinVariant {
+  return zoom >= 13.5 ? "full" : zoom >= 12 ? "disc" : "dot";
+}
+
 export default function MapView({
   places,
   selectedId,
@@ -35,6 +44,7 @@ export default function MapView({
   onSelect: (id: string | null) => void;
 }) {
   const mapRef = useRef<MapRef | null>(null);
+  const [band, setBand] = useState<PinVariant>(() => bandFor(DEFAULT_VIEW.zoom));
 
   // Fly to a place when it becomes selected (pin tap or search pick). Bottom
   // padding keeps the pin above the docked sheet.
@@ -109,6 +119,10 @@ export default function MapView({
       mapStyle={MAP_STYLE}
       attributionControl={false}
       onLoad={onLoad}
+      onZoom={(e) => {
+        const b = bandFor(e.viewState.zoom);
+        setBand((prev) => (prev === b ? prev : b)); // no re-render unless the band flips
+      }}
       onClick={() => onSelect(null)}
       style={{ position: "absolute", inset: 0 }}
     >
@@ -120,12 +134,14 @@ export default function MapView({
       {places.map((p, i) => {
         const state = displayState(p);
         const active = p.id === selectedId;
+        const variant: PinVariant =
+          active || places.length <= DENSITY_FULL_MAX ? "full" : band;
         return (
           <Marker
             key={p.id}
             longitude={p.lng}
             latitude={p.lat}
-            anchor="bottom"
+            anchor={variant === "full" ? "bottom" : "center"}
             style={{ zIndex: active ? 10 : 1 }}
             onClick={(e) => {
               e.originalEvent.stopPropagation();
@@ -143,6 +159,7 @@ export default function MapView({
                 glyph={<PlaceGlyph place={p} size={17} strokeWidth={2.4} />}
                 color={cssVar(STATE_VAR[state])}
                 active={active}
+                variant={variant}
               />
             </button>
           </Marker>

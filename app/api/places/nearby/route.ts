@@ -1,27 +1,26 @@
 import { FIELD_MASK_SEARCH, mapGooglePlace } from "@/lib/google";
 import { crossOrigin, forbidden } from "@/lib/api-guard";
 
-// Text Search (New). Turns a typed place name into real candidates with
-// coordinates + Google rating/price/hours. Server-side: key stays secret.
+// Nearby Search (New), distance-ranked in a tight ~120m circle. Powers the
+// "pin where I am" picker: reverse-match the GPS fix to the real places around
+// it so what gets saved is a place, never raw coordinates (V1-SCOPE §3).
 export async function POST(request: Request) {
   if (crossOrigin(request)) return forbidden();
   const key = process.env.GOOGLE_PLACES_API_KEY;
-  if (!key) {
-    return Response.json({ error: "no_key", results: [] }, { status: 200 });
-  }
+  if (!key) return Response.json({ error: "no_key", results: [] }, { status: 200 });
 
-  let body: { query?: string; lat?: number; lng?: number };
+  let body: { lat?: number; lng?: number };
   try {
     body = await request.json();
   } catch {
     return Response.json({ error: "bad_request", results: [] }, { status: 400 });
   }
-
-  const query = body.query?.trim();
-  if (!query) return Response.json({ results: [] });
+  if (typeof body.lat !== "number" || typeof body.lng !== "number") {
+    return Response.json({ error: "bad_request", results: [] }, { status: 400 });
+  }
 
   try {
-    const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+    const res = await fetch("https://places.googleapis.com/v1/places:searchNearby", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -29,18 +28,11 @@ export async function POST(request: Request) {
         "X-Goog-FieldMask": FIELD_MASK_SEARCH,
       },
       body: JSON.stringify({
-        textQuery: query,
         maxResultCount: 8,
-        ...(typeof body.lat === "number" && typeof body.lng === "number"
-          ? {
-              locationBias: {
-                circle: {
-                  center: { latitude: body.lat, longitude: body.lng },
-                  radius: 30000,
-                },
-              },
-            }
-          : {}),
+        rankPreference: "DISTANCE",
+        locationRestriction: {
+          circle: { center: { latitude: body.lat, longitude: body.lng }, radius: 120 },
+        },
       }),
     });
 
@@ -53,8 +45,7 @@ export async function POST(request: Request) {
     }
 
     const data = await res.json();
-    const results = (data.places ?? []).map(mapGooglePlace);
-    return Response.json({ results });
+    return Response.json({ results: (data.places ?? []).map(mapGooglePlace) });
   } catch {
     return Response.json({ error: "fetch_failed", results: [] }, { status: 200 });
   }

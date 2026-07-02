@@ -1,8 +1,10 @@
 import { FIELD_MASK_DETAIL, mapGooglePlace } from "@/lib/google";
+import { crossOrigin, forbidden } from "@/lib/api-guard";
 
 // Place Details (New). Used to refresh rating / price / hours for an existing
 // pin (the ~30-day enrichment rule). Server-side: key stays secret.
 export async function GET(request: Request) {
+  if (crossOrigin(request)) return forbidden();
   const key = process.env.GOOGLE_PLACES_API_KEY;
   if (!key) return Response.json({ error: "no_key" }, { status: 200 });
 

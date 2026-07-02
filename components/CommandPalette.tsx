@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { Command } from "cmdk";
-import { Search, X, Loader2, Navigation2 } from "lucide-react";
+import { Search, X, Loader2, Navigation2, Plus } from "lucide-react";
 import { usePlaces } from "@/lib/store";
 import { displayState, TAG_OPTIONS, type Place } from "@/lib/types";
 import { stateMeta } from "@/lib/format";
 import { searchPlaces } from "@/lib/places";
 import { distanceKm, isAreaResult } from "@/lib/geo";
 import { DEFAULT_VIEW } from "@/lib/seed";
+import { useSheetDrag } from "./useSheetDrag";
 
 // Search across the places you've ALREADY saved — nothing else. Adding lives on
 // the + sheet. Two behaviours in one box:
@@ -27,15 +28,25 @@ export default function CommandPalette({
   open,
   onClose,
   onPick,
+  onAddNew,
 }: {
   open: boolean;
   onClose: () => void;
   onPick: (id: string) => void;
+  onAddNew: (query: string) => void; // "no matches" → jump to the + sheet, query carried over
 }) {
   const places = usePlaces();
   const [q, setQ] = useState("");
   const [area, setArea] = useState<AreaState | null>(null);
   const [geoLoading, setGeoLoading] = useState(false);
+  // Reset on every exit — the component stays mounted (parent toggles `open`),
+  // so without this the query + stale area results leak into the next open.
+  const close = () => {
+    setQ("");
+    setArea(null);
+    onClose();
+  };
+  const { sheetRef, handleProps } = useSheetDrag(close);
 
   const trimmed = q.trim();
   const ql = trimmed.toLowerCase();
@@ -74,13 +85,6 @@ export default function CommandPalette({
 
   if (!open) return null;
 
-  // Reset on every exit — the component stays mounted (parent toggles `open`),
-  // so without this the query + stale area results leak into the next open.
-  const close = () => {
-    setQ("");
-    setArea(null);
-    onClose();
-  };
   const pick = (id: string) => {
     onPick(id);
     close();
@@ -115,6 +119,7 @@ export default function CommandPalette({
   return (
     <div className="fixed inset-0 z-50" style={{ background: "rgba(6,7,10,0.62)" }} onClick={close}>
       <div
+        ref={sheetRef}
         className="absolute inset-x-0 bottom-0 pb-[max(1rem,env(safe-area-inset-bottom))]"
         style={{
           background: "var(--bg-raised)",
@@ -132,7 +137,9 @@ export default function CommandPalette({
         >
           {/* handle + search field */}
           <div className="shrink-0 px-4 pt-2">
-            <div className="mx-auto mb-2.5 h-[4px] w-9 rounded-full" style={{ background: "var(--ink-line)" }} />
+            <div {...handleProps} className="flex cursor-grab touch-none justify-center pb-2.5 pt-0.5">
+              <div className="h-[4px] w-9 rounded-full" style={{ background: "var(--ink-line)" }} />
+            </div>
             <div
               className="flex items-center gap-2.5 px-3.5"
               style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)" }}
@@ -173,13 +180,29 @@ export default function CommandPalette({
                 )}
               </>
             ) : text.length === 0 ? (
-              <p className="px-2 py-6 text-center text-[13px]" style={{ color: "var(--text-tertiary)" }}>
-                {geoPending
-                  ? `Searching “${trimmed}”…`
-                  : places.length === 0
-                    ? "No saved places yet — add one with +."
-                    : "No matches."}
-              </p>
+              <div className="px-2 py-6 text-center">
+                <p className="text-[13px]" style={{ color: "var(--text-tertiary)" }}>
+                  {geoPending
+                    ? `Searching “${trimmed}”…`
+                    : places.length === 0
+                      ? "No saved places yet — add one with +."
+                      : "Nothing saved matches that."}
+                </p>
+                {trimmed && !geoPending && (
+                  <button
+                    onClick={() => {
+                      const carry = trimmed;
+                      setQ("");
+                      setArea(null);
+                      onAddNew(carry);
+                    }}
+                    className="press mt-3 inline-flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-semibold"
+                    style={{ borderRadius: "var(--radius-chip)", background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)" }}
+                  >
+                    <Plus size={14} strokeWidth={2.5} /> Add “{trimmed}” to your map
+                  </button>
+                )}
+              </div>
             ) : (
               text.map((p) => {
                 const meta = stateMeta(p);

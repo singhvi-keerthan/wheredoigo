@@ -1,36 +1,47 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# im hungry
 
-## Getting Started
+Personal, single-user, $0-infra PWA: a map-first second brain for going out.
+Every place you've been or want to go is a pin; the two loops are **capture**
+(search / paste a Maps link / pin where you are → auto-enriched from Google)
+and **decide** ("date night, something new, near jayanagar, under 1500" → a
+ranked pick from your own list).
 
-First, run the development server:
+- **Scope & data model:** `V1-SCOPE.md`
+- **Design system (as shipped):** `DESIGN_SYSTEM.md`
+
+## Run
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev        # boots with zero credentials (capture degrades to manual)
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+`.env.local` (both optional):
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```
+GOOGLE_PLACES_API_KEY=…            # live search/enrich/nearby/photo
+GOOGLE_GENERATIVE_AI_API_KEY=…     # Decide's natural-language parsing (Gemini)
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Checks
 
-## Learn More
+```bash
+npm test                    # unit tests for the pure logic (ranking, hours, dupes, sanitizer)
+npm run build
+npm run eval:decide         # NL-parser eval against live Gemini (paced for free tier)
+npm run eval:decide -- --offline   # same dataset against the local fallback parser
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Architecture notes
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- **Local-first:** place records in `localStorage`, photo bytes in IndexedDB,
+  fully-hydrated in-memory mirror via `useSyncExternalStore` (`lib/store.ts`).
+  Backup = one JSON file (⋯ menu → Export/Import). v2 (Supabase sync) swaps the
+  persistence layer without changing call sites.
+- **Google spend:** enrich-once-then-cache; the only metered calls are text
+  search (typed queries), one details refresh per place per ~30 days, and one
+  photo per saved place. Keep the Cloud billing alert on.
+- **Decide:** Gemini translates free text into a constrained `DecideQuery`
+  (schema + sanitizer in `lib/decide-prompt.ts`, offline fallback in
+  `lib/decide-fallback.ts`); ranking is local and deterministic
+  (`lib/decide.ts`). Deploys on Vercel; pushing `main` deploys.

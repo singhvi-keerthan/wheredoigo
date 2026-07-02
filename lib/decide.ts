@@ -1,6 +1,7 @@
 import type { Place, TagNamespace, RatingDimension } from "./types";
 import { isOpenNow } from "./types";
 import { leadRating } from "./format";
+import { distanceKm } from "./geo";
 
 // ---------------------------------------------------------------------------
 // Decide mode — "help me pick where to go tonight."
@@ -29,6 +30,11 @@ export interface DecideQuery {
   excludePractical?: string[];
   maxBudget?: number | null; // per person (₹)
   openNow?: boolean;
+  // "near jayanagar" — the neighbourhood name as parsed (display + geocoding),
+  // and the geocoded centroid the client attaches before ranking. Places beyond
+  // ~4km of the centroid are dropped; closer ones get a proximity boost.
+  area?: string;
+  areaCenter?: { lat: number; lng: number };
   // Quality asks ("great ambiance", "good value") → rank places rated high on
   // these private sub-dimensions UP. Soft: never hides a place, just floats the
   // strong ones. Values are RatingDimension keys.
@@ -47,6 +53,12 @@ export interface Ranked {
 }
 
 export const EMPTY_QUERY: DecideQuery = { lifecycle: "any" };
+
+// Rough ₹/person per Google price level (Bengaluru-calibrated). Used ONLY as a
+// budget-cap fallback when your own logged spend is unknown.
+const PRICE_LEVEL_EST: Record<number, number> = { 0: 0, 1: 300, 2: 800, 3: 1500, 4: 2500 };
+
+const AREA_MAX_KM = 4;
 
 // Seeded RNG (mulberry32) so "Another" is reproducible per seed but varies
 // across presses — the variety is intentional, not random per render.
@@ -118,13 +130,23 @@ export function rankPlaces(
     // Hard negatives — "no bars", "not italian", "nothing too fancy".
     if (isExcluded(p, query)) continue;
 
-    // Budget hard cap — only when we actually know your spend.
-    if (
-      query.maxBudget != null &&
-      p.myBudgetPerPerson != null &&
-      p.myBudgetPerPerson > query.maxBudget
-    ) {
-      continue;
+    // Budget hard cap. Your logged spend when known; otherwise a rough estimate
+    // from Google's price level — budget asks mostly target watchlist places,
+    // which never have a logged spend, so without the estimate the cap would
+    // no-op exactly where it matters.
+    if (query.maxBudget != null) {
+      const spend =
+        p.myBudgetPerPerson ??
+        (p.googlePriceLevel != null ? PRICE_LEVEL_EST[p.googlePriceLevel] ?? null : null);
+      if (spend != null && spend > query.maxBudget) continue;
+    }
+
+    // Area constraint — outside ~4km of the asked neighbourhood is a different
+    // plan; inside, closer floats higher.
+    let areaDist: number | null = null;
+    if (query.areaCenter) {
+      areaDist = distanceKm(query.areaCenter, p);
+      if (areaDist > AREA_MAX_KM) continue;
     }
 
     // Open-now: exclude only when we KNOW the hours and it's shut.
@@ -207,8 +229,17 @@ export function rankPlaces(
       if (reasons.length < 3) reasons.push("Open now");
     }
 
-    // Variety — keeps "Another" lively without overpowering quality.
-    score += rand() * 16;
+    // Proximity bonus inside the asked area (max +24 at the centroid).
+    if (areaDist != null) {
+      score += (AREA_MAX_KM - areaDist) * 6;
+      if (areaDist <= 2.5 && query.area && reasons.length < 3) {
+        reasons.push(`Near ${query.area}`);
+      }
+    }
+
+    // Variety — keeps "Another" lively without overpowering quality (~half a
+    // rating star of noise; was 16, which let a 3★ outshuffle a 5★).
+    score += rand() * 8;
 
     if (reasons.length === 0) reasons.push("A solid shout");
     out.push({ place: p, score, reasons: reasons.slice(0, 3) });

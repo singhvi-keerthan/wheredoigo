@@ -6,13 +6,14 @@ import {
 } from "lucide-react";
 import {
   usePlace, updatePlace, toggleFavorite, toggleNeverAgain, setTags, addPhoto, removePhoto,
-  useCustomTags, addCustomTag,
+  removePlace, useCustomTags, addCustomTag,
 } from "@/lib/store";
 import { TAG_OPTIONS, NAMESPACE_LABELS, isOpenNow, type TagNamespace, type Tag } from "@/lib/types";
-import { stateMeta, priceSigns, directionsUrl, relativeDate } from "@/lib/format";
+import { stateMeta, priceSigns, directionsUrl, relativeDate, photosSorted } from "@/lib/format";
 import { getPlaceDetails } from "@/lib/places";
 import { resizeImage } from "@/lib/image";
 import PlaceWizard from "./PlaceWizard";
+import { useSheetDrag } from "./useSheetDrag";
 
 const STALE_MS = 30 * 24 * 60 * 60 * 1000; // re-enrich after ~30 days
 
@@ -26,6 +27,7 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
   const [editingNote, setEditingNote] = useState(false);
   const [visitWizard, setVisitWizard] = useState(false); // guided watchlist → visited form
   const [revealId, setRevealId] = useState<string | null>(null); // tap a photo → show delete
+  const { sheetRef, handleProps } = useSheetDrag(onClose);
 
   // Refresh Google rating / price / hours when a linked place opens and its
   // cached data is missing or stale (~30 days). Runs once per place per open.
@@ -86,6 +88,7 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
     <>
     <div className="fixed inset-0 z-40" style={{ background: "rgba(6,7,10,0.62)" }} onClick={onClose}>
       <div
+        ref={sheetRef}
         className="scroll-quiet absolute inset-x-0 bottom-0 max-h-[92dvh] overflow-y-auto pb-[max(1.5rem,env(safe-area-inset-bottom))]"
         style={{ background: "var(--sheet)", borderTopLeftRadius: "var(--radius-lg)", borderTopRightRadius: "var(--radius-lg)", boxShadow: "var(--shadow-sheet)" }}
         onClick={(e) => e.stopPropagation()}
@@ -103,7 +106,9 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
         />
         {/* handle + close */}
         <div className="sticky top-0 z-10 px-5 pt-2">
-          <div className="mx-auto mb-2 h-[5px] w-10 rounded-full" style={{ background: "var(--ink-line)" }} />
+          <div {...handleProps} className="flex cursor-grab touch-none justify-center pb-2 pt-0.5">
+            <div className="h-[5px] w-10 rounded-full" style={{ background: "var(--ink-line)" }} />
+          </div>
           <button
             onClick={onClose}
             aria-label="Close"
@@ -156,7 +161,7 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
           {/* photos — full-width, fit to width. Tap a photo to reveal Delete;
               tap again (or the scrim) to dismiss. Add options sit below. */}
           <div className="mt-3.5 flex flex-col gap-2">
-            {place.photos.map((ph) => {
+            {photosSorted(place).map((ph) => {
               const revealed = revealId === ph.id;
               return (
                 <div
@@ -363,6 +368,20 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
               <Plus size={15} strokeWidth={2.5} /> Log a visit
             </button>
           </Section>
+
+          {/* the only destructive action — quiet, at the very bottom */}
+          <button
+            onClick={() => {
+              if (window.confirm(`Remove “${place.name}” and its photos from your map?`)) {
+                removePlace(place.id);
+                onClose();
+              }
+            }}
+            className="press mt-6 flex w-full items-center justify-center gap-1.5 py-3 text-[13px] font-semibold"
+            style={{ borderRadius: "var(--radius-chip)", border: "1px solid var(--border)", color: "var(--text-tertiary)" }}
+          >
+            <Trash2 size={14} /> Remove from map
+          </button>
         </div>
       </div>
     </div>

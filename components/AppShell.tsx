@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { Search, Plus } from "lucide-react";
-import { usePlaces } from "@/lib/store";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Search, Plus, MoreHorizontal, Download, Upload, MapPin, TriangleAlert, X } from "lucide-react";
+import { usePlaces, usePersistError, exportData, importData } from "@/lib/store";
 import { displayState, type DisplayState } from "@/lib/types";
 import MapView from "./MapView";
 import PlaceCard from "./PlaceCard";
@@ -49,12 +49,23 @@ const WHITE_ACTION: CSSProperties = {
 
 export default function AppShell() {
   const places = usePlaces();
+  const persistError = usePersistError();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterKey>("all");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [addQuery, setAddQuery] = useState<string | null>(null); // palette → + sheet carry-over
   const [decideOpen, setDecideOpen] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false); // backup menu
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 2800);
+  };
 
   // ⌘K / Ctrl-K opens the search palette (matches the badge on the search dock).
   useEffect(() => {
@@ -106,7 +117,65 @@ export default function AppShell() {
             places · Bengaluru
           </p>
         </div>
+        <button
+          onClick={() => setMenuOpen(true)}
+          aria-label="Backup menu"
+          className="press grid h-9 w-9 place-items-center rounded-full"
+          style={GLASS}
+        >
+          <MoreHorizontal size={17} style={{ color: "oklch(0.9 0 0)" }} />
+        </button>
       </header>
+
+      {/* storage failure — silent persist loss is the one unforgivable state */}
+      {persistError && (
+        <div
+          className="fixed inset-x-4 top-[max(4.6rem,calc(env(safe-area-inset-top)+3.6rem))] z-20 flex items-start gap-2 px-3.5 py-3"
+          style={{ ...GLASS, borderRadius: "var(--radius-sm)", border: "1px solid oklch(0.6 0.17 15 / 0.5)" }}
+        >
+          <TriangleAlert size={15} className="mt-0.5 shrink-0" style={{ color: "var(--s-favorite)" }} />
+          <p className="text-[12.5px] leading-snug" style={{ color: "oklch(0.92 0 0)" }}>
+            {persistError}
+          </p>
+        </div>
+      )}
+
+      {/* empty state — real data only; no more sample pins */}
+      {places.length === 0 && !addOpen && (
+        <div className="pointer-events-none fixed inset-0 z-[5] grid place-items-center px-8">
+          <div
+            className="pointer-events-auto flex max-w-[320px] flex-col items-center px-6 py-7 text-center"
+            style={{ ...GLASS, borderRadius: "var(--radius)" }}
+          >
+            <MapPin size={22} style={{ color: "var(--accent)" }} />
+            <p className="mt-3 text-[17px] font-semibold" style={{ color: "oklch(0.95 0 0)" }}>
+              Nothing pinned yet
+            </p>
+            <p className="mt-1 text-[13px] leading-snug" style={{ color: "oklch(0.72 0.01 260)" }}>
+              Save the places you hear about — and never argue about where to go again.
+            </p>
+            <button
+              onClick={() => setAddOpen(true)}
+              className="press mt-4 inline-flex items-center gap-1.5 px-4 py-2.5 text-[13.5px] font-bold"
+              style={{ ...WHITE_ACTION, borderRadius: "var(--radius-chip)", cursor: "pointer" }}
+            >
+              <Plus size={15} strokeWidth={2.75} /> Add your first place
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* toast */}
+      {toast && (
+        <div className="pointer-events-none fixed inset-x-0 top-[max(4.4rem,calc(env(safe-area-inset-top)+3.4rem))] z-[60] flex justify-center px-6">
+          <div
+            className="animate-rise px-4 py-2.5 text-[13px] font-medium"
+            style={{ ...GLASS, borderRadius: "var(--radius-chip)", color: "oklch(0.93 0 0)" }}
+          >
+            {toast}
+          </div>
+        </div>
+      )}
 
       {/* ===================== BOTTOM DOCK — controls in the thumb zone ===================== */}
       {selected ? (
@@ -205,7 +274,7 @@ export default function AppShell() {
                 Search your places
               </span>
               <kbd
-                className="inline-flex items-center"
+                className="inline-flex items-center pointer-coarse:hidden"
                 style={{
                   height: 24,
                   padding: "0 8px",
@@ -236,17 +305,31 @@ export default function AppShell() {
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         onPick={(id) => setSelectedId(id)}
+        onAddNew={(carry) => {
+          setPaletteOpen(false);
+          setAddQuery(carry);
+          setAddOpen(true);
+        }}
       />
 
       {addOpen && (
         <AddPlaceSheet
           open={addOpen}
-          onClose={() => setAddOpen(false)}
+          onClose={() => {
+            setAddOpen(false);
+            setAddQuery(null);
+          }}
+          initialQuery={addQuery ?? undefined}
           // Adding just drops the pin + selects it. Its type/cuisine tags come
           // auto-derived from Google, so it's searchable with no form to fill.
-          onAdded={(id) => setSelectedId(id)}
+          onAdded={(id, opts) => {
+            setSelectedId(id);
+            if (opts?.duplicate) showToast("Already on your map — opened it");
+          }}
         />
       )}
+
+      {menuOpen && <BackupMenu onClose={() => setMenuOpen(false)} onDone={showToast} />}
 
       {decideOpen && (
         <DecideSheet
@@ -261,5 +344,104 @@ export default function AppShell() {
 
       <PlaceDetail id={detailId} onClose={() => setDetailId(null)} />
     </main>
+  );
+}
+
+// Export / import the whole library as one JSON file — the v1 backup story
+// (localStorage + IndexedDB are one "Clear Website Data" away from gone).
+function BackupMenu({ onClose, onDone }: { onClose: () => void; onDone: (msg: string) => void }) {
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const doExport = () => {
+    const data = exportData();
+    const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `im-hungry-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    onDone(`Exported ${data.places.length} places`);
+    onClose();
+  };
+
+  const doImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!window.confirm("Importing replaces everything currently on your map. Continue?")) return;
+    try {
+      const count = importData(await file.text());
+      onDone(`Imported ${count} places`);
+      onClose();
+    } catch (err) {
+      window.alert((err as Error).message);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50" style={{ background: "rgba(10,8,12,0.64)" }} onClick={onClose}>
+      <div
+        className="absolute inset-x-0 bottom-0 px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-2"
+        style={{
+          background: "var(--bg-raised)",
+          borderTopLeftRadius: "var(--radius-lg)",
+          borderTopRightRadius: "var(--radius-lg)",
+          boxShadow: "var(--shadow-sheet)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mx-auto mb-3 h-[4px] w-10 rounded-full" style={{ background: "var(--ink-line)" }} />
+        <div className="flex items-center justify-between pb-3">
+          <h1
+            className="text-[22px] font-medium leading-none tracking-[-0.01em]"
+            style={{ fontFamily: "var(--font-display)", color: "var(--text-primary)" }}
+          >
+            Backup
+          </h1>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="press grid h-7 w-7 place-items-center rounded-full"
+            style={{ background: "var(--bg-elevated)", color: "var(--text-tertiary)" }}
+          >
+            <X size={14} strokeWidth={2.25} />
+          </button>
+        </div>
+
+        <div className="flex flex-col gap-2.5 pb-1">
+          <button
+            onClick={doExport}
+            className="press flex w-full items-center gap-3 rounded-[var(--radius)] px-3.5 py-3.5 text-left"
+            style={{ background: "var(--bg-elevated)", border: "1px solid var(--ink-line)" }}
+          >
+            <Download size={18} style={{ color: "var(--text-secondary)" }} />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[15px] font-semibold" style={{ color: "var(--text-primary)" }}>
+                Export backup
+              </span>
+              <span className="block text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>
+                Everything — places, visits, photos — as one file
+              </span>
+            </span>
+          </button>
+          <button
+            onClick={() => fileRef.current?.click()}
+            className="press flex w-full items-center gap-3 rounded-[var(--radius)] px-3.5 py-3.5 text-left"
+            style={{ background: "var(--bg-elevated)", border: "1px solid var(--ink-line)" }}
+          >
+            <Upload size={18} style={{ color: "var(--text-secondary)" }} />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[15px] font-semibold" style={{ color: "var(--text-primary)" }}>
+                Import backup
+              </span>
+              <span className="block text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>
+                Replaces the current library with a backup file
+              </span>
+            </span>
+          </button>
+        </div>
+        <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={doImport} />
+      </div>
+    </div>
   );
 }
