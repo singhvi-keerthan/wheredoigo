@@ -13,6 +13,7 @@ import { stateMeta, priceSigns, directionsUrl, relativeDate, photosSorted } from
 import { getPlaceDetails } from "@/lib/places";
 import { resizeImage } from "@/lib/image";
 import PlaceWizard from "./PlaceWizard";
+import PhotoViewer from "./PhotoViewer";
 import { useSheetDrag } from "./useSheetDrag";
 
 const STALE_MS = 30 * 24 * 60 * 60 * 1000; // re-enrich after ~30 days
@@ -26,7 +27,7 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
   const [editingTags, setEditingTags] = useState(false);
   const [editingNote, setEditingNote] = useState(false);
   const [visitWizard, setVisitWizard] = useState(false); // guided watchlist → visited form
-  const [revealId, setRevealId] = useState<string | null>(null); // tap a photo → show delete
+  const [viewerIndex, setViewerIndex] = useState<number | null>(null); // tap a photo → full-screen swipe
   const { sheetRef, handleProps } = useSheetDrag(onClose);
 
   // Refresh Google rating / price / hours when a linked place opens and its
@@ -158,35 +159,41 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
             </div>
           )}
 
-          {/* photos — full-width, fit to width. Tap a photo to reveal Delete;
-              tap again (or the scrim) to dismiss. Add options sit below. */}
+          {/* photos — a swipeable carousel (not a scroll-past stack). Tap a
+              photo to open the full-screen viewer and swipe through the rest;
+              the small corner badge deletes without leaving the sheet. */}
           <div className="mt-3.5 flex flex-col gap-2">
-            {photosSorted(place).map((ph) => {
-              const revealed = revealId === ph.id;
-              return (
-                <div
-                  key={ph.id}
-                  onClick={() => setRevealId((cur) => (cur === ph.id ? null : ph.id))}
-                  className="relative flex w-full cursor-pointer justify-center overflow-hidden"
-                  style={{ borderRadius: "var(--radius)" }}
-                >
-                  {/* whole image, never cropped — shrinks to fit width and a
-                      generous height cap, but always shows the full frame */}
-                  <img src={ph.dataUrl} alt="" className="block h-auto max-h-[70vh] w-auto max-w-full" />
-                  {revealed && (
-                    <div className="absolute inset-0 grid place-items-center" style={{ background: "rgba(6,8,13,0.45)" }}>
+            {photosSorted(place).length > 0 && (
+              <>
+                <div className="scroll-quiet flex snap-x snap-mandatory gap-2 overflow-x-auto">
+                  {photosSorted(place).map((ph, i) => (
+                    <div
+                      key={ph.id}
+                      onClick={() => setViewerIndex(i)}
+                      className="relative h-[50vh] w-full shrink-0 cursor-pointer snap-center overflow-hidden"
+                      style={{ borderRadius: "var(--radius)", background: "var(--bg-elevated)" }}
+                    >
+                      <img src={ph.dataUrl} alt="" className="h-full w-full object-contain" />
                       <button
-                        onClick={(e) => { e.stopPropagation(); removePhoto(place.id, ph.id); setRevealId(null); }}
-                        className="press flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-bold"
-                        style={{ borderRadius: "var(--radius-chip)", background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)" }}
+                        onClick={(e) => { e.stopPropagation(); removePhoto(place.id, ph.id); }}
+                        aria-label="Remove photo"
+                        className="absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-full"
+                        style={{ background: "rgba(6,8,13,0.6)", color: "#fff" }}
                       >
-                        <Trash2 size={15} /> Delete photo
+                        <Trash2 size={13} />
                       </button>
                     </div>
-                  )}
+                  ))}
                 </div>
-              );
-            })}
+                {photosSorted(place).length > 1 && (
+                  <div className="flex justify-center gap-1">
+                    {photosSorted(place).map((ph) => (
+                      <span key={ph.id} className="h-1 w-1 rounded-full" style={{ background: "var(--border-strong)" }} />
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
 
             {place.photos.length === 0 ? (
               <div
@@ -389,6 +396,14 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
     </div>
     {visitWizard && (
       <PlaceWizard placeId={place.id} mode="visit" onClose={() => setVisitWizard(false)} />
+    )}
+    {viewerIndex !== null && (
+      <PhotoViewer
+        photos={photosSorted(place)}
+        startIndex={viewerIndex}
+        onClose={() => setViewerIndex(null)}
+        onDelete={(id) => removePhoto(place.id, id)}
+      />
     )}
     </>
   );

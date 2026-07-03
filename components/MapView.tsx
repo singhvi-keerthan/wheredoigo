@@ -37,13 +37,20 @@ export default function MapView({
   places,
   selectedId,
   onSelect,
+  onExport,
 }: {
   places: Place[];
   selectedId: string | null;
   onSelect: (id: string | null) => void;
+  onExport?: () => void;
 }) {
   const mapRef = useRef<MapRef | null>(null);
   const [band, setBand] = useState<PinVariant>(() => bandFor(DEFAULT_VIEW.zoom));
+  // onLoad fires once and closes over whatever it saw then — read the latest
+  // callback through a ref instead of re-running the whole map setup on every
+  // parent re-render.
+  const onExportRef = useRef(onExport);
+  onExportRef.current = onExport;
 
   // Fly to a place when it becomes selected (pin tap or search pick). Bottom
   // padding keeps the pin above the docked sheet.
@@ -74,6 +81,24 @@ export default function MapView({
     if (attrib) {
       attrib.removeAttribute("open");
       attrib.classList.remove("maplibregl-compact-show");
+
+      // Tuck the backup export in with the small print — the one spot on
+      // screen already reserved for "nobody reads this," so it stays out of
+      // the primary chrome instead of adding another visible top-level icon.
+      const inner = attrib.querySelector<HTMLElement>(".maplibregl-ctrl-attrib-inner");
+      if (inner && !inner.querySelector("[data-export-backup]")) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.dataset.exportBackup = "true";
+        btn.textContent = "Export backup";
+        btn.style.cssText =
+          "display:block;margin-top:4px;padding:0;font:inherit;font-size:11px;color:inherit;text-decoration:underline;background:none;border:none;cursor:pointer;";
+        btn.onclick = (e) => {
+          e.stopPropagation(); // stay inside the disclosure, don't fall through to the map
+          onExportRef.current?.();
+        };
+        inner.appendChild(btn);
+      }
     }
     const ink = "#55565a"; // neutral gray ink labels
     const halo = "rgba(247,247,245,0.95)";

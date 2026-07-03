@@ -68,7 +68,7 @@ export default function AddPlaceSheet({
     coords: { lat: number; lng: number } | null;
   } | null>(null);
   const [resolving, setResolving] = useState(false);
-  const [nearby, setNearby] = useState<{ lat: number; lng: number; results: GooglePlace[] } | null>(null);
+  const [nearby, setNearby] = useState<{ lat: number; lng: number; results: GooglePlace[]; accuracy?: number } | null>(null);
   const [locating, setLocating] = useState(false);
   const [geoError, setGeoError] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
@@ -235,11 +235,11 @@ export default function AddPlaceSheet({
     setLocating(true);
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
-        const { latitude: lat, longitude: lng } = pos.coords;
-        const { results } = await nearbyPlaces(lat, lng);
+        const { latitude: lat, longitude: lng, accuracy } = pos.coords;
+        const { results } = await nearbyPlaces(lat, lng, accuracy);
         setLocating(false);
         if (results.length) {
-          setNearby({ lat, lng, results });
+          setNearby({ lat, lng, results, accuracy });
           setMode("nearby");
         } else {
           addAt(lat, lng, "Pinned location", "manual", "menu");
@@ -424,6 +424,13 @@ export default function AddPlaceSheet({
               <p className="mb-2 px-1 text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>
                 Places around you — pick the one you’re at.
               </p>
+              {/* GPS on the first fix (or indoors) can land 100s of m off —
+                  say so rather than let a wrong pick look confident. */}
+              {nearby.accuracy != null && nearby.accuracy > 300 && (
+                <p className="mb-2 px-1 text-[11.5px]" style={{ color: "var(--s-favorite)" }}>
+                  Location is approximate (±{Math.round(nearby.accuracy)}m) — pick carefully, or drop a pin instead.
+                </p>
+              )}
               <div className="flex flex-col gap-1.5">
                 {nearby.results.map((r) => (
                   <ResultRow key={r.placeId} r={r} onPick={() => addGoogle(r, "nearby")} />

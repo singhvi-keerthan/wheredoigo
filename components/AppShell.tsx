@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Search, Plus, MoreHorizontal, Download, Upload, MapPin, TriangleAlert, X } from "lucide-react";
-import { usePlaces, usePersistError, exportData, importData } from "@/lib/store";
+import { usePlaces, usePersistError, downloadBackup, importData } from "@/lib/store";
 import { displayState, type DisplayState } from "@/lib/types";
 import MapView from "./MapView";
 import PlaceCard from "./PlaceCard";
@@ -98,7 +98,12 @@ export default function AppShell() {
       className="relative w-full overflow-hidden"
       style={{ height: "100dvh", background: "var(--bg-base)" }}
     >
-      <MapView places={visible} selectedId={selectedId} onSelect={setSelectedId} />
+      <MapView
+        places={visible}
+        selectedId={selectedId}
+        onSelect={setSelectedId}
+        onExport={() => showToast(`Exported ${downloadBackup()} places`)}
+      />
 
       {/* top scrim — light wash so the dark-ink masthead reads over the map */}
       <div
@@ -193,21 +198,18 @@ export default function AppShell() {
           <div className="flex items-center gap-2.5 overflow-x-auto px-5 pb-2 scroll-quiet">
             <button
               onClick={() => setDecideOpen(true)}
-              className="press shrink-0"
+              aria-label="Decide"
+              className="press shrink-0 overflow-hidden"
               style={{
-                ...WHITE_ACTION,
-                display: "inline-flex",
-                alignItems: "center",
+                width: 40,
                 height: 40,
-                padding: "0 17px",
-                borderRadius: 18,
-                fontSize: 14,
-                fontWeight: 640,
-                letterSpacing: "-0.01em",
+                borderRadius: "50%",
+                border: "2px solid oklch(0.97 0 0)",
+                boxShadow: "0 8px 22px -8px rgba(0,0,0,0.5)",
                 cursor: "pointer",
               }}
             >
-              Decide
+              <img src="/decide-mascot.png" alt="" className="h-full w-full object-cover" />
             </button>
 
             {/* Filter tray — one dark-glass control, underline-select chips */}
@@ -364,14 +366,7 @@ function BackupMenu({ onClose, onDone }: { onClose: () => void; onDone: (msg: st
   const fileRef = useRef<HTMLInputElement>(null);
 
   const doExport = () => {
-    const data = exportData();
-    const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `im-hungry-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-    onDone(`Exported ${data.places.length} places`);
+    onDone(`Exported ${downloadBackup()} places`);
     onClose();
   };
 

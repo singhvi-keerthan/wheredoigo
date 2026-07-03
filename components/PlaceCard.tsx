@@ -2,11 +2,12 @@
 
 import { useRef, useState } from "react";
 import { Star, Navigation, X, ChevronRight, ImagePlus, Camera, Trash2, Check, Ban, MapPin } from "lucide-react";
-import { displayState, type Place } from "@/lib/types";
+import { displayState, isOpenNow, type Place } from "@/lib/types";
 import { addPhoto, removePhoto, addVisit, toggleNeverAgain } from "@/lib/store";
 import { resizeImage } from "@/lib/image";
 import { leadPrice, leadRating, stateMeta, directionsUrl, photosSorted } from "@/lib/format";
 import PlaceGlyph from "./PlaceGlyph";
+import PhotoViewer from "./PhotoViewer";
 import { useSheetDrag } from "./useSheetDrag";
 
 // Docked card shown when a pin is selected. Original order kept — status + name
@@ -24,10 +25,11 @@ export default function PlaceCard({
   const meta = stateMeta(place);
   const rating = leadRating(place);
   const price = leadPrice(place);
+  const open = isOpenNow(place.openingPeriods); // hours are a top decision factor — surface it here, not just in detail
   const watchlist = displayState(place) === "watchlist"; // show quick Been/Skip
   const uploadRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
-  const [revealId, setRevealId] = useState<string | null>(null); // tap a thumb → show delete
+  const [viewerIndex, setViewerIndex] = useState<number | null>(null); // tap a thumb → full-screen swipe
   const { sheetRef, handleProps } = useSheetDrag(onClose);
 
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -115,6 +117,11 @@ export default function PlaceCard({
                 </span>
               )}
               <span style={{ color: "var(--text-secondary)" }}>{price.label}</span>
+              {open != null && (
+                <span className="font-semibold" style={{ color: open ? "var(--s-visited)" : "var(--text-tertiary)" }}>
+                  {open ? "Open now" : "Closed"}
+                </span>
+              )}
             </div>
 
             {/* tags — capped width; wrap (stack) beyond it so photos keep their room */}
@@ -139,29 +146,26 @@ export default function PlaceCard({
         {/* right: photos — show + add. On desktop a right column beside the name;
             on mobile stacked below, indented to line up under the name. */}
         <div className="flex flex-wrap gap-2 pl-[90px] sm:w-[204px] sm:shrink-0 sm:pl-0 sm:pt-1">
-          {photosSorted(place).map((ph) => {
-            const revealed = revealId === ph.id;
-            return (
-              <div
-                key={ph.id}
-                onClick={() => setRevealId((cur) => (cur === ph.id ? null : ph.id))}
-                className="relative h-[60px] w-[60px] shrink-0 cursor-pointer overflow-hidden"
-                style={{ borderRadius: "var(--radius-sm)" }}
+          {photosSorted(place).map((ph, i) => (
+            <div
+              key={ph.id}
+              onClick={() => setViewerIndex(i)}
+              className="relative h-[60px] w-[60px] shrink-0 cursor-pointer overflow-hidden"
+              style={{ borderRadius: "var(--radius-sm)" }}
+            >
+              <img src={ph.dataUrl} alt="" className="h-full w-full object-cover" />
+              {/* small, always-there — tap it to delete directly; tap the rest
+                  of the photo to swipe through the full set */}
+              <button
+                onClick={(e) => { e.stopPropagation(); removePhoto(place.id, ph.id); }}
+                aria-label="Remove photo"
+                className="absolute right-0.5 top-0.5 grid h-[18px] w-[18px] place-items-center rounded-full"
+                style={{ background: "rgba(6,8,13,0.6)", color: "#fff" }}
               >
-                <img src={ph.dataUrl} alt="" className="h-full w-full object-cover" />
-                {revealed && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); removePhoto(place.id, ph.id); setRevealId(null); }}
-                    aria-label="Remove photo"
-                    className="absolute inset-0 grid place-items-center"
-                    style={{ background: "rgba(6,8,13,0.55)", color: "#fff" }}
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                )}
-              </div>
-            );
-          })}
+                <Trash2 size={10} />
+              </button>
+            </div>
+          ))}
           <button
             onClick={() => uploadRef.current?.click()}
             aria-label="Upload photo"
@@ -224,6 +228,15 @@ export default function PlaceCard({
         <Navigation size={15} strokeWidth={2.5} fill="currentColor" />
         Directions
       </a>
+
+      {viewerIndex !== null && (
+        <PhotoViewer
+          photos={photosSorted(place)}
+          startIndex={viewerIndex}
+          onClose={() => setViewerIndex(null)}
+          onDelete={(id) => removePhoto(place.id, id)}
+        />
+      )}
     </div>
   );
 }

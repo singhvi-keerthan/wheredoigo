@@ -54,16 +54,21 @@ export async function geocodeArea(
   return hit ? { name: hit.name, lat: hit.lat, lng: hit.lng } : null;
 }
 
-// Real places around a coordinate (the "pin where I am" picker).
+// Real places around a coordinate (the "pin where I am" picker). `accuracy`
+// (meters, from the GPS fix) widens the search circle to match — a tight 120m
+// radius against a poor fix (WiFi/cell-based, common on the first fix indoors
+// or right after moving) reliably misses the real place and surfaces an
+// unrelated neighbourhood instead.
 export async function nearbyPlaces(
   lat: number,
-  lng: number
+  lng: number,
+  accuracy?: number
 ): Promise<{ results: GooglePlace[]; error?: string }> {
   try {
     const res = await fetch("/api/places/nearby", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ lat, lng }),
+      body: JSON.stringify({ lat, lng, accuracy }),
     });
     const data = await res.json();
     return { results: data.results ?? [], error: data.error };

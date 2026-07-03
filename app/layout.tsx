@@ -23,8 +23,7 @@ export const metadata: Metadata = {
   title: "im hungry — where are we eating?",
   description: "A private map of every place you've been and want to go.",
   manifest: "/manifest.webmanifest",
-  // iOS ignores SVG manifest icons — the PNG is what the home screen shows.
-  icons: { icon: "/icon.svg", apple: "/apple-touch-icon.png" },
+  icons: { icon: "/icon.png", apple: "/apple-touch-icon.png" },
   appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "im hungry" },
 };
 

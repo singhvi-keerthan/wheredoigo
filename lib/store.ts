@@ -363,6 +363,20 @@ export function exportData(): BackupFile {
   };
 }
 
+// Trigger the browser download of a backup file. Shared by the Backup menu
+// and the quiet export shortcut tucked into the map's attribution disclosure.
+// Returns the place count so the caller can toast it.
+export function downloadBackup(): number {
+  const data = exportData();
+  const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `im-hungry-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  return data.places.length;
+}
+
 // Replaces the current library. Throws with a readable message on bad input.
 export function importData(text: string): number {
   let parsed: unknown;

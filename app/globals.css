@@ -149,7 +149,12 @@ body {
 
 /* MapLibre attribution — quiet ⓘ chip, top-right, toned to the warm shell.
    It ships expanded; onLoad collapses the <details> to just the ⓘ (taps still
-   expand it). Stays legally visible. */
+   expand it). Stays legally visible. The masthead header sits at z-10 above
+   the whole map; without this the control (and the export shortcut tucked
+   into its disclosure) would render underneath it and never be tappable. */
+.maplibregl-ctrl-top-right {
+  z-index: 20 !important;
+}
 .maplibregl-ctrl-attrib.maplibregl-compact {
   background: rgba(27, 24, 29, 0.82) !important;
   color: var(--text-tertiary) !important;

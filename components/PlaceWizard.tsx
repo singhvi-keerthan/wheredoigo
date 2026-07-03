@@ -72,6 +72,7 @@ export default function PlaceWizard({
   const customTags = useCustomTags();
   const uploadRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
+  const dateRef = useRef<HTMLInputElement>(null);
 
   const steps = mode === "capture" ? CAPTURE_STEPS : VISIT_STEPS;
   const [step, setStep] = useState(0);
@@ -132,6 +133,19 @@ export default function PlaceWizard({
 
   const next = () => (last ? submit() : setStep((s) => s + 1));
   const back = () => setStep((s) => Math.max(0, s - 1));
+
+  // Land on the "when" step already showing the calendar — a native date
+  // input otherwise needs a click into the field, then another to open the
+  // picker. showPicker() isn't supported everywhere; the plain field still
+  // works if it throws.
+  useEffect(() => {
+    if (steps[step] !== "when") return;
+    try {
+      dateRef.current?.showPicker?.();
+    } catch {
+      /* unsupported — the field itself still works */
+    }
+  }, [step, steps]);
 
   // Enter advances — but only from "empty" focus (chips / rating / photo).
   // Inside a text field Enter belongs to that field (newline, or committing a
@@ -274,7 +288,7 @@ export default function PlaceWizard({
             )}
 
             {key === "when" && (
-              <input type="date" value={vDate} max={today()} onChange={(e) => setVDate(e.target.value)} className="input-dark" />
+              <input ref={dateRef} type="date" value={vDate} max={today()} onChange={(e) => setVDate(e.target.value)} className="input-dark" />
             )}
 
             {key === "who" && (
