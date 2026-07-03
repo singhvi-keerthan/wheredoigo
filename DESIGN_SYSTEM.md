@@ -52,8 +52,9 @@ mixed. Three zoom renders (`Pin` variants, chosen in `MapView`):
 - **disc** — the state-coloured type disc alone (zoom 12–13.5).
 - **dot** — 13px state dot (city-wide, zoom < 12).
 
-≤14 visible places always render full stickers (small-library feel); the
-selected pin is always full. Pins bloom in staggered ("lights turning on").
+Pins degrade by zoom regardless of how many are visible — even two
+overlapping label-stickers read as clutter; the selected pin is always full.
+Pins bloom in staggered ("lights turning on").
 
 ## 4. Surfaces & radius
 

@@ -10,6 +10,7 @@ import PlaceDetail from "./PlaceDetail";
 import CommandPalette from "./CommandPalette";
 import AddPlaceSheet from "./AddPlaceSheet";
 import DecideSheet from "./DecideSheet";
+import PlaceWizard from "./PlaceWizard";
 
 type FilterKey = "all" | DisplayState;
 
@@ -57,6 +58,10 @@ export default function AppShell() {
   const [addQuery, setAddQuery] = useState<string | null>(null); // palette → + sheet carry-over
   const [decideOpen, setDecideOpen] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
+  // Guided form that opens right after a fresh add — "capture" enriches a new
+  // watchlist place (type/cuisine/vibe/.../note), "visit" logs a retroactive
+  // been-here in one go. Never opens for a duplicate (already-known place).
+  const [wizard, setWizard] = useState<{ placeId: string; mode: "capture" | "visit" } | null>(null);
   const [menuOpen, setMenuOpen] = useState(false); // backup menu
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -320,13 +325,19 @@ export default function AppShell() {
             setAddQuery(null);
           }}
           initialQuery={addQuery ?? undefined}
-          // Adding just drops the pin + selects it. Its type/cuisine tags come
-          // auto-derived from Google, so it's searchable with no form to fill.
+          // Adding drops the pin, selects it, then opens the guided form: a
+          // duplicate just reopens what's already there, "been already" goes
+          // straight into logging that visit, otherwise it's a fresh capture.
           onAdded={(id, opts) => {
             setSelectedId(id);
             if (opts?.duplicate) showToast("Already on your map — opened it");
+            else setWizard({ placeId: id, mode: opts?.beenAlready ? "visit" : "capture" });
           }}
         />
+      )}
+
+      {wizard && (
+        <PlaceWizard placeId={wizard.placeId} mode={wizard.mode} onClose={() => setWizard(null)} />
       )}
 
       {menuOpen && <BackupMenu onClose={() => setMenuOpen(false)} onDone={showToast} />}

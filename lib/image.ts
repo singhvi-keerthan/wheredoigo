@@ -1,6 +1,7 @@
-// Resize an uploaded image client-side so photos stay small in the local store
-// (localStorage quota). Max ~1100px long edge, JPEG ~0.72. Returns a data URL.
-export function resizeImage(file: File, maxEdge = 1100, quality = 0.72): Promise<string> {
+// Resize an uploaded image client-side before it lands in IndexedDB (photo
+// bytes have no localStorage quota to dodge anymore — this is just a sane
+// ceiling). Max ~1600px long edge, JPEG ~0.85. Returns a data URL.
+export function resizeImage(file: File, maxEdge = 1600, quality = 0.85): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {

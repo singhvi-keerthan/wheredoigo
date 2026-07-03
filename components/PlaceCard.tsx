@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { Star, Navigation, X, ChevronRight, ImagePlus, Camera, Trash2, Check, Ban, MapPin } from "lucide-react";
 import { displayState, type Place } from "@/lib/types";
 import { addPhoto, removePhoto, addVisit, toggleNeverAgain } from "@/lib/store";
@@ -27,6 +27,7 @@ export default function PlaceCard({
   const watchlist = displayState(place) === "watchlist"; // show quick Been/Skip
   const uploadRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
+  const [revealId, setRevealId] = useState<string | null>(null); // tap a thumb → show delete
   const { sheetRef, handleProps } = useSheetDrag(onClose);
 
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -138,19 +139,29 @@ export default function PlaceCard({
         {/* right: photos — show + add. On desktop a right column beside the name;
             on mobile stacked below, indented to line up under the name. */}
         <div className="flex flex-wrap gap-2 pl-[90px] sm:w-[204px] sm:shrink-0 sm:pl-0 sm:pt-1">
-          {photosSorted(place).map((ph) => (
-            <div key={ph.id} className="relative h-[60px] w-[60px] shrink-0 overflow-hidden" style={{ borderRadius: "var(--radius-sm)" }}>
-              <img src={ph.dataUrl} alt="" className="h-full w-full object-cover" />
-              <button
-                onClick={() => removePhoto(place.id, ph.id)}
-                aria-label="Remove photo"
-                className="absolute right-0.5 top-0.5 grid h-5 w-5 place-items-center rounded-full"
-                style={{ background: "rgba(6,8,13,0.7)", color: "#fff" }}
+          {photosSorted(place).map((ph) => {
+            const revealed = revealId === ph.id;
+            return (
+              <div
+                key={ph.id}
+                onClick={() => setRevealId((cur) => (cur === ph.id ? null : ph.id))}
+                className="relative h-[60px] w-[60px] shrink-0 cursor-pointer overflow-hidden"
+                style={{ borderRadius: "var(--radius-sm)" }}
               >
-                <Trash2 size={10} />
-              </button>
-            </div>
-          ))}
+                <img src={ph.dataUrl} alt="" className="h-full w-full object-cover" />
+                {revealed && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); removePhoto(place.id, ph.id); setRevealId(null); }}
+                    aria-label="Remove photo"
+                    className="absolute inset-0 grid place-items-center"
+                    style={{ background: "rgba(6,8,13,0.55)", color: "#fff" }}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                )}
+              </div>
+            );
+          })}
           <button
             onClick={() => uploadRef.current?.click()}
             aria-label="Upload photo"

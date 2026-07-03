@@ -13,6 +13,7 @@ import {
   Loader2,
   Navigation2,
   Check,
+  CalendarCheck,
 } from "lucide-react";
 import { addPlace, findDuplicate } from "@/lib/store";
 import { parseLocation, isUrl } from "@/lib/capture";
@@ -51,7 +52,7 @@ export default function AddPlaceSheet({
 }: {
   open: boolean;
   onClose: () => void;
-  onAdded: (id: string, opts?: { duplicate?: boolean }) => void;
+  onAdded: (id: string, opts?: { duplicate?: boolean; beenAlready?: boolean }) => void;
   initialQuery?: string;
 }) {
   const [mode, setMode] = useState<Mode>(initialQuery ? "search" : "menu");
@@ -151,8 +152,8 @@ export default function AddPlaceSheet({
 
   if (!open) return null;
 
-  const finish = (id: string, duplicate = false) => {
-    onAdded(id, { duplicate });
+  const finish = (id: string, opts?: { duplicate?: boolean; beenAlready?: boolean }) => {
+    onAdded(id, opts);
     onClose();
   };
 
@@ -165,7 +166,7 @@ export default function AddPlaceSheet({
 
   const addAt = (lat: number, lng: number, name: string, source: CaptureSource, backTo: Mode) => {
     const dup = findDuplicate({ name, lat, lng });
-    if (dup) return finish(dup.id, true);
+    if (dup) return finish(dup.id, { duplicate: true });
     toConfirm(name, undefined, backTo, (notes) =>
       addPlace({
         googlePlaceId: null,
@@ -190,7 +191,7 @@ export default function AddPlaceSheet({
   // its first Google photo is pulled once in the background.
   const addGoogle = (r: GooglePlace, backTo: Mode) => {
     const dup = findDuplicate({ googlePlaceId: r.placeId, name: r.name, lat: r.lat, lng: r.lng });
-    if (dup) return finish(dup.id, true);
+    if (dup) return finish(dup.id, { duplicate: true });
     toConfirm(r.name, r.area || r.address || undefined, backTo, (notes) => {
       const place = addPlace({
         googlePlaceId: r.placeId,
@@ -218,8 +219,8 @@ export default function AddPlaceSheet({
     });
   };
 
-  const saveConfirm = () => {
-    if (pending) finish(pending.commit(note.trim()));
+  const saveConfirm = (beenAlready = false) => {
+    if (pending) finish(pending.commit(note.trim()), { beenAlready });
   };
 
   // "Pin where I am": reverse-match the GPS fix to the real places around it.
@@ -475,11 +476,18 @@ export default function AddPlaceSheet({
               </p>
 
               <button
-                onClick={saveConfirm}
+                onClick={() => saveConfirm()}
                 className="press mt-3 flex w-full items-center justify-center gap-2 py-3 text-[14.5px] font-bold"
                 style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
               >
                 <Check size={16} strokeWidth={2.75} /> Save to watchlist
+              </button>
+              <button
+                onClick={() => saveConfirm(true)}
+                className="press mt-2 flex w-full items-center justify-center gap-2 py-3 text-[14.5px] font-semibold"
+                style={{ borderRadius: "var(--radius-chip)", border: "1px solid var(--border-strong)", color: "var(--text-primary)" }}
+              >
+                <CalendarCheck size={16} strokeWidth={2.25} /> I've already been here
               </button>
             </div>
           )}

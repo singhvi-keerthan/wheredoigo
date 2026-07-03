@@ -27,9 +27,8 @@ function cssVar(name: string): string {
 
 // Zoom → pin detail. The 40px label-sticker pins collide into soup on a
 // city-wide view once the map grows, so pins degrade: name cards up close,
-// glyph discs at mid zoom, dots city-wide. A small library (≤14 visible) keeps
-// full stickers at every zoom — today's feel, unchanged.
-const DENSITY_FULL_MAX = 14;
+// glyph discs at mid zoom, dots city-wide — always, regardless of how many
+// places are on the map (even two overlapping label-stickers read as clutter).
 function bandFor(zoom: number): PinVariant {
   return zoom >= 13.5 ? "full" : zoom >= 12 ? "disc" : "dot";
 }
@@ -134,8 +133,7 @@ export default function MapView({
       {places.map((p, i) => {
         const state = displayState(p);
         const active = p.id === selectedId;
-        const variant: PinVariant =
-          active || places.length <= DENSITY_FULL_MAX ? "full" : band;
+        const variant: PinVariant = active ? "full" : band;
         return (
           <Marker
             key={p.id}
