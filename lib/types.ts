@@ -168,15 +168,22 @@ export function displayState(p: {
 
 export type OpenState = "open" | "closing_soon" | "closed";
 
-// Is the place open at `now`, and when does that next change? Returns null
-// when hours are unknown (so callers can treat "unknown" differently from
-// "closed"). Times are in the place's local timezone; for a single-city
-// personal map that matches the device. "closing_soon" = closes within the
-// hour — a distinct state so the UI can flag it before it just goes red.
+// Is the place open at `now`, and what are the hours of the relevant window —
+// the one it's in right now if open, or the one it opens into next if closed?
+// Returns null when hours are unknown (so callers can treat "unknown"
+// differently from "closed"). Times are in the place's local timezone; for a
+// single-city personal map that matches the device. "closing_soon" = closes
+// within the hour — a distinct state so the UI can flag it before it just
+// goes red. `close: null` means genuinely open around the clock (not just
+// "closes after midnight").
 export function openStatus(
   periods: OpeningPeriod[] | undefined,
   now: Date = new Date()
-): { state: OpenState; changeAt: { hour: number; minute: number } | null } | null {
+): {
+  state: OpenState;
+  open: { hour: number; minute: number };
+  close: { hour: number; minute: number } | null;
+} | null {
   if (!periods || periods.length === 0) return null;
   // Open 24h: one period, opens day 0 at 00:00, no close.
   if (
@@ -185,7 +192,7 @@ export function openStatus(
     periods[0].open.hour === 0 &&
     periods[0].open.minute === 0
   ) {
-    return { state: "open", changeAt: null };
+    return { state: "open", open: periods[0].open, close: null };
   }
   const WEEK = 7 * 1440;
   const mow = now.getDay() * 1440 + now.getHours() * 60 + now.getMinutes();
@@ -197,11 +204,11 @@ export function openStatus(
     let m = mow;
     if (m < start) m += WEEK; // normalise forward of the window start
     if (m >= start && m < end) {
-      return { state: end - m <= 60 ? "closing_soon" : "open", changeAt: p.close };
+      return { state: end - m <= 60 ? "closing_soon" : "open", open: p.open, close: p.close };
     }
   }
-  // Not open in any period — find the soonest upcoming open time.
-  let soonest: OpeningPeriod["open"] | null = null;
+  // Not open in any period — find the soonest upcoming window.
+  let soonest: OpeningPeriod | null = null;
   let soonestDelta = Infinity;
   for (const p of periods) {
     const start = p.open.day * 1440 + p.open.hour * 60 + p.open.minute;
@@ -209,10 +216,10 @@ export function openStatus(
     if (delta < 0) delta += WEEK;
     if (delta < soonestDelta) {
       soonestDelta = delta;
-      soonest = p.open;
+      soonest = p;
     }
   }
-  return { state: "closed", changeAt: soonest };
+  return soonest ? { state: "closed", open: soonest.open, close: soonest.close ?? null } : null;
 }
 
 // Is the place open at `now`? Returns null when hours are unknown.

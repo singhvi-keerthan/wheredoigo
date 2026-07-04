@@ -190,9 +190,11 @@ export default function AppShell() {
       ) : (
         <div className="fixed inset-x-0 bottom-0 z-10">
           {/* filter rail — Decide (white action) + a dark-glass underline tray.
-              Sized to fit one line on a narrow phone with no horizontal
-              swipe — a scrollable row of filters reads as broken, not rich. */}
-          <div className="flex items-center gap-1.5 px-4 pb-2">
+              Same horizontal padding, gap, corner radius and 36px row height
+              as the search dock below it, so the two rows read as one dock
+              instead of two differently-sized ones stacked up. Sized to fit
+              one line on a narrow phone with no horizontal swipe. */}
+          <div className="flex items-center gap-2.5 px-[18px] pb-2">
             <button
               onClick={() => setDecideOpen(true)}
               aria-label="Decide"
@@ -217,8 +219,8 @@ export default function AppShell() {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
-                padding: "5px 3px",
-                borderRadius: 20,
+                padding: "1px 3px",
+                borderRadius: 18,
               }}
             >
               {FILTERS.map((f) => {

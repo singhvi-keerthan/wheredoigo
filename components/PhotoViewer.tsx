@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { X, Trash2 } from "lucide-react";
 import type { Photo } from "@/lib/types";
 
@@ -55,7 +56,10 @@ export default function PhotoViewer({
   if (photos.length === 0) return null;
   const current = photos[Math.min(index, photos.length - 1)];
 
-  return (
+  // Portal to <body> — a `fixed` element still gets scoped to the nearest
+  // transformed/filtered ancestor's box instead of the real viewport, and
+  // this is opened from deep inside animated, draggable sheets.
+  return createPortal(
     <div className="fixed inset-0 z-[70]" style={{ background: "rgba(6,7,10,0.97)" }}>
       <div
         ref={trackRef}
@@ -107,6 +111,7 @@ export default function PhotoViewer({
           <Trash2 size={16} strokeWidth={2.25} />
         </button>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

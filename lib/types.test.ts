@@ -45,27 +45,34 @@ describe("openStatus", () => {
     ];
     expect(openStatus(p, at("2026-06-27T12:00:00"))).toEqual({
       state: "open",
-      changeAt: { day: 6, hour: 17, minute: 0 },
+      open: { day: 6, hour: 9, minute: 0 },
+      close: { day: 6, hour: 17, minute: 0 },
     });
     expect(openStatus(p, at("2026-06-27T16:30:00"))).toEqual({
       state: "closing_soon",
-      changeAt: { day: 6, hour: 17, minute: 0 },
+      open: { day: 6, hour: 9, minute: 0 },
+      close: { day: 6, hour: 17, minute: 0 },
     });
   });
 
-  it("reports the next opening time when closed", () => {
+  it("reports the next window's hours when closed", () => {
     const p: OpeningPeriod[] = [
       { open: { day: 6, hour: 9, minute: 0 }, close: { day: 6, hour: 17, minute: 0 } },
     ];
     expect(openStatus(p, at("2026-06-27T18:00:00"))).toEqual({
       state: "closed",
-      changeAt: { day: 6, hour: 9, minute: 0 }, // wraps to next week's Saturday open
+      open: { day: 6, hour: 9, minute: 0 }, // wraps to next week's Saturday window
+      close: { day: 6, hour: 17, minute: 0 },
     });
   });
 
-  it("treats the 24h convention as open with no upcoming change", () => {
+  it("treats the 24h convention as open with no close time", () => {
     const p: OpeningPeriod[] = [{ open: { day: 0, hour: 0, minute: 0 } }];
-    expect(openStatus(p, at("2026-06-27T03:14:00"))).toEqual({ state: "open", changeAt: null });
+    expect(openStatus(p, at("2026-06-27T03:14:00"))).toEqual({
+      state: "open",
+      open: { day: 0, hour: 0, minute: 0 },
+      close: null,
+    });
   });
 });
 

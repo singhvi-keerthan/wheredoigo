@@ -66,19 +66,27 @@ const HOURS_PILL_COLOR: Record<"open" | "closing_soon" | "closed", string> = {
   closed: "oklch(0.58 0.19 25)",
 };
 
-function clockLabel(t: { hour: number; minute: number }): string {
+// Storefront-sign shorthand — drop the open side's AM/PM (openings are
+// unambiguous enough without it) and keep the close side's, lowercase:
+// 9am–9pm reads as "9-9pm", 11am–11pm as "11-11pm".
+function hourOnly(t: { hour: number; minute: number }): string {
   const h = t.hour % 12 || 12;
-  const ampm = t.hour < 12 ? "AM" : "PM";
-  return t.minute === 0 ? `${h} ${ampm}` : `${h}:${String(t.minute).padStart(2, "0")} ${ampm}`;
+  return t.minute === 0 ? `${h}` : `${h}:${String(t.minute).padStart(2, "0")}`;
 }
 
-// A compact "when does this change" chip — e.g. "11 PM" (still open, closing
-// then), "9 AM" (closed, opens then), or "24h". Null when hours are unknown.
+function hourWithMeridiem(t: { hour: number; minute: number }): string {
+  return `${hourOnly(t)}${t.hour < 12 ? "am" : "pm"}`;
+}
+
+// The compact hours pill — the place's actual timings (e.g. "11-9pm"), not a
+// live countdown. Shows the window it's in right now if open, or the next
+// one it opens into if closed; the pill's colour (not the label) carries
+// open/closed/closing-soon. Null when hours are unknown.
 export function hoursPill(p: Place, now?: Date): { label: string; color: string } | null {
   const status = openStatus(p.openingPeriods, now);
   if (!status) return null;
   return {
-    label: status.changeAt ? clockLabel(status.changeAt) : "24h",
+    label: status.close ? `${hourOnly(status.open)}-${hourWithMeridiem(status.close)}` : "24h",
     color: HOURS_PILL_COLOR[status.state],
   };
 }

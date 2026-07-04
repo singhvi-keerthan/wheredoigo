@@ -2,7 +2,7 @@
 // offline. Network-first for navigations (always get the latest build),
 // cache-first for static assets. Never touches /api or cross-origin (map tiles,
 // Google) — those always hit the network.
-const CACHE = "imhungry-v1";
+const CACHE = "imhungry-v2";
 const SHELL = ["/", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (e) => {
