@@ -27,7 +27,8 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
   const [editingTags, setEditingTags] = useState(false);
   const [editingNote, setEditingNote] = useState(false);
   const [visitWizard, setVisitWizard] = useState(false); // guided watchlist → visited form
-  const [viewerIndex, setViewerIndex] = useState<number | null>(null); // tap a photo → full-screen swipe
+  const [revealId, setRevealId] = useState<string | null>(null); // tap a photo → reveal its delete icon
+  const [viewerIndex, setViewerIndex] = useState<number | null>(null); // tap again → full-screen swipe
   const { sheetRef, handleProps } = useSheetDrag(onClose);
 
   // Refresh Google rating / price / hours when a linked place opens and its
@@ -159,31 +160,44 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
             </div>
           )}
 
-          {/* photos — a swipeable carousel (not a scroll-past stack). Tap a
-              photo to open the full-screen viewer and swipe through the rest;
-              the small corner badge deletes without leaving the sheet. */}
+          {/* photos — a swipeable carousel (not a scroll-past stack), shown at
+              normal size with no delete icon by default. Tap a photo to
+              reveal its delete icon; tap it again (anywhere but that icon)
+              opens the full-screen swipeable viewer. */}
           <div className="mt-3.5 flex flex-col gap-2">
             {photosSorted(place).length > 0 && (
               <>
                 <div className="scroll-quiet flex snap-x snap-mandatory gap-2 overflow-x-auto">
-                  {photosSorted(place).map((ph, i) => (
-                    <div
-                      key={ph.id}
-                      onClick={() => setViewerIndex(i)}
-                      className="relative h-[50vh] w-full shrink-0 cursor-pointer snap-center overflow-hidden"
-                      style={{ borderRadius: "var(--radius)", background: "var(--bg-elevated)" }}
-                    >
-                      <img src={ph.dataUrl} alt="" className="h-full w-full object-contain" />
-                      <button
-                        onClick={(e) => { e.stopPropagation(); removePhoto(place.id, ph.id); }}
-                        aria-label="Remove photo"
-                        className="absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-full"
-                        style={{ background: "rgba(6,8,13,0.6)", color: "#fff" }}
+                  {photosSorted(place).map((ph, i) => {
+                    const revealed = revealId === ph.id;
+                    return (
+                      <div
+                        key={ph.id}
+                        onClick={() => {
+                          if (revealed) {
+                            setViewerIndex(i);
+                            setRevealId(null);
+                          } else {
+                            setRevealId(ph.id);
+                          }
+                        }}
+                        className="relative h-[50vh] w-full shrink-0 cursor-pointer snap-center overflow-hidden"
+                        style={{ borderRadius: "var(--radius)", background: "var(--bg-elevated)" }}
                       >
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  ))}
+                        <img src={ph.dataUrl} alt="" className="h-full w-full object-contain" />
+                        {revealed && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); removePhoto(place.id, ph.id); setRevealId(null); }}
+                            aria-label="Remove photo"
+                            className="absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-full"
+                            style={{ background: "rgba(6,8,13,0.7)", color: "#fff" }}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
                 {photosSorted(place).length > 1 && (
                   <div className="flex justify-center gap-1">

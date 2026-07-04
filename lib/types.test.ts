@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isOpenNow, displayState, type OpeningPeriod } from "./types";
+import { isOpenNow, openStatus, displayState, type OpeningPeriod } from "./types";
 
 // 2026-06-27 is a Saturday, 2026-06-28 a Sunday.
 const at = (iso: string) => new Date(iso);
@@ -31,6 +31,41 @@ describe("isOpenNow", () => {
     expect(isOpenNow(p, at("2026-06-27T23:00:00"))).toBe(true);
     expect(isOpenNow(p, at("2026-06-28T01:00:00"))).toBe(true);
     expect(isOpenNow(p, at("2026-06-28T03:00:00"))).toBe(false);
+  });
+});
+
+describe("openStatus", () => {
+  it("returns null when hours are unknown", () => {
+    expect(openStatus(undefined, at("2026-06-27T12:00:00"))).toBeNull();
+  });
+
+  it("flags closing_soon inside the last hour of a window, open before that", () => {
+    const p: OpeningPeriod[] = [
+      { open: { day: 6, hour: 9, minute: 0 }, close: { day: 6, hour: 17, minute: 0 } },
+    ];
+    expect(openStatus(p, at("2026-06-27T12:00:00"))).toEqual({
+      state: "open",
+      changeAt: { day: 6, hour: 17, minute: 0 },
+    });
+    expect(openStatus(p, at("2026-06-27T16:30:00"))).toEqual({
+      state: "closing_soon",
+      changeAt: { day: 6, hour: 17, minute: 0 },
+    });
+  });
+
+  it("reports the next opening time when closed", () => {
+    const p: OpeningPeriod[] = [
+      { open: { day: 6, hour: 9, minute: 0 }, close: { day: 6, hour: 17, minute: 0 } },
+    ];
+    expect(openStatus(p, at("2026-06-27T18:00:00"))).toEqual({
+      state: "closed",
+      changeAt: { day: 6, hour: 9, minute: 0 }, // wraps to next week's Saturday open
+    });
+  });
+
+  it("treats the 24h convention as open with no upcoming change", () => {
+    const p: OpeningPeriod[] = [{ open: { day: 0, hour: 0, minute: 0 } }];
+    expect(openStatus(p, at("2026-06-27T03:14:00"))).toEqual({ state: "open", changeAt: null });
   });
 });
 

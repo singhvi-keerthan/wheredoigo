@@ -1,6 +1,6 @@
 "use client";
 
-import Map, { Marker, AttributionControl, type MapRef } from "react-map-gl/maplibre";
+import Map, { Marker, type MapRef } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Place } from "@/lib/types";
@@ -37,20 +37,13 @@ export default function MapView({
   places,
   selectedId,
   onSelect,
-  onExport,
 }: {
   places: Place[];
   selectedId: string | null;
   onSelect: (id: string | null) => void;
-  onExport?: () => void;
 }) {
   const mapRef = useRef<MapRef | null>(null);
   const [band, setBand] = useState<PinVariant>(() => bandFor(DEFAULT_VIEW.zoom));
-  // onLoad fires once and closes over whatever it saw then — read the latest
-  // callback through a ref instead of re-running the whole map setup on every
-  // parent re-render.
-  const onExportRef = useRef(onExport);
-  onExportRef.current = onExport;
 
   // Fly to a place when it becomes selected (pin tap or search pick). Bottom
   // padding keeps the pin above the docked sheet.
@@ -74,32 +67,6 @@ export default function MapView({
     const map = mapRef.current?.getMap();
     if (!map) return;
 
-    // MapLibre renders the attribution <details> expanded on load — collapse it
-    // to a quiet ⓘ (tapping still opens it). Keeps it legally visible, out of
-    // the way of the title + the bottom dock.
-    const attrib = map.getContainer().querySelector<HTMLDetailsElement>(".maplibregl-ctrl-attrib");
-    if (attrib) {
-      attrib.removeAttribute("open");
-      attrib.classList.remove("maplibregl-compact-show");
-
-      // Tuck the backup export in with the small print — the one spot on
-      // screen already reserved for "nobody reads this," so it stays out of
-      // the primary chrome instead of adding another visible top-level icon.
-      const inner = attrib.querySelector<HTMLElement>(".maplibregl-ctrl-attrib-inner");
-      if (inner && !inner.querySelector("[data-export-backup]")) {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.dataset.exportBackup = "true";
-        btn.textContent = "Export backup";
-        btn.style.cssText =
-          "display:block;margin-top:4px;padding:0;font:inherit;font-size:11px;color:inherit;text-decoration:underline;background:none;border:none;cursor:pointer;";
-        btn.onclick = (e) => {
-          e.stopPropagation(); // stay inside the disclosure, don't fall through to the map
-          onExportRef.current?.();
-        };
-        inner.appendChild(btn);
-      }
-    }
     const ink = "#55565a"; // neutral gray ink labels
     const halo = "rgba(247,247,245,0.95)";
     const LAND = "#f3f3f0"; // neutral off-white (barely warm)
@@ -150,11 +117,6 @@ export default function MapView({
       onClick={() => onSelect(null)}
       style={{ position: "absolute", inset: 0 }}
     >
-      {/* Attribution is legally required — park it top-right (the only corner the
-          bottom dock doesn't cover). No `compact` prop: explicit compact starts
-          EXPANDED, so we let the responsive mode collapse it to a closed ⓘ on
-          this narrow (<640px) map. */}
-      <AttributionControl position="top-right" />
       {places.map((p, i) => {
         const state = displayState(p);
         const active = p.id === selectedId;

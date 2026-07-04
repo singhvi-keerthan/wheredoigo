@@ -1,5 +1,5 @@
 import type { Photo, Place } from "./types";
-import { displayState, DISPLAY_STATE_META } from "./types";
+import { displayState, openStatus, DISPLAY_STATE_META } from "./types";
 
 // ₹ signs from Google price level (0–4) or your logged budget.
 export function priceSigns(level: number | null): string {
@@ -56,4 +56,29 @@ export function coverPhoto(p: Place): Photo | null {
 export function relativeDate(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+}
+
+// Traffic-light colours for the compact hours pill — the colour carries the
+// open/closed meaning so the label itself can just be the time, not a word.
+const HOURS_PILL_COLOR: Record<"open" | "closing_soon" | "closed", string> = {
+  open: "oklch(0.6 0.15 150)",
+  closing_soon: "oklch(0.78 0.16 85)",
+  closed: "oklch(0.58 0.19 25)",
+};
+
+function clockLabel(t: { hour: number; minute: number }): string {
+  const h = t.hour % 12 || 12;
+  const ampm = t.hour < 12 ? "AM" : "PM";
+  return t.minute === 0 ? `${h} ${ampm}` : `${h}:${String(t.minute).padStart(2, "0")} ${ampm}`;
+}
+
+// A compact "when does this change" chip — e.g. "11 PM" (still open, closing
+// then), "9 AM" (closed, opens then), or "24h". Null when hours are unknown.
+export function hoursPill(p: Place, now?: Date): { label: string; color: string } | null {
+  const status = openStatus(p.openingPeriods, now);
+  if (!status) return null;
+  return {
+    label: status.changeAt ? clockLabel(status.changeAt) : "24h",
+    color: HOURS_PILL_COLOR[status.state],
+  };
 }

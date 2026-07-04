@@ -98,12 +98,7 @@ export default function AppShell() {
       className="relative w-full overflow-hidden"
       style={{ height: "100dvh", background: "var(--bg-base)" }}
     >
-      <MapView
-        places={visible}
-        selectedId={selectedId}
-        onSelect={setSelectedId}
-        onExport={() => showToast(`Exported ${downloadBackup()} places`)}
-      />
+      <MapView places={visible} selectedId={selectedId} onSelect={setSelectedId} />
 
       {/* top scrim — light wash so the dark-ink masthead reads over the map */}
       <div
@@ -194,15 +189,17 @@ export default function AppShell() {
         </div>
       ) : (
         <div className="fixed inset-x-0 bottom-0 z-10">
-          {/* filter rail — Decide (white action) + a dark-glass underline tray */}
-          <div className="flex items-center gap-2.5 overflow-x-auto px-5 pb-2 scroll-quiet">
+          {/* filter rail — Decide (white action) + a dark-glass underline tray.
+              Sized to fit one line on a narrow phone with no horizontal
+              swipe — a scrollable row of filters reads as broken, not rich. */}
+          <div className="flex items-center gap-1.5 px-4 pb-2">
             <button
               onClick={() => setDecideOpen(true)}
               aria-label="Decide"
               className="press shrink-0 overflow-hidden"
               style={{
-                width: 40,
-                height: 40,
+                width: 36,
+                height: 36,
                 borderRadius: "50%",
                 border: "2px solid oklch(0.97 0 0)",
                 boxShadow: "0 8px 22px -8px rgba(0,0,0,0.5)",
@@ -214,13 +211,13 @@ export default function AppShell() {
 
             {/* Filter tray — one dark-glass control, underline-select chips */}
             <div
-              className="shrink-0"
+              className="min-w-0 flex-1"
               style={{
                 ...GLASS,
-                display: "inline-flex",
+                display: "flex",
                 alignItems: "center",
-                gap: 4,
-                padding: 5,
+                justifyContent: "space-between",
+                padding: "5px 3px",
                 borderRadius: 20,
               }}
             >
@@ -230,7 +227,7 @@ export default function AppShell() {
                   <button
                     key={f.key}
                     onClick={() => setFilter(f.key)}
-                    className="press shrink-0"
+                    className="press min-w-0 flex-1"
                     style={{
                       display: "inline-flex",
                       flexDirection: "column",
@@ -238,21 +235,22 @@ export default function AppShell() {
                       justifyContent: "center",
                       gap: 3,
                       height: 34,
-                      padding: "0 13px",
+                      padding: "0 4px",
                       borderRadius: 13,
                       background: "transparent",
                       border: "none",
                       cursor: "pointer",
-                      fontSize: 14,
+                      fontSize: 12.5,
                       letterSpacing: "-0.01em",
                       fontWeight: on ? 600 : 500,
                       color: on ? "oklch(0.98 0 0)" : "oklch(0.74 0.01 260)",
+                      whiteSpace: "nowrap",
                     }}
                   >
                     {f.label}
                     <span
                       style={{
-                        width: 18,
+                        width: 14,
                         height: 3,
                         borderRadius: 2,
                         background: on ? UNDERLINE[f.key] : "transparent",
@@ -446,6 +444,22 @@ function BackupMenu({ onClose, onDone }: { onClose: () => void; onDone: (msg: st
             </span>
           </button>
         </div>
+
+        {/* Map attribution is legally required to stay visible — it used to
+            be its own small circle floating on the map, which just read as a
+            second, misaligned icon next to this one. Folded in here instead
+            of adding a second visible mark. */}
+        <p className="mt-3 px-1 text-[11px]" style={{ color: "var(--text-tertiary)" }}>
+          Map data ©{" "}
+          <a href="https://carto.com/about-carto/" target="_blank" rel="noreferrer" className="underline">
+            CARTO
+          </a>
+          , ©{" "}
+          <a href="https://www.openstreetmap.org/about/" target="_blank" rel="noreferrer" className="underline">
+            OpenStreetMap
+          </a>{" "}
+          contributors
+        </p>
         <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={doImport} />
       </div>
     </div>

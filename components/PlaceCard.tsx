@@ -2,10 +2,10 @@
 
 import { useRef, useState } from "react";
 import { Star, Navigation, X, ChevronRight, ImagePlus, Camera, Trash2, Check, Ban, MapPin } from "lucide-react";
-import { displayState, isOpenNow, type Place } from "@/lib/types";
+import { displayState, type Place } from "@/lib/types";
 import { addPhoto, removePhoto, addVisit, toggleNeverAgain } from "@/lib/store";
 import { resizeImage } from "@/lib/image";
-import { leadPrice, leadRating, stateMeta, directionsUrl, photosSorted } from "@/lib/format";
+import { leadPrice, leadRating, stateMeta, directionsUrl, photosSorted, hoursPill } from "@/lib/format";
 import PlaceGlyph from "./PlaceGlyph";
 import PhotoViewer from "./PhotoViewer";
 import { useSheetDrag } from "./useSheetDrag";
@@ -25,11 +25,12 @@ export default function PlaceCard({
   const meta = stateMeta(place);
   const rating = leadRating(place);
   const price = leadPrice(place);
-  const open = isOpenNow(place.openingPeriods); // hours are a top decision factor — surface it here, not just in detail
+  const hours = hoursPill(place); // hours are a top decision factor — surface it here, not just in detail
   const watchlist = displayState(place) === "watchlist"; // show quick Been/Skip
   const uploadRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
-  const [viewerIndex, setViewerIndex] = useState<number | null>(null); // tap a thumb → full-screen swipe
+  const [revealId, setRevealId] = useState<string | null>(null); // tap a thumb → reveal its delete icon
+  const [viewerIndex, setViewerIndex] = useState<number | null>(null); // tap again → full-screen swipe
   const { sheetRef, handleProps } = useSheetDrag(onClose);
 
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -81,6 +82,16 @@ export default function PlaceCard({
               style={{ borderRadius: "var(--radius)", border: "1px solid var(--border)", background: "var(--bg-elevated)" }}
             >
               <PlaceGlyph place={place} size={30} strokeWidth={1.9} style={{ color: "var(--text-secondary)" }} />
+              {/* hours as a colour-coded time, not a word — overlaid on the
+                  tile itself so it doesn't cost room in the meta row */}
+              {hours && (
+                <span
+                  className="absolute inset-x-0 bottom-0 truncate px-1 text-center text-[9.5px] font-bold leading-[1.6]"
+                  style={{ background: hours.color, color: "#fff" }}
+                >
+                  {hours.label}
+                </span>
+              )}
             </div>
             <span
               className="inline-flex items-center gap-1.5 px-2 py-[3px] text-[11px] font-bold"
@@ -117,11 +128,6 @@ export default function PlaceCard({
                 </span>
               )}
               <span style={{ color: "var(--text-secondary)" }}>{price.label}</span>
-              {open != null && (
-                <span className="font-semibold" style={{ color: open ? "var(--s-visited)" : "var(--text-tertiary)" }}>
-                  {open ? "Open now" : "Closed"}
-                </span>
-              )}
             </div>
 
             {/* tags — capped width; wrap (stack) beyond it so photos keep their room */}
@@ -146,26 +152,38 @@ export default function PlaceCard({
         {/* right: photos — show + add. On desktop a right column beside the name;
             on mobile stacked below, indented to line up under the name. */}
         <div className="flex flex-wrap gap-2 pl-[90px] sm:w-[204px] sm:shrink-0 sm:pl-0 sm:pt-1">
-          {photosSorted(place).map((ph, i) => (
-            <div
-              key={ph.id}
-              onClick={() => setViewerIndex(i)}
-              className="relative h-[60px] w-[60px] shrink-0 cursor-pointer overflow-hidden"
-              style={{ borderRadius: "var(--radius-sm)" }}
-            >
-              <img src={ph.dataUrl} alt="" className="h-full w-full object-cover" />
-              {/* small, always-there — tap it to delete directly; tap the rest
-                  of the photo to swipe through the full set */}
-              <button
-                onClick={(e) => { e.stopPropagation(); removePhoto(place.id, ph.id); }}
-                aria-label="Remove photo"
-                className="absolute right-0.5 top-0.5 grid h-[18px] w-[18px] place-items-center rounded-full"
-                style={{ background: "rgba(6,8,13,0.6)", color: "#fff" }}
+          {photosSorted(place).map((ph, i) => {
+            const revealed = revealId === ph.id;
+            return (
+              <div
+                key={ph.id}
+                onClick={() => {
+                  if (revealed) {
+                    setViewerIndex(i);
+                    setRevealId(null);
+                  } else {
+                    setRevealId(ph.id);
+                  }
+                }}
+                className="relative h-[60px] w-[60px] shrink-0 cursor-pointer overflow-hidden"
+                style={{ borderRadius: "var(--radius-sm)" }}
               >
-                <Trash2 size={10} />
-              </button>
-            </div>
-          ))}
+                <img src={ph.dataUrl} alt="" className="h-full w-full object-cover" />
+                {/* tap reveals this; tap the photo again (anywhere but the
+                    icon) opens the full-screen swipeable view */}
+                {revealed && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); removePhoto(place.id, ph.id); setRevealId(null); }}
+                    aria-label="Remove photo"
+                    className="absolute right-0.5 top-0.5 grid h-[18px] w-[18px] place-items-center rounded-full"
+                    style={{ background: "rgba(6,8,13,0.7)", color: "#fff" }}
+                  >
+                    <Trash2 size={10} />
+                  </button>
+                )}
+              </div>
+            );
+          })}
           <button
             onClick={() => uploadRef.current?.click()}
             aria-label="Upload photo"
