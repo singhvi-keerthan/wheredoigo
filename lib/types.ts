@@ -6,7 +6,7 @@ export type PlaceStatus = "watchlist" | "visited";
 // Derived state used purely for pin color + label (priority order baked into displayState()).
 export type DisplayState = "never_again" | "favorite" | "visited" | "watchlist";
 
-export type CaptureSource = "search" | "paste" | "manual";
+export type CaptureSource = "search" | "paste" | "manual" | "swiggy";
 
 // Tag namespaces — fixed so tags don't rot and filters stay obvious.
 export type TagNamespace =

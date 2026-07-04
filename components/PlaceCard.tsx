@@ -5,7 +5,7 @@ import { Star, Navigation, X, ChevronRight, ImagePlus, Camera, Trash2, Check, Ba
 import { displayState, type Place } from "@/lib/types";
 import { addPhoto, removePhoto, addVisit, toggleNeverAgain } from "@/lib/store";
 import { resizeImage } from "@/lib/image";
-import { leadPrice, leadRating, stateMeta, directionsUrl, photosSorted, hoursPill } from "@/lib/format";
+import { leadPrice, leadRating, stateMeta, directionsUrl, photosSorted, hoursPill, referenceSourceLabel } from "@/lib/format";
 import PlaceGlyph from "./PlaceGlyph";
 import PhotoViewer from "./PhotoViewer";
 import { useSheetDrag } from "./useSheetDrag";
@@ -124,7 +124,7 @@ export default function PlaceCard({
                 >
                   <Star size={11} strokeWidth={0} fill="currentColor" />
                   {rating.value.toFixed(1)}
-                  <span style={{ color: "var(--text-tertiary)" }}>{rating.mine ? "you" : "ggl"}</span>
+                  <span style={{ color: "var(--text-tertiary)" }}>{rating.mine ? "you" : referenceSourceLabel(place)}</span>
                 </span>
               )}
               <span style={{ color: "var(--text-secondary)" }}>{price.label}</span>

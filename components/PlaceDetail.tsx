@@ -285,7 +285,7 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
               </div>
             )}
             <div className="mt-2.5 flex items-center justify-between text-[12px]" style={{ color: "var(--text-tertiary)" }}>
-              <span>Google reference</span>
+              <span>{place.source === "swiggy" ? "Swiggy reference" : "Google reference"}</span>
               <span className="font-[family-name:var(--font-mono)]">
                 {place.googleRating != null ? `★ ${place.googleRating.toFixed(1)}` : "—"} · {priceSigns(place.googlePriceLevel)}
               </span>

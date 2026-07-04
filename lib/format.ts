@@ -12,7 +12,8 @@ export function budgetLabel(perPerson: number | null): string | null {
   return `₹${perPerson.toLocaleString("en-IN")}/person`;
 }
 
-// Once visited, your truth leads; Google stays as the cached reference.
+// Once visited, your truth leads; the captured source stays as the cached
+// reference (Google for most places, Swiggy for ones saved from Dineout).
 export function leadRating(p: Place): { value: number | null; mine: boolean } {
   if (p.status === "visited" && p.myRating != null) {
     return { value: p.myRating, mine: true };
@@ -25,6 +26,13 @@ export function leadPrice(p: Place): { label: string; mine: boolean } {
     return { label: budgetLabel(p.myBudgetPerPerson)!, mine: true };
   }
   return { label: priceSigns(p.googlePriceLevel), mine: false };
+}
+
+// "mine vs external" is a visible distinction throughout the app, not just a
+// DB detail — a Swiggy-sourced place's reference rating didn't come from
+// Google, so it shouldn't be labelled "ggl".
+export function referenceSourceLabel(p: Place): string {
+  return p.source === "swiggy" ? "swiggy" : "ggl";
 }
 
 export function stateMeta(p: Place) {
