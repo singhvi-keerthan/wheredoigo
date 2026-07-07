@@ -212,6 +212,12 @@ export function usePlace(id: string | null): Place | null {
   return id ? places.find((p) => p.id === id) ?? null : null;
 }
 
+// Non-hook read of one place from the in-memory mirror — for async helpers
+// (e.g. enrichment) that need the current record outside React render.
+export function getPlace(id: string): Place | null {
+  return read().find((p) => p.id === id) ?? null;
+}
+
 // Non-null when the last persist failed (storage full / unreadable store).
 export function usePersistError(): string | null {
   return useSyncExternalStore(
@@ -295,7 +301,7 @@ export function removePhoto(placeId: string, photoId: string) {
 
 type TagVocab = Record<TagNamespace, string[]>;
 const TAG_KEY = "imhungry.tags.v1";
-const EMPTY_VOCAB: TagVocab = { type: [], cuisine: [], occasion: [], vibe: [], practical: [] };
+const EMPTY_VOCAB: TagVocab = { type: [], cuisine: [], staple: [], occasion: [], vibe: [], practical: [] };
 
 let tagCache: TagVocab | null = null;
 const tagListeners = new Set<() => void>();

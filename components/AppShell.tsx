@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Search, Plus, MoreHorizontal, Download, Upload, MapPin, TriangleAlert, X } from "lucide-react";
-import { usePlaces, usePersistError, downloadBackup, importData } from "@/lib/store";
+import { Search, Plus, Menu, MapPin, TriangleAlert } from "lucide-react";
+import { usePlaces, usePersistError } from "@/lib/store";
 import { displayState, type DisplayState } from "@/lib/types";
 import MapView from "./MapView";
 import PlaceCard from "./PlaceCard";
@@ -11,6 +11,8 @@ import CommandPalette from "./CommandPalette";
 import AddPlaceSheet from "./AddPlaceSheet";
 import DecideSheet from "./DecideSheet";
 import PlaceWizard from "./PlaceWizard";
+import MenuSheet from "./MenuSheet";
+import BrowseSheet, { type BrowseMode } from "./BrowseSheet";
 
 type FilterKey = "all" | DisplayState;
 
@@ -58,11 +60,12 @@ export default function AppShell() {
   const [addQuery, setAddQuery] = useState<string | null>(null); // palette → + sheet carry-over
   const [decideOpen, setDecideOpen] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
-  // Guided form that opens right after a fresh add — "capture" enriches a new
-  // watchlist place (type/cuisine/vibe/.../note), "visit" logs a retroactive
-  // been-here in one go. Never opens for a duplicate (already-known place).
-  const [wizard, setWizard] = useState<{ placeId: string; mode: "capture" | "visit" } | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false); // backup menu
+  // Visit-logging form. A fresh watchlist add opens NO form — its details come
+  // from Google and the one-line note is taken on the add sheet. This only opens
+  // for "I've already been here", which logs a retroactive visit in one go.
+  const [visitPlaceId, setVisitPlaceId] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false); // the menu hub (browse + backup)
+  const [browseMode, setBrowseMode] = useState<BrowseMode | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -124,11 +127,11 @@ export default function AppShell() {
         </div>
         <button
           onClick={() => setMenuOpen(true)}
-          aria-label="Backup menu"
+          aria-label="Menu"
           className="press grid h-9 w-9 place-items-center rounded-full"
           style={GLASS}
         >
-          <MoreHorizontal size={17} style={{ color: "oklch(0.9 0 0)" }} />
+          <Menu size={17} style={{ color: "oklch(0.9 0 0)" }} />
         </button>
       </header>
 
@@ -327,22 +330,45 @@ export default function AppShell() {
             setAddQuery(null);
           }}
           initialQuery={addQuery ?? undefined}
-          // Adding drops the pin, selects it, then opens the guided form: a
-          // duplicate just reopens what's already there, "been already" goes
-          // straight into logging that visit, otherwise it's a fresh capture.
+          // Adding drops the pin and selects it. A duplicate just reopens what's
+          // already there; "been already" jumps straight into logging that
+          // visit; a fresh watchlist add opens no form — Google fills the
+          // details, the note was taken on the add sheet.
           onAdded={(id, opts) => {
             setSelectedId(id);
             if (opts?.duplicate) showToast("Already on your map — opened it");
-            else setWizard({ placeId: id, mode: opts?.beenAlready ? "visit" : "capture" });
+            else if (opts?.beenAlready) setVisitPlaceId(id);
           }}
         />
       )}
 
-      {wizard && (
-        <PlaceWizard placeId={wizard.placeId} mode={wizard.mode} onClose={() => setWizard(null)} />
+      {visitPlaceId && (
+        <PlaceWizard placeId={visitPlaceId} onClose={() => setVisitPlaceId(null)} />
       )}
 
-      {menuOpen && <BackupMenu onClose={() => setMenuOpen(false)} onDone={showToast} />}
+      {menuOpen && (
+        <MenuSheet
+          onClose={() => setMenuOpen(false)}
+          onOpenBrowse={(mode) => {
+            setMenuOpen(false);
+            setBrowseMode(mode);
+          }}
+          onToast={showToast}
+        />
+      )}
+
+      {browseMode && (
+        <BrowseSheet
+          mode={browseMode}
+          onClose={() => setBrowseMode(null)}
+          onPick={(id) => {
+            setBrowseMode(null);
+            setMenuOpen(false);
+            setSelectedId(id);
+            setDetailId(id);
+          }}
+        />
+      )}
 
       {decideOpen && (
         <DecideSheet
@@ -357,113 +383,5 @@ export default function AppShell() {
 
       <PlaceDetail id={detailId} onClose={() => setDetailId(null)} />
     </main>
-  );
-}
-
-// Export / import the whole library as one JSON file — the v1 backup story
-// (localStorage + IndexedDB are one "Clear Website Data" away from gone).
-function BackupMenu({ onClose, onDone }: { onClose: () => void; onDone: (msg: string) => void }) {
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  const doExport = () => {
-    onDone(`Exported ${downloadBackup()} places`);
-    onClose();
-  };
-
-  const doImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    if (!window.confirm("Importing replaces everything currently on your map. Continue?")) return;
-    try {
-      const count = importData(await file.text());
-      onDone(`Imported ${count} places`);
-      onClose();
-    } catch (err) {
-      window.alert((err as Error).message);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50" style={{ background: "rgba(10,8,12,0.64)" }} onClick={onClose}>
-      <div
-        className="absolute inset-x-0 bottom-0 px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-2"
-        style={{
-          background: "var(--bg-raised)",
-          borderTopLeftRadius: "var(--radius-lg)",
-          borderTopRightRadius: "var(--radius-lg)",
-          boxShadow: "var(--shadow-sheet)",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="mx-auto mb-3 h-[4px] w-10 rounded-full" style={{ background: "var(--ink-line)" }} />
-        <div className="flex items-center justify-between pb-3">
-          <h1
-            className="text-[22px] font-medium leading-none tracking-[-0.01em]"
-            style={{ fontFamily: "var(--font-display)", color: "var(--text-primary)" }}
-          >
-            Backup
-          </h1>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="press grid h-7 w-7 place-items-center rounded-full"
-            style={{ background: "var(--bg-elevated)", color: "var(--text-tertiary)" }}
-          >
-            <X size={14} strokeWidth={2.25} />
-          </button>
-        </div>
-
-        <div className="flex flex-col gap-2.5 pb-1">
-          <button
-            onClick={doExport}
-            className="press flex w-full items-center gap-3 rounded-[var(--radius)] px-3.5 py-3.5 text-left"
-            style={{ background: "var(--bg-elevated)", border: "1px solid var(--ink-line)" }}
-          >
-            <Download size={18} style={{ color: "var(--text-secondary)" }} />
-            <span className="min-w-0 flex-1">
-              <span className="block text-[15px] font-semibold" style={{ color: "var(--text-primary)" }}>
-                Export backup
-              </span>
-              <span className="block text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>
-                Everything — places, visits, photos — as one file
-              </span>
-            </span>
-          </button>
-          <button
-            onClick={() => fileRef.current?.click()}
-            className="press flex w-full items-center gap-3 rounded-[var(--radius)] px-3.5 py-3.5 text-left"
-            style={{ background: "var(--bg-elevated)", border: "1px solid var(--ink-line)" }}
-          >
-            <Upload size={18} style={{ color: "var(--text-secondary)" }} />
-            <span className="min-w-0 flex-1">
-              <span className="block text-[15px] font-semibold" style={{ color: "var(--text-primary)" }}>
-                Import backup
-              </span>
-              <span className="block text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>
-                Replaces the current library with a backup file
-              </span>
-            </span>
-          </button>
-        </div>
-
-        {/* Map attribution is legally required to stay visible — it used to
-            be its own small circle floating on the map, which just read as a
-            second, misaligned icon next to this one. Folded in here instead
-            of adding a second visible mark. */}
-        <p className="mt-3 px-1 text-[11px]" style={{ color: "var(--text-tertiary)" }}>
-          Map data ©{" "}
-          <a href="https://carto.com/about-carto/" target="_blank" rel="noreferrer" className="underline">
-            CARTO
-          </a>
-          , ©{" "}
-          <a href="https://www.openstreetmap.org/about/" target="_blank" rel="noreferrer" className="underline">
-            OpenStreetMap
-          </a>{" "}
-          contributors
-        </p>
-        <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={doImport} />
-      </div>
-    </div>
   );
 }

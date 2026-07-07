@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { addPlace, findDuplicate } from "@/lib/store";
 import { parseLocation, isUrl } from "@/lib/capture";
-import { searchPlaces, nearbyPlaces, resolveMapsLink, attachGooglePhoto, type GooglePlace } from "@/lib/places";
+import { searchPlaces, nearbyPlaces, resolveMapsLink, enrichPlaceFromGoogle, type GooglePlace } from "@/lib/places";
 import { tagsFromGoogleTypes } from "@/lib/googleTags";
 import { priceSigns } from "@/lib/format";
 import type { CaptureSource } from "@/lib/types";
@@ -214,7 +214,9 @@ export default function AddPlaceSheet({
         source: "search",
         enrichedAt: new Date().toISOString(),
       });
-      void attachGooglePhoto(place.id, r.photoName);
+      // Enrich-once from Place Details: the editorial "lowdown", refreshed
+      // hours, and a cover photo — the research the assistant reads later.
+      void enrichPlaceFromGoogle(place.id, r.placeId);
       return place.id;
     });
   };

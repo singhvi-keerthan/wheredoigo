@@ -9,9 +9,12 @@ export type DisplayState = "never_again" | "favorite" | "visited" | "watchlist";
 export type CaptureSource = "search" | "paste" | "manual" | "swiggy";
 
 // Tag namespaces — fixed so tags don't rot and filters stay obvious.
+// `staple` = the specific dish/craving a place is your go-to for ("pizza",
+// "dosa") — orthogonal to cuisine, so "just pizza" is a first-class ask.
 export type TagNamespace =
   | "type"
   | "cuisine"
+  | "staple"
   | "occasion"
   | "vibe"
   | "practical";
@@ -84,6 +87,8 @@ export interface Place {
   googleTypes?: string[]; // raw Google place types, for enrichment/heuristics
   openingPeriods?: OpeningPeriod[]; // from Places details; powers open-now
   hoursText?: string[]; // human weekday descriptions (display only)
+  summary?: string; // Google's editorial "lowdown" — cached reference, the
+  // initial research the assistant reads on a not-yet-visited place
 
   source: CaptureSource;
   enrichedAt: string | null; // for the ~30-day refresh rule
@@ -114,6 +119,24 @@ export const TAG_OPTIONS: Record<TagNamespace, string[]> = {
     "korean",
     "mughlai",
   ],
+  // The "I just want ___" cravings — a place can carry several. Distinct from
+  // cuisine (an italian place may be your pizza AND your pasta spot).
+  staple: [
+    "pizza",
+    "pasta",
+    "burger",
+    "burrito",
+    "tacos",
+    "dosa",
+    "biryani",
+    "ramen",
+    "sushi",
+    "noodles",
+    "sandwich",
+    "momos",
+    "wings",
+    "shawarma",
+  ],
   occasion: ["date", "family", "friends", "solo", "work", "celebration"],
   vibe: [
     "quiet",
@@ -139,6 +162,7 @@ export const TAG_OPTIONS: Record<TagNamespace, string[]> = {
 export const NAMESPACE_LABELS: Record<TagNamespace, string> = {
   type: "Type",
   cuisine: "Cuisine",
+  staple: "Staple",
   occasion: "Occasion",
   vibe: "Vibe",
   practical: "Practical",

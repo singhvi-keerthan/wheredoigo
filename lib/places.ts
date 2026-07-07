@@ -2,7 +2,7 @@
 
 import type { GooglePlace } from "./google";
 import { isAreaResult } from "./geo";
-import { addPhoto } from "./store";
+import { addPhoto, updatePlace, getPlace } from "./store";
 import { DEFAULT_VIEW } from "./seed";
 
 // Thin client wrappers around the server route handlers. Keep the response
@@ -91,6 +91,32 @@ export async function resolveMapsLink(
     return await res.json();
   } catch {
     return { name: null, lat: null, lng: null, error: "fetch_failed" };
+  }
+}
+
+// Enrich-once from Google's fuller record (Place Details): refresh rating /
+// price / hours / area, pull the editorial "lowdown", and attach a cover photo
+// if you don't already have one. Google-derived fields are a cached reference —
+// this never touches your own rating/notes/photos. Fire-and-forget; a miss just
+// leaves the last-known values in place. Called on save and on a stale re-open.
+export async function enrichPlaceFromGoogle(placeId: string, googlePlaceId: string) {
+  const g = await getPlaceDetails(googlePlaceId);
+  if (!g) return;
+  updatePlace(placeId, {
+    googleRating: g.googleRating,
+    googlePriceLevel: g.googlePriceLevel,
+    googleTypes: g.googleTypes,
+    openingPeriods: g.openingPeriods,
+    hoursText: g.hoursText,
+    ...(g.area ? { area: g.area } : {}),
+    ...(g.summary ? { summary: g.summary } : {}),
+    enrichedAt: new Date().toISOString(),
+  });
+  // Cover photo: only when Google returns one for this key AND you have no
+  // Google photo yet (your own uploads always lead; this is the fallback).
+  const p = getPlace(placeId);
+  if (g.photoName && p && !p.photos.some((ph) => ph.source === "google")) {
+    void attachGooglePhoto(placeId, g.photoName);
   }
 }
 

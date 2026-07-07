@@ -48,6 +48,7 @@ export function parseFallback(text: string): DecideQuery {
   const fields: { ns: keyof typeof TAG_OPTIONS; inc: keyof DecideQuery; exc: keyof DecideQuery }[] = [
     { ns: "type", inc: "types", exc: "excludeTypes" },
     { ns: "cuisine", inc: "cuisines", exc: "excludeCuisines" },
+    { ns: "staple", inc: "staples", exc: "excludeStaples" },
     { ns: "occasion", inc: "occasions", exc: "excludeOccasions" },
     { ns: "vibe", inc: "vibes", exc: "excludeVibes" },
     { ns: "practical", inc: "practical", exc: "excludePractical" },

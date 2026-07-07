@@ -36,6 +36,12 @@ const TYPE_MAP: Record<string, { ns: TagNamespace; value: string }> = {
   thai_restaurant: { ns: "cuisine", value: "thai" },
   mexican_restaurant: { ns: "cuisine", value: "mexican" },
   korean_restaurant: { ns: "cuisine", value: "korean" },
+  // → staple (the specific dish, when Google names it unambiguously)
+  pizza_restaurant: { ns: "staple", value: "pizza" },
+  hamburger_restaurant: { ns: "staple", value: "burger" },
+  ramen_restaurant: { ns: "staple", value: "ramen" },
+  sushi_restaurant: { ns: "staple", value: "sushi" },
+  sandwich_shop: { ns: "staple", value: "sandwich" },
   // → practical
   vegetarian_restaurant: { ns: "practical", value: "vegetarian" },
   vegan_restaurant: { ns: "practical", value: "vegan-options" },

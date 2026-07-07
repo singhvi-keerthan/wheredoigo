@@ -34,15 +34,16 @@ export default function PlaceCard({
   const { sheetRef, handleProps } = useSheetDrag(onClose);
 
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      const dataUrl = await resizeImage(file);
-      addPhoto(place.id, { dataUrl, source: "mine", scope: "place", visitId: null });
-    } catch {
-      /* ignore bad image */
-    }
+    const files = Array.from(e.target.files ?? []);
     e.target.value = "";
+    for (const file of files) {
+      try {
+        const dataUrl = await resizeImage(file);
+        addPhoto(place.id, { dataUrl, source: "mine", scope: "place", visitId: null });
+      } catch {
+        /* ignore bad image */
+      }
+    }
   };
 
   return (
@@ -203,7 +204,7 @@ export default function PlaceCard({
         </div>
       </div>
 
-      <input ref={uploadRef} type="file" accept="image/*" hidden onChange={onFile} />
+      <input ref={uploadRef} type="file" accept="image/*" multiple hidden onChange={onFile} />
       <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={onFile} />
 
       {/* watchlist → quick log: been here / skip it (no drawer) */}

@@ -221,11 +221,71 @@ body {
   animation: lightOn 0.5s var(--ease-spring) both;
 }
 
+/* ---- live "you are here" — the avatar dropped at your GPS fix ----
+   Not a place pin: colour = amber locator (accent), not a state hue. A ground
+   shadow + a slow expanding ring read as "me, here" without competing with the
+   pins. Transient only — the location is never stored. */
+.me-marker {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  pointer-events: none; /* never intercept map pans/taps */
+}
+.me-avatar {
+  position: relative;
+  z-index: 1;
+  display: block;
+  height: 60px;
+  width: auto;
+  transform: translateY(3px); /* feet meet the ground ring */
+  image-rendering: -webkit-optimize-contrast; /* keep pixel edges crisp when scaled down */
+  filter: drop-shadow(0 4px 5px rgba(0, 0, 0, 0.32));
+}
+.me-shadow {
+  position: absolute;
+  left: 50%;
+  bottom: 1px;
+  width: 30px;
+  height: 9px;
+  border-radius: 999px;
+  background: rgba(10, 10, 14, 0.3);
+  filter: blur(3px);
+  transform: translateX(-50%);
+}
+.me-pulse {
+  position: absolute;
+  left: 50%;
+  bottom: -3px;
+  width: 40px;
+  height: 18px; /* flattened → a ring lying on the ground in perspective */
+  border-radius: 999px;
+  background: radial-gradient(closest-side, rgba(255, 168, 80, 0.55), rgba(255, 168, 80, 0));
+  transform: translate(-50%, 50%) scale(0.5);
+  animation: me-ping 2.6s var(--ease-out) infinite;
+}
+@keyframes me-ping {
+  0% {
+    transform: translate(-50%, 50%) scale(0.45);
+    opacity: 0.6;
+  }
+  70%,
+  100% {
+    transform: translate(-50%, 50%) scale(1.7);
+    opacity: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .light-on,
   .animate-rise,
   .animate-pop {
     animation: none;
+  }
+  .me-pulse {
+    animation: none;
+    opacity: 0.4;
+    transform: translate(-50%, 50%) scale(1.1);
   }
   .press:active {
     transform: none;

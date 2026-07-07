@@ -17,6 +17,7 @@ export interface DecideQuery {
   lifecycle?: "any" | "watchlist" | "visited" | "favorites";
   types?: string[]; // tag values from the "type" namespace
   cuisines?: string[];
+  staples?: string[]; // "pizza", "dosa" — the specific-dish ask
   occasions?: string[];
   vibes?: string[];
   practical?: string[];
@@ -25,6 +26,7 @@ export interface DecideQuery {
   // to the positive fields so the model (and sanitizer) can mirror them 1:1.
   excludeTypes?: string[];
   excludeCuisines?: string[];
+  excludeStaples?: string[];
   excludeOccasions?: string[];
   excludeVibes?: string[];
   excludePractical?: string[];
@@ -86,6 +88,7 @@ function preference(p: Place, ns: TagNamespace, wanted?: string[]): boolean | nu
 const PREFS: { ns: TagNamespace; key: keyof DecideQuery }[] = [
   { ns: "type", key: "types" },
   { ns: "cuisine", key: "cuisines" },
+  { ns: "staple", key: "staples" },
   { ns: "occasion", key: "occasions" },
   { ns: "vibe", key: "vibes" },
   { ns: "practical", key: "practical" },
@@ -94,6 +97,7 @@ const PREFS: { ns: TagNamespace; key: keyof DecideQuery }[] = [
 const EXCLUDES: { ns: TagNamespace; key: keyof DecideQuery }[] = [
   { ns: "type", key: "excludeTypes" },
   { ns: "cuisine", key: "excludeCuisines" },
+  { ns: "staple", key: "excludeStaples" },
   { ns: "occasion", key: "excludeOccasions" },
   { ns: "vibe", key: "excludeVibes" },
   { ns: "practical", key: "excludePractical" },
@@ -213,9 +217,10 @@ export function rankPlaces(
     }
 
     // Note/keyword match — the most specific signal there is: it's literally the
-    // reason you saved the place. Matched against your own note + the name.
+    // reason you saved the place. Matched against your own note + the name +
+    // Google's lowdown (so "pizza" finds a place whose research mentions it).
     if (query.keywords?.length) {
-      const hay = `${p.notes} ${p.name}`.toLowerCase();
+      const hay = `${p.notes} ${p.name} ${p.summary ?? ""}`.toLowerCase();
       let hits = 0;
       for (const kw of query.keywords) if (kw.length >= 3 && hay.includes(kw)) hits++;
       if (hits) {

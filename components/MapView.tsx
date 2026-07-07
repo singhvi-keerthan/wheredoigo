@@ -45,6 +45,20 @@ export default function MapView({
   const mapRef = useRef<MapRef | null>(null);
   const [band, setBand] = useState<PinVariant>(() => bandFor(DEFAULT_VIEW.zoom));
 
+  // Live "you are here": watch the GPS fix and drop the avatar marker at it.
+  // Transient — the location is used to show where I am, never stored as a
+  // place. Silently absent if permission is denied or location is unavailable.
+  const [me, setMe] = useState<{ lat: number; lng: number } | null>(null);
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("geolocation" in navigator)) return;
+    const id = navigator.geolocation.watchPosition(
+      (pos) => setMe({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => setMe(null),
+      { enableHighAccuracy: true, maximumAge: 15_000, timeout: 20_000 }
+    );
+    return () => navigator.geolocation.clearWatch(id);
+  }, []);
+
   // Fly to a place when it becomes selected (pin tap or search pick). Bottom
   // padding keeps the pin above the docked sheet.
   useEffect(() => {
@@ -150,6 +164,18 @@ export default function MapView({
           </Marker>
         );
       })}
+
+      {/* live "you are here" — the avatar at my current GPS fix. Sits above the
+          place pins but below a selected one; never intercepts map gestures. */}
+      {me && (
+        <Marker longitude={me.lng} latitude={me.lat} anchor="bottom" style={{ zIndex: 5, pointerEvents: "none" }}>
+          <div className="me-marker light-on" aria-label="You are here">
+            <span className="me-pulse" />
+            <span className="me-shadow" />
+            <img src="/me.png" alt="" className="me-avatar" draggable={false} />
+          </div>
+        </Marker>
+      )}
     </Map>
   );
 }

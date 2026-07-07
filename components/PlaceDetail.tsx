@@ -10,7 +10,7 @@ import {
 } from "@/lib/store";
 import { TAG_OPTIONS, NAMESPACE_LABELS, isOpenNow, type TagNamespace, type Tag } from "@/lib/types";
 import { stateMeta, priceSigns, directionsUrl, relativeDate, photosSorted } from "@/lib/format";
-import { getPlaceDetails } from "@/lib/places";
+import { enrichPlaceFromGoogle } from "@/lib/places";
 import { resizeImage } from "@/lib/image";
 import PlaceWizard from "./PlaceWizard";
 import PhotoViewer from "./PhotoViewer";
@@ -31,8 +31,9 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
   const [viewerIndex, setViewerIndex] = useState<number | null>(null); // tap again → full-screen swipe
   const { sheetRef, handleProps } = useSheetDrag(onClose);
 
-  // Refresh Google rating / price / hours when a linked place opens and its
-  // cached data is missing or stale (~30 days). Runs once per place per open.
+  // Refresh Google rating / price / hours / lowdown + cover photo when a linked
+  // place opens and its cached data is missing or stale (~30 days). Runs once
+  // per place per open; never overwrites your own data.
   const placeId = place?.id ?? null;
   const googleId = place?.googlePlaceId ?? null;
   const enrichedAt = place?.enrichedAt ?? null;
@@ -42,18 +43,7 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
     const fresh = enrichedAt && Date.now() - new Date(enrichedAt).getTime() < STALE_MS;
     if (fresh) return;
     enrichedRef.current = placeId;
-    getPlaceDetails(googleId).then((g) => {
-      if (!g) return;
-      updatePlace(placeId, {
-        googleRating: g.googleRating,
-        googlePriceLevel: g.googlePriceLevel,
-        googleTypes: g.googleTypes,
-        openingPeriods: g.openingPeriods,
-        hoursText: g.hoursText,
-        ...(g.area ? { area: g.area } : {}),
-        enrichedAt: new Date().toISOString(),
-      });
-    });
+    void enrichPlaceFromGoogle(placeId, googleId);
   }, [placeId, googleId, enrichedAt]);
 
   if (!place) return null;
@@ -73,17 +63,19 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
     );
   };
 
-  // Place-scoped photo (library or camera — same handler).
+  // Place-scoped photos (library multi-select or camera — same handler). Each
+  // file is resized sequentially (low peak memory) and added; bad frames skip.
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      const dataUrl = await resizeImage(file);
-      addPhoto(place.id, { dataUrl, source: "mine", scope: "place", visitId: null });
-    } catch {
-      /* ignore bad image */
-    }
+    const files = Array.from(e.target.files ?? []);
     e.target.value = "";
+    for (const file of files) {
+      try {
+        const dataUrl = await resizeImage(file);
+        addPhoto(place.id, { dataUrl, source: "mine", scope: "place", visitId: null });
+      } catch {
+        /* ignore bad image */
+      }
+    }
   };
 
   return (
@@ -228,7 +220,7 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
                 <PhotoBtn onClick={() => cameraRef.current?.click()} icon={<Camera size={15} />} label="Take photo" />
               </div>
             )}
-            <input ref={uploadRef} type="file" accept="image/*" hidden onChange={onFile} />
+            <input ref={uploadRef} type="file" accept="image/*" multiple hidden onChange={onFile} />
             <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={onFile} />
           </div>
 
@@ -254,6 +246,19 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
               <Ban size={18} />
             </button>
           </div>
+
+          {/* the lowdown — Google's editorial line, the initial research on a
+              place you haven't been to yet. Reference info (not your note). */}
+          {place.summary && (
+            <Section title="The lowdown">
+              <p className="text-[14.5px] leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+                {place.summary}
+              </p>
+              <p className="mt-1.5 text-[11px] uppercase tracking-[0.06em]" style={{ color: "var(--text-tertiary)" }}>
+                via Google
+              </p>
+            </Section>
+          )}
 
           {/* lifecycle + ratings */}
           <Section title="Your take">
@@ -409,7 +414,7 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
       </div>
     </div>
     {visitWizard && (
-      <PlaceWizard placeId={place.id} mode="visit" onClose={() => setVisitWizard(false)} />
+      <PlaceWizard placeId={place.id} onClose={() => setVisitWizard(false)} />
     )}
     {viewerIndex !== null && (
       <PhotoViewer

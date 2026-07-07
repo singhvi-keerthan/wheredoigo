@@ -21,51 +21,32 @@ import {
 } from "@/lib/types";
 import { resizeImage } from "@/lib/image";
 
-// The guided, one-question-at-a-time capture form. Two flows share the same
-// chrome (progress + Back/Next + submit):
-//   • "capture" — enrich a brand-new watchlist place (type → … → note).
-//   • "visit"   — log the watchlist → visited transition (when → … → photo).
-// Editing an already-known place stays on the free-form PlaceDetail sheet; this
-// is only for first capture and the visited transition, where a form fits.
-type Mode = "capture" | "visit";
+// The guided, one-question-at-a-time form for logging a visit — the
+// watchlist → visited transition (when → … → photos). A fresh watchlist
+// CAPTURE no longer uses a form: the place's details come from Google, and the
+// only human input (a one-line note) is taken on the add sheet. Editing an
+// already-known place stays on the free-form PlaceDetail sheet; this is only
+// for logging a visit, where a form fits.
 
 const today = () => new Date().toISOString().slice(0, 10);
 
-// Per-flow step order (locked with Keerthan): capture = Full, visit = Standard+tags.
-const CAPTURE_STEPS = ["type", "cuisine", "vibe", "occasion", "practical", "photo", "note"] as const;
 const VISIT_STEPS = ["when", "who", "rating", "spend", "notes", "tags", "photo"] as const;
 
 const PROMPTS: Record<string, { title: string; sub?: string }> = {
-  type: { title: "What kind of place is this?", sub: "Pick all that fit." },
-  cuisine: { title: "What's the food?", sub: "Skip if it's not about the food." },
-  vibe: { title: "What's the vibe?" },
-  occasion: { title: "Good for which occasions?" },
-  practical: { title: "Anything practical?", sub: "Veg, parking, groups, late-night…" },
-  photo: { title: "Add a photo", sub: "Optional — a screenshot or your own shot." },
-  note: { title: "A quick note", sub: "What to order, who to bring, when to go." },
   when: { title: "When did you go?" },
   who: { title: "Who was with you?", sub: "Optional." },
   rating: { title: "How was it?" },
   spend: { title: "Spend per person?", sub: "Roughly — optional." },
   notes: { title: "Anything to remember?", sub: "What you ate, what to order again." },
   tags: { title: "Tweak the tags?", sub: "Now that you've actually been." },
-};
-
-const NS_BY_STEP: Record<string, TagNamespace> = {
-  type: "type",
-  cuisine: "cuisine",
-  vibe: "vibe",
-  occasion: "occasion",
-  practical: "practical",
+  photo: { title: "Add photos", sub: "Optional — shots from the visit. Pick as many as you like." },
 };
 
 export default function PlaceWizard({
   placeId,
-  mode,
   onClose,
 }: {
   placeId: string;
-  mode: Mode;
   onClose: () => void;
 }) {
   const place = usePlace(placeId);
@@ -74,14 +55,12 @@ export default function PlaceWizard({
   const cameraRef = useRef<HTMLInputElement>(null);
   const dateRef = useRef<HTMLInputElement>(null);
 
-  const steps = mode === "capture" ? CAPTURE_STEPS : VISIT_STEPS;
+  const steps = VISIT_STEPS;
   const [step, setStep] = useState(0);
 
-  // Draft — everything is held locally and committed on submit (visit) or on
-  // submit/close (capture, where writes are idempotent so partial work is kept).
+  // Draft — everything is held locally and committed on submit.
   const [draftTags, setDraftTags] = useState<Tag[]>(() => place?.tags ?? []);
-  const [note, setNote] = useState(() => place?.notes ?? "");
-  const [photo, setPhoto] = useState<string | null>(null);
+  const [photos, setPhotos] = useState<string[]>([]);
   const [vDate, setVDate] = useState(today());
   const [vWho, setVWho] = useState("");
   const [vRating, setVRating] = useState<number | null>(null);
@@ -94,13 +73,6 @@ export default function PlaceWizard({
   const key = steps[step];
   const last = step === steps.length - 1;
 
-  const commitCapture = () => {
-    if (!place) return;
-    setTags(place.id, draftTags);
-    if (note.trim() !== place.notes) updatePlace(place.id, { notes: note.trim() });
-    if (photo) addPhoto(place.id, { dataUrl: photo, source: "mine", scope: "place", visitId: null });
-  };
-
   const commitVisit = () => {
     if (!place) return;
     const v = addVisit(place.id, {
@@ -109,7 +81,11 @@ export default function PlaceWizard({
       notes: vNotes.trim(),
       rating: vRating,
     });
-    if (v && photo) addPhoto(place.id, { dataUrl: photo, source: "mine", scope: "visit", visitId: v.id });
+    if (v) {
+      for (const dataUrl of photos) {
+        addPhoto(place.id, { dataUrl, source: "mine", scope: "visit", visitId: v.id });
+      }
+    }
     const patch: Partial<NonNullable<typeof place>> = {};
     if (vSpend.trim()) patch.myBudgetPerPerson = Math.round(+vSpend) || null;
     // Private sub-ratings (assistant-only) — merge onto whatever's there.
@@ -119,15 +95,9 @@ export default function PlaceWizard({
     if (Object.keys(patch).length) updatePlace(place.id, patch);
   };
 
-  // Capture keeps partial work on close; a half-logged visit is meaningless, so
-  // closing the visit flow cancels it.
-  const close = () => {
-    if (mode === "capture") commitCapture();
-    onClose();
-  };
+  // A half-logged visit is meaningless, so closing cancels it.
   const submit = () => {
-    if (mode === "capture") commitCapture();
-    else commitVisit();
+    commitVisit();
     onClose();
   };
 
@@ -152,7 +122,7 @@ export default function PlaceWizard({
   // new tag), so never hijack it there.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close();
+      if (e.key === "Escape") onClose();
       const inField = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
       if (e.key === "Enter" && !inField) {
         e.preventDefault();
@@ -163,15 +133,19 @@ export default function PlaceWizard({
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  // Resize every picked file (sequentially — keeps peak memory low on a big
+  // multi-select) and append. Bad frames are skipped, not fatal.
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      setPhoto(await resizeImage(file));
-    } catch {
-      /* ignore bad image */
-    }
+    const files = Array.from(e.target.files ?? []);
     e.target.value = "";
+    for (const file of files) {
+      try {
+        const dataUrl = await resizeImage(file);
+        setPhotos((prev) => [...prev, dataUrl]);
+      } catch {
+        /* ignore bad image */
+      }
+    }
   };
 
   if (!place) return null;
@@ -189,7 +163,7 @@ export default function PlaceWizard({
   const pct = ((step + 1) / steps.length) * 100;
 
   return (
-    <div className="fixed inset-0 z-50" style={{ background: "rgba(6,7,10,0.72)" }} onClick={close}>
+    <div className="fixed inset-0 z-50" style={{ background: "rgba(6,7,10,0.72)" }} onClick={onClose}>
       <div
         className="absolute inset-x-0 bottom-0 flex flex-col"
         style={{
@@ -214,7 +188,7 @@ export default function PlaceWizard({
               {step + 1}/{steps.length}
             </span>
             <button
-              onClick={close}
+              onClick={onClose}
               aria-label="Close"
               className="press grid h-7 w-7 place-items-center rounded-full"
               style={{ background: "var(--bg-elevated)", color: "var(--text-tertiary)" }}
@@ -223,7 +197,7 @@ export default function PlaceWizard({
             </button>
           </div>
           <p className="mt-3 text-[11px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--text-tertiary)" }}>
-            {mode === "capture" ? "New place" : "Log a visit"} · {place.name}
+            Log a visit · {place.name}
           </p>
         </div>
 
@@ -242,18 +216,6 @@ export default function PlaceWizard({
           )}
 
           <div className="mt-5 pb-4">
-            {NS_BY_STEP[key] && (
-              <ChipMulti
-                options={Array.from(new Set([...TAG_OPTIONS[NS_BY_STEP[key]], ...customTags[NS_BY_STEP[key]]]))}
-                isOn={(v) => tagOn(NS_BY_STEP[key], v)}
-                onToggle={(v) => toggleTag(NS_BY_STEP[key], v)}
-                onAdd={(raw) => {
-                  const v = addCustomTag(NS_BY_STEP[key], raw);
-                  if (v && !tagOn(NS_BY_STEP[key], v)) toggleTag(NS_BY_STEP[key], v);
-                }}
-              />
-            )}
-
             {key === "tags" && (
               <div className="flex flex-col gap-4">
                 {(Object.keys(TAG_OPTIONS) as TagNamespace[]).map((ns) => (
@@ -273,18 +235,6 @@ export default function PlaceWizard({
                   </div>
                 ))}
               </div>
-            )}
-
-            {key === "note" && (
-              <textarea
-                autoFocus
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                placeholder="What to order, who to bring, when to go…"
-                rows={5}
-                className="w-full resize-none bg-transparent text-[16px] leading-relaxed outline-none"
-                style={{ color: "var(--text-primary)" }}
-              />
             )}
 
             {key === "when" && (
@@ -358,25 +308,32 @@ export default function PlaceWizard({
 
             {key === "photo" && (
               <div>
-                {photo ? (
-                  <div className="relative w-full overflow-hidden" style={{ height: 200, borderRadius: "var(--radius)" }}>
-                    <img src={photo} alt="" className="h-full w-full object-cover" />
-                    <button
-                      onClick={() => setPhoto(null)}
-                      aria-label="Remove photo"
-                      className="press absolute right-2 top-2 grid h-8 w-8 place-items-center rounded-full"
-                      style={{ background: "rgba(6,8,13,0.7)", color: "#fff" }}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-2.5 sm:flex-row">
-                    <WideBtn onClick={() => uploadRef.current?.click()} icon={<ImagePlus size={17} />} label="Upload" />
-                    <WideBtn onClick={() => cameraRef.current?.click()} icon={<Camera size={17} />} label="Take photo" />
+                {photos.length > 0 && (
+                  <div className="scroll-quiet mb-2.5 flex gap-2 overflow-x-auto pb-1">
+                    {photos.map((src, i) => (
+                      <div
+                        key={i}
+                        className="relative shrink-0 overflow-hidden"
+                        style={{ width: 128, height: 160, borderRadius: "var(--radius-sm)", background: "var(--bg-elevated)" }}
+                      >
+                        <img src={src} alt="" className="h-full w-full object-cover" />
+                        <button
+                          onClick={() => setPhotos((prev) => prev.filter((_, j) => j !== i))}
+                          aria-label="Remove photo"
+                          className="press absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full"
+                          style={{ background: "rgba(6,8,13,0.7)", color: "#fff" }}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 )}
-                <input ref={uploadRef} type="file" accept="image/*" hidden onChange={onFile} />
+                <div className="flex flex-col gap-2.5 sm:flex-row">
+                  <WideBtn onClick={() => uploadRef.current?.click()} icon={<ImagePlus size={17} />} label={photos.length ? "Add more" : "Upload"} />
+                  <WideBtn onClick={() => cameraRef.current?.click()} icon={<Camera size={17} />} label="Take photo" />
+                </div>
+                <input ref={uploadRef} type="file" accept="image/*" multiple hidden onChange={onFile} />
                 <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={onFile} />
               </div>
             )}
@@ -407,7 +364,7 @@ export default function PlaceWizard({
               {last ? (
                 <>
                   <Check size={17} strokeWidth={2.75} />
-                  {mode === "capture" ? "Save to watchlist" : "Log visit"}
+                  Log visit
                 </>
               ) : (
                 <>

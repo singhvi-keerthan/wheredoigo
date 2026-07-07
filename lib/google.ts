@@ -23,15 +23,18 @@ export interface GooglePlace {
   googleTypes: string[];
   openingPeriods: OpeningPeriod[];
   hoursText: string[];
+  summary: string; // Google's one-line editorial summary — the "lowdown"
   photoName: string | null; // first photo resource name (fetched once, on save)
 }
 
-// Field mask shared by search + details. `photos` here is just the resource
-// NAME (free with the response); the metered Photo media call happens once per
-// saved place via /api/places/photo — never on redisplay.
-// addressComponents powers the `area` label + area search.
+// Field masks. `photos` here is just the resource NAME (free with the response);
+// the metered Photo media call happens once per saved place via
+// /api/places/photo — never on redisplay. addressComponents powers the `area`
+// label + area search. `editorialSummary` (the "lowdown") is on the DETAIL mask
+// only: the details call runs once per place on save/refresh, so it doesn't
+// raise the SKU tier of the high-frequency search typeahead + geocode probes.
 export const FIELD_MASK_DETAIL =
-  "id,displayName,formattedAddress,addressComponents,location,rating,priceLevel,types,regularOpeningHours,photos";
+  "id,displayName,formattedAddress,addressComponents,location,rating,priceLevel,types,regularOpeningHours,editorialSummary,photos";
 export const FIELD_MASK_SEARCH =
   "places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location,places.rating,places.priceLevel,places.types,places.regularOpeningHours,places.photos";
 
@@ -87,6 +90,7 @@ export function mapGooglePlace(p: any): GooglePlace {
     hoursText: Array.isArray(p.regularOpeningHours?.weekdayDescriptions)
       ? p.regularOpeningHours.weekdayDescriptions
       : [],
+    summary: typeof p.editorialSummary?.text === "string" ? p.editorialSummary.text : "",
     photoName: typeof p.photos?.[0]?.name === "string" ? p.photos[0].name : null,
   };
 }
