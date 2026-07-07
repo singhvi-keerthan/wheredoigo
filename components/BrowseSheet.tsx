@@ -8,14 +8,16 @@ import { NAMESPACE_LABELS, type Place, type TagNamespace } from "@/lib/types";
 import { coverPhoto, photosSorted, leadRating, stateMeta, hoursPill, directionsUrl } from "@/lib/format";
 import PlaceGlyph from "./PlaceGlyph";
 
-// The browse layer — reached from the menu, laid over the map. Four ways into
+// The browse layer — reached from the menu, laid over the map. Five ways into
 // the same library that the map+search don't give you: a photo-first Gallery to
-// decide by sight, and grouped lists by Cuisine, Staple, and Area. Read-only
+// decide by sight, and grouped lists by Type, Cuisine, Staple, and Area (Type
+// is where a café/bar/dessert spot lives — it's not a cuisine). Read-only
 // discovery; tapping anything hands the place back to the map (select + open).
-export type BrowseMode = "gallery" | "cuisine" | "staple" | "area";
+export type BrowseMode = "gallery" | "type" | "cuisine" | "staple" | "area";
 
 const TITLES: Record<BrowseMode, string> = {
   gallery: "Gallery",
+  type: "By type",
   cuisine: "By cuisine",
   staple: "Staples",
   area: "By area",
@@ -84,7 +86,8 @@ export default function BrowseSheet({
       : [];
 
   const groups =
-    mode === "cuisine" ? tagGroups(places, "cuisine")
+    mode === "type" ? tagGroups(places, "type")
+    : mode === "cuisine" ? tagGroups(places, "cuisine")
     : mode === "staple" ? tagGroups(places, "staple")
     : mode === "area" ? areaGroups(places)
     : [];

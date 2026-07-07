@@ -93,6 +93,13 @@ export interface Place {
   source: CaptureSource;
   enrichedAt: string | null; // for the ~30-day refresh rule
   createdAt: string;
+  // Sync bookkeeping (v2 cloud store). `updatedAt` drives per-record
+  // last-write-wins across devices; absent on records written before sync
+  // existed — treat a missing value as `createdAt`. `deletedAt` is a
+  // soft-delete tombstone: hidden from every read, but kept and synced so a
+  // deletion propagates instead of the place re-appearing on the next pull.
+  updatedAt?: string;
+  deletedAt?: string | null;
 }
 
 // The subjective tag namespaces a user hand-picks (type/cuisine come from Google).

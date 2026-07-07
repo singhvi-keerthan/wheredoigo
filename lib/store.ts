@@ -10,13 +10,17 @@ import { idbAvailable, idbDeletePhoto, idbGetAllPhotos, idbPutPhoto } from "./ph
 // IndexedDB (lib/photoStore.ts) so photos can't blow the ~5MB localStorage
 // quota. This module keeps a fully-hydrated in-memory mirror (photos carry
 // their dataUrls) and notifies React via useSyncExternalStore. v2 swaps the
-// persistence layer for Supabase without changing the call sites.
+// persistence layer for Neon (Postgres) without changing the call sites.
 // ---------------------------------------------------------------------------
 
 const KEY = "imhungry.places.v1";
 
 let cache: Place[] | null = null;
 const listeners = new Set<() => void>();
+// Sync engine (lib/sync/client.ts) subscribes here to learn which records
+// changed locally so it can push them. applyRemotePlaces() deliberately does
+// NOT notify these — pulled records must not be pushed straight back.
+const localChangeListeners = new Set<(ids: string[]) => void>();
 // Stable reference for the server/initial snapshot (must not be re-created per call).
 const EMPTY: Place[] = [];
 
@@ -157,6 +161,12 @@ function commit(next: Place[]) {
   cache = next;
   notify();
 
+  // Announce locally-changed records (adds, edits, soft-deletes — all still
+  // present in `next`) so the sync engine can push them.
+  const prevById = new Map(prev.map((p) => [p.id, p]));
+  const changedIds = next.filter((p) => prevById.get(p.id) !== p).map((p) => p.id);
+  if (changedIds.length) localChangeListeners.forEach((l) => l(changedIds));
+
   void (async () => {
     if (idbAvailable()) {
       // New photos → IDB first, then strip from the LS copy.
@@ -197,12 +207,25 @@ const uid = () =>
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2);
 
+// Tombstones (soft-deleted places) stay in `cache` so deletions sync, but are
+// hidden from every UI read. Memoised by the source array's identity so
+// useSyncExternalStore sees a stable snapshot between commits (returns the same
+// ref when there are no tombstones, so no needless re-renders).
+let visibleMemo: { src: Place[]; out: Place[] } | null = null;
+function readVisible(): Place[] {
+  const full = read();
+  if (visibleMemo && visibleMemo.src === full) return visibleMemo.out;
+  const out = full.some((p) => p.deletedAt) ? full.filter((p) => !p.deletedAt) : full;
+  visibleMemo = { src: full, out };
+  return out;
+}
+
 // ---- React hooks ----------------------------------------------------------
 
 export function usePlaces(): Place[] {
   return useSyncExternalStore(
     subscribe,
-    () => read(),
+    () => readVisible(),
     () => EMPTY // server snapshot: stable empty ref (client hydrates after mount)
   );
 }
@@ -215,7 +238,7 @@ export function usePlace(id: string | null): Place | null {
 // Non-hook read of one place from the in-memory mirror — for async helpers
 // (e.g. enrichment) that need the current record outside React render.
 export function getPlace(id: string): Place | null {
-  return read().find((p) => p.id === id) ?? null;
+  return read().find((p) => p.id === id && !p.deletedAt) ?? null;
 }
 
 // Non-null when the last persist failed (storage full / unreadable store).
@@ -233,6 +256,7 @@ export function addPlace(
   input: Omit<Place, "id" | "createdAt" | "visits" | "photos" | "favorite" | "neverAgain"> &
     Partial<Pick<Place, "favorite" | "neverAgain" | "visits" | "photos">>
 ): Place {
+  const ts = new Date().toISOString();
   const place: Place = {
     favorite: false,
     neverAgain: false,
@@ -240,18 +264,26 @@ export function addPlace(
     photos: [],
     ...input,
     id: uid(),
-    createdAt: new Date().toISOString(),
+    createdAt: ts,
+    updatedAt: ts,
   };
   commit([place, ...read()]);
   return place;
 }
 
 export function updatePlace(id: string, patch: Partial<Place>) {
-  commit(read().map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  // Every edit routes through here (visits, photos, tags, flags, enrichment),
+  // so stamping updatedAt once here covers the whole mutation surface.
+  const ts = new Date().toISOString();
+  commit(read().map((p) => (p.id === id ? { ...p, ...patch, updatedAt: ts } : p)));
 }
 
+// Soft delete: the record stays as a tombstone (deletedAt set) so the deletion
+// syncs to other devices instead of the place re-appearing on the next pull.
+// readVisible() hides tombstones from the UI.
 export function removePlace(id: string) {
-  commit(read().filter((p) => p.id !== id));
+  const ts = new Date().toISOString();
+  commit(read().map((p) => (p.id === id ? { ...p, deletedAt: ts, updatedAt: ts } : p)));
 }
 
 export function toggleFavorite(id: string) {
@@ -293,6 +325,56 @@ export function removePhoto(placeId: string, photoId: string) {
   const p = read().find((x) => x.id === placeId);
   if (!p) return;
   updatePlace(placeId, { photos: p.photos.filter((ph) => ph.id !== photoId) });
+}
+
+// ---- Sync integration -----------------------------------------------------
+// Bridge between the local store and lib/sync/client.ts.
+
+// Register a listener for locally-originated record changes; returns an
+// unsubscribe. The engine uses this to queue pushes.
+export function onLocalChange(cb: (ids: string[]) => void): () => void {
+  localChangeListeners.add(cb);
+  return () => localChangeListeners.delete(cb);
+}
+
+export interface RemotePlaceRow {
+  id: string;
+  data: Place;
+  updated_at: string; // ISO, server-canonicalised
+  deleted_at: string | null;
+}
+
+// Merge server records into the local store, last-write-wins by updatedAt.
+// Local photo *bytes* are preserved (server records carry photo metadata only
+// in this phase, so overwriting would drop them). Persists locally but does NOT
+// emit a local change, so merged records aren't pushed back to the server.
+export function applyRemotePlaces(rows: RemotePlaceRow[]): void {
+  if (!rows.length) return;
+  const byId = new Map(read().map((p) => [p.id, p]));
+  let changed = false;
+  for (const row of rows) {
+    const local = byId.get(row.id);
+    const localTs = local ? local.updatedAt ?? local.createdAt ?? "" : "";
+    if (local && localTs >= row.updated_at) continue; // local same-or-newer wins
+    byId.set(row.id, {
+      ...row.data,
+      id: row.id,
+      updatedAt: row.updated_at,
+      deletedAt: row.deleted_at ?? undefined,
+      photos: local ? local.photos : row.data.photos ?? [],
+    });
+    changed = true;
+  }
+  if (!changed) return;
+  cache = Array.from(byId.values());
+  visibleMemo = null;
+  notify();
+  persistLS(cache);
+}
+
+// Full snapshot including tombstones — what the engine pushes. Non-hook read.
+export function snapshotForSync(): Place[] {
+  return read();
 }
 
 // ---- Custom tags vocabulary ----------------------------------------------
@@ -364,7 +446,7 @@ export function exportData(): BackupFile {
     app: "im-hungry",
     version: 1,
     exportedAt: new Date().toISOString(),
-    places: read(), // hydrated — photo dataUrls embedded in the file
+    places: readVisible(), // hydrated, tombstones excluded — photo dataUrls embedded in the file
     tags: readTags(),
   };
 }
@@ -418,7 +500,7 @@ export function findDuplicate(
     lat: number;
     lng: number;
   },
-  list: Place[] = read()
+  list: Place[] = readVisible()
 ): Place | null {
   if (candidate.googlePlaceId) {
     const byId = list.find((p) => p.googlePlaceId === candidate.googlePlaceId);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Search, Plus, Menu, MapPin, TriangleAlert } from "lucide-react";
+import { Search, Plus, Menu, MapPin, TriangleAlert, Heart } from "lucide-react";
 import { usePlaces, usePersistError } from "@/lib/store";
 import { displayState, type DisplayState } from "@/lib/types";
 import MapView from "./MapView";
@@ -232,6 +232,7 @@ export default function AppShell() {
                   <button
                     key={f.key}
                     onClick={() => setFilter(f.key)}
+                    aria-label={f.label}
                     className="press min-w-0 flex-1"
                     style={{
                       display: "inline-flex",
@@ -252,7 +253,16 @@ export default function AppShell() {
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {f.label}
+                    {/* Favorites reads as its heart glyph — the universal fav
+                        mark, and it frees the longest word from a rail sized to
+                        one phone line. Colour follows the rail's on/off system
+                        (white active, muted idle); the red state hue stays on
+                        the underline, per the pin-colour discipline. */}
+                    {f.key === "favorite" ? (
+                      <Heart size={14} strokeWidth={2.25} fill={on ? "currentColor" : "none"} />
+                    ) : (
+                      f.label
+                    )}
                     <span
                       style={{
                         width: 14,

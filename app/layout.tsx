@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Spline_Sans_Mono, Instrument_Serif } from "next/font/google";
 import "./globals.css";
 import RegisterSW from "@/components/RegisterSW";
+import SyncBoot from "@/components/SyncBoot";
 
 // Display = Zodiak, UI = General Sans (both Fontshare, loaded via <link>).
 // Data = Spline Sans Mono for ratings/prices.
@@ -49,6 +50,7 @@ export default function RootLayout({
       <body className="h-full">
         {children}
         <RegisterSW />
+        <SyncBoot />
       </body>
     </html>
   );

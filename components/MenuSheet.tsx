@@ -1,13 +1,14 @@
 "use client";
 
 import { useRef } from "react";
-import { X, Images, UtensilsCrossed, MapPinned, Pizza, Download, Upload, ChevronRight } from "lucide-react";
+import { X, Images, Store, UtensilsCrossed, MapPinned, Pizza, Download, Upload, ChevronRight } from "lucide-react";
 import { usePlaces, downloadBackup, importData } from "@/lib/store";
 import type { TagNamespace } from "@/lib/types";
 import type { BrowseMode } from "./BrowseSheet";
 import { useSheetDrag } from "./useSheetDrag";
+import SyncSection from "./SyncSection";
 
-// The menu — one hub over the map. Top half is Browse (four lenses on the same
+// The menu — one hub over the map. Top half is Browse (five lenses on the same
 // library the map can't give you at a glance); bottom is the v1 backup story.
 export default function MenuSheet({
   onClose,
@@ -29,9 +30,10 @@ export default function MenuSheet({
 
   const tiles: { mode: BrowseMode; icon: React.ReactNode; label: string; count: number }[] = [
     { mode: "gallery", icon: <Images size={20} strokeWidth={2} />, label: "Gallery", count: photoCount },
+    { mode: "type", icon: <Store size={19} strokeWidth={2} />, label: "Types", count: distinct("type") },
     { mode: "cuisine", icon: <UtensilsCrossed size={19} strokeWidth={2} />, label: "Cuisines", count: distinct("cuisine") },
-    { mode: "area", icon: <MapPinned size={19} strokeWidth={2} />, label: "Areas", count: areaCount },
     { mode: "staple", icon: <Pizza size={19} strokeWidth={2} />, label: "Staples", count: distinct("staple") },
+    { mode: "area", icon: <MapPinned size={19} strokeWidth={2} />, label: "Areas", count: areaCount },
   ];
 
   const doExport = () => {
@@ -114,6 +116,12 @@ export default function MenuSheet({
             </button>
           ))}
         </div>
+
+        {/* sync — records follow you across devices */}
+        <p className="mb-2 mt-5 text-[11px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--text-tertiary)" }}>
+          Sync
+        </p>
+        <SyncSection onToast={onToast} />
 
         {/* backup — the v1 insurance policy */}
         <p className="mb-2 mt-5 text-[11px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--text-tertiary)" }}>
