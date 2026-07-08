@@ -211,7 +211,7 @@ export default function SwipeDeck({
     setConfirmHide(null);
   };
 
-  // "Not now" — reset the count so it takes two fresh skips to ask again.
+  // "Not now" — reset the count so it takes three fresh skips to ask again.
   const keepAround = () => {
     if (!confirmHide) return;
     resetSkip(confirmHide.place.id);
