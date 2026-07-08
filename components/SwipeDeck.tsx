@@ -315,7 +315,10 @@ export default function SwipeDeck({
   const stack = deck.slice(pos, pos + 3);
   const exhausted = deck.length > 0 && pos >= deck.length;
   const empty = deck.length === 0;
-  const busy = source !== "saved" && loadingNew && empty;
+  // Busy the whole time a Swiggy fetch is in flight — not just on first load — so
+  // a cuisine/keyword change hides the previous pool's cards immediately instead
+  // of leaving them swipeable against a lens they no longer match.
+  const busy = source !== "saved" && loadingNew;
 
   return (
     <div className="flex h-full flex-col">

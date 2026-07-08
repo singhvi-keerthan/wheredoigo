@@ -37,6 +37,10 @@ const LIFECYCLE_CHIPS: { key: string; label: string; q: DecideQuery }[] = [
 ];
 const CUISINE_CHIPS = TAG_OPTIONS.cuisine;
 const STAPLE_CHIPS = TAG_OPTIONS.staple;
+const TYPE_CHIPS = TAG_OPTIONS.type;
+// occasion / vibe / practical stay in the NL "Ask" box rather than the chip row —
+// ~21 more chips would re-cram the bar, and Gemini already maps "romantic
+// rooftop", "good for groups" etc. onto those namespaces.
 
 export default function DecideSheet({
   open,
@@ -282,6 +286,14 @@ export default function DecideSheet({
                   label={c}
                   on={lens === `staple:${c}`}
                   onClick={() => pickLens(`staple:${c}`, { lifecycle: "any", staples: [c] })}
+                />
+              ))}
+              {TYPE_CHIPS.map((c) => (
+                <Chip
+                  key={`type:${c}`}
+                  label={c}
+                  on={lens === `type:${c}`}
+                  onClick={() => pickLens(`type:${c}`, { lifecycle: "any", types: [c] })}
                 />
               ))}
               <button
