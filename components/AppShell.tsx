@@ -388,6 +388,7 @@ export default function AppShell() {
             setSelectedId(id);
             setDetailId(id);
           }}
+          onToast={showToast}
         />
       )}
 

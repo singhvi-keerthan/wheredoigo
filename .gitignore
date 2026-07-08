@@ -43,3 +43,5 @@ next-env.d.ts
 # agent skill installs (impeccable, emil-design-eng, etc.) — machine-local
 .claude/
 skills-lock.json
+
+.playwright-mcp/
