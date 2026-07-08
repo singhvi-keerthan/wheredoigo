@@ -114,6 +114,13 @@ function stripPhotos(p: Place): Place {
   };
 }
 
+// fetch with a timeout so a stalled request can't freeze a whole sync.
+function fetchT(input: string, init: RequestInit = {}, ms = 20000): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  return fetch(input, { ...init, signal: ctrl.signal }).finally(() => clearTimeout(timer));
+}
+
 async function push(): Promise<void> {
   if (!owner || !dirty.size) return;
   const sending = new Set(dirty);
@@ -125,7 +132,7 @@ async function push(): Promise<void> {
       updated_at: p.updatedAt ?? p.createdAt,
       deleted_at: p.deletedAt ?? null,
     }));
-  const res = await fetch("/api/sync", {
+  const res = await fetchT("/api/sync", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${owner}` },
     body: JSON.stringify({ places: rows }),
@@ -138,7 +145,7 @@ async function push(): Promise<void> {
 async function pull(): Promise<void> {
   if (!owner) return;
   const cursor = lsGet(CURSOR_KEY);
-  const res = await fetch(cursor ? `/api/sync?since=${encodeURIComponent(cursor)}` : "/api/sync", {
+  const res = await fetchT(cursor ? `/api/sync?since=${encodeURIComponent(cursor)}` : "/api/sync", {
     headers: { Authorization: `Bearer ${owner}` },
   });
   if (!res.ok) throw new Error(`pull failed (${res.status})`);
@@ -171,11 +178,11 @@ async function uploadPhotos(): Promise<void> {
     for (const ph of p.photos) {
       if (ph.source !== "mine" || ph.blobUrl || !ph.dataUrl?.startsWith("data:")) continue;
       try {
-        const res = await fetch("/api/photo", {
+        const res = await fetchT("/api/photo", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${owner}` },
           body: JSON.stringify({ id: ph.id, dataUrl: ph.dataUrl }),
-        });
+        }, 30000);
         if (!res.ok) continue;
         const { url } = (await res.json()) as { url?: string };
         if (url) setPhotoBlobUrl(p.id, ph.id, url);
@@ -195,9 +202,9 @@ async function downloadPhotos(): Promise<void> {
     for (const ph of p.photos) {
       if (!ph.blobUrl || ph.dataUrl || have.has(ph.id)) continue;
       try {
-        const res = await fetch(`/api/photo?url=${encodeURIComponent(ph.blobUrl)}`, {
+        const res = await fetchT(`/api/photo?url=${encodeURIComponent(ph.blobUrl)}`, {
           headers: { Authorization: `Bearer ${owner}` },
-        });
+        }, 30000);
         if (!res.ok) continue;
         const dataUrl = await blobToDataUrl(await res.blob());
         await idbPutPhoto(ph.id, dataUrl);
@@ -226,11 +233,19 @@ export async function sync(): Promise<void> {
   running = true;
   setStatus({ state: "syncing", error: null });
   try {
-    await uploadPhotos();
+    // Records first — fast, and the priority. Status flips to "Synced" here so a
+    // large first-run photo migration can't keep the UI stuck on "Syncing…".
     await push();
     await pull();
-    await downloadPhotos();
     setStatus({ state: "idle", lastSyncedAt: new Date().toISOString(), error: null, pending: dirty.size });
+    // Photos after, best-effort: a slow or failed photo never blocks records or
+    // the status; failures just retry on the next sync.
+    try {
+      await uploadPhotos();
+      await downloadPhotos();
+    } catch {
+      /* retry next sync */
+    }
   } catch (e) {
     setStatus({ state: "error", error: e instanceof Error ? e.message : "sync failed", pending: dirty.size });
   } finally {
