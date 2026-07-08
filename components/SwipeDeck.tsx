@@ -84,7 +84,7 @@ export default function SwipeDeck({
   const [exiting, setExiting] = useState<{ dir: "left" | "right"; key: string } | null>(null);
   const startRef = useRef<{ x: number; y: number } | null>(null);
   const [detailNew, setDetailNew] = useState<SwiggyRestaurant | null>(null);
-  // 2nd-skip escalation: the saved card to offer a permanent hide for.
+  // 3rd-skip escalation: the saved card to offer a permanent hide for.
   const [confirmHide, setConfirmHide] = useState<Extract<DeckCard, { kind: "saved" }> | null>(null);
 
   // First-run coach — shown once (persisted flag), retires on the first swipe/key
@@ -173,7 +173,7 @@ export default function SwipeDeck({
     if (!current || exiting) return;
     const card = current;
     let entry: UndoEntry = { key: card.key, placeId: null };
-    let prompt = false; // 2nd skip on a saved card → offer a permanent hide
+    let prompt = false; // 3rd skip on a saved card → offer a permanent hide
     if (dir === "right") {
       if (card.kind === "new") {
         entry = { key: card.key, placeId: saveNew(card.r) };
@@ -183,10 +183,10 @@ export default function SwipeDeck({
         onToast("Already on your map");
       }
     } else if (card.kind === "saved") {
-      // Soft dismiss, but count it: the 2nd skip of the same place prompts.
+      // Soft dismiss, but count it: the 3rd skip of the same place prompts.
       const n = bumpSkip(card.place.id);
       entry = { key: card.key, placeId: null, skipId: card.place.id };
-      if (n >= 2) prompt = true;
+      if (n >= 3) prompt = true;
     }
     setUndo((u) => [...u, entry]);
     setExiting({ dir, key: card.key });
@@ -442,7 +442,7 @@ export default function SwipeDeck({
               Hide {confirmHide.place.name} for good?
             </p>
             <p className="mt-1.5 text-[13px] leading-snug" style={{ color: "var(--text-tertiary)" }}>
-              You&rsquo;ve skipped it twice. Hiding marks it Skip — it won&rsquo;t show up in recommendations again.
+              You&rsquo;ve skipped it three times. Hiding marks it Skip — it won&rsquo;t show up in recommendations again.
             </p>
             <div className="mt-4 flex flex-col gap-2">
               <button

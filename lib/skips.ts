@@ -1,6 +1,6 @@
 // Device-local "how many times have I left-swiped past this place" ledger.
 // Left-swipe stays non-destructive (a soft dismiss), but repeatedly skipping the
-// same saved place ramps toward a permanent hide: the 2nd skip prompts to set
+// same saved place ramps toward a permanent hide: the 3rd skip prompts to set
 // `neverAgain`. Kept OUT of the synced Place model on purpose — this is ephemeral
 // per-device UX state, not a fact about the place worth propagating.
 //
