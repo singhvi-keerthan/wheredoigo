@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { X, Sparkles, RefreshCw, Clock, Search, RotateCcw } from "lucide-react";
+import { X, Sparkles, RefreshCw, ChevronDown, RotateCcw, Clock } from "lucide-react";
 import { geocodeArea } from "@/lib/places";
 import { parseFallback } from "@/lib/decide-fallback";
 import { EMPTY_QUERY, type DecideQuery } from "@/lib/decide";
@@ -27,20 +27,91 @@ const PHRASES = [
   "Treat yourself",
 ];
 
-// Saved-lens chips — same vocabulary the app already uses (lifecycle + the
-// cuisine/staple tag namespaces), chosen as a one-tap chip. One active at a time.
-const LIFECYCLE_CHIPS: { key: string; label: string; q: DecideQuery }[] = [
-  { key: "all", label: "All", q: { lifecycle: "any" } },
-  { key: "fav", label: "Favorites", q: { lifecycle: "favorites" } },
-  { key: "wl", label: "Watchlist", q: { lifecycle: "watchlist" } },
-  { key: "been", label: "Been", q: { lifecycle: "visited" } },
+// The filter row is CATEGORY chips, not their values — tapping one opens a list
+// to pick from. Keeps the row short + uniform no matter how many values a
+// namespace has, and exposes every namespace without a 40-chip scroll.
+type FilterField = "lifecycle" | "cuisine" | "type" | "staple" | "occasion" | "vibe" | "practical";
+type Category = { id: FilterField; label: string; values: { value: string; label: string }[] };
+
+const opt = (arr: string[]) => arr.map((v) => ({ value: v, label: v }));
+const CUISINE_CAT: Category = { id: "cuisine", label: "Cuisine", values: opt(TAG_OPTIONS.cuisine) };
+// Saved gets the full namespace set; "Show" is the lifecycle lens.
+const SAVED_CATS: Category[] = [
+  {
+    id: "lifecycle",
+    label: "Show",
+    values: [
+      { value: "any", label: "All" },
+      { value: "favorites", label: "Favorites" },
+      { value: "watchlist", label: "Watchlist" },
+      { value: "visited", label: "Been" },
+    ],
+  },
+  CUISINE_CAT,
+  { id: "type", label: "Type", values: opt(TAG_OPTIONS.type) },
+  { id: "staple", label: "Staple", values: opt(TAG_OPTIONS.staple) },
+  { id: "occasion", label: "Occasion", values: opt(TAG_OPTIONS.occasion) },
+  { id: "vibe", label: "Vibe", values: opt(TAG_OPTIONS.vibe) },
+  { id: "practical", label: "Practical", values: opt(TAG_OPTIONS.practical) },
 ];
-const CUISINE_CHIPS = TAG_OPTIONS.cuisine;
-const STAPLE_CHIPS = TAG_OPTIONS.staple;
-const TYPE_CHIPS = TAG_OPTIONS.type;
-// occasion / vibe / practical stay in the NL "Ask" box rather than the chip row —
-// ~21 more chips would re-cram the bar, and Gemini already maps "romantic
-// rooftop", "good for groups" etc. onto those namespaces.
+
+type Filters = {
+  lifecycle: "any" | "favorites" | "watchlist" | "visited";
+  cuisine: string;
+  type: string;
+  staple: string;
+  occasion: string;
+  vibe: string;
+  practical: string;
+  openNow: boolean;
+};
+const EMPTY_FILTERS: Filters = {
+  lifecycle: "any",
+  cuisine: "",
+  type: "",
+  staple: "",
+  occasion: "",
+  vibe: "",
+  practical: "",
+  openNow: false,
+};
+
+// The extra query bits categories don't cover (area / budget / free keywords /
+// exclusions) — set by the Ask box, carried alongside the category filters.
+type Extras = Pick<
+  DecideQuery,
+  | "area"
+  | "areaCenter"
+  | "maxBudget"
+  | "keywords"
+  | "excludeCuisines"
+  | "excludeTypes"
+  | "excludeStaples"
+  | "excludeOccasions"
+  | "excludeVibes"
+  | "excludePractical"
+>;
+
+function buildQuery(f: Filters, x: Extras): DecideQuery {
+  const q: DecideQuery = { lifecycle: f.lifecycle };
+  if (f.openNow) q.openNow = true;
+  if (f.cuisine) q.cuisines = [f.cuisine];
+  if (f.type) q.types = [f.type];
+  if (f.staple) q.staples = [f.staple];
+  if (f.occasion) q.occasions = [f.occasion];
+  if (f.vibe) q.vibes = [f.vibe];
+  if (f.practical) q.practical = [f.practical];
+  if (x.area) {
+    q.area = x.area;
+    if (x.areaCenter) q.areaCenter = x.areaCenter;
+  }
+  if (x.maxBudget != null) q.maxBudget = x.maxBudget;
+  if (x.keywords?.length) q.keywords = x.keywords;
+  for (const k of ["excludeCuisines", "excludeTypes", "excludeStaples", "excludeOccasions", "excludeVibes", "excludePractical"] as const) {
+    if (x[k]?.length) q[k] = x[k];
+  }
+  return q;
+}
 
 export default function DecideSheet({
   open,
@@ -56,38 +127,38 @@ export default function DecideSheet({
   const [title] = useState(() => PHRASES[Math.floor(Math.random() * PHRASES.length)]);
   const [source, setSource] = useState<DeckSource>("saved");
 
-  // Saved lens.
-  const [savedQuery, setSavedQuery] = useState<DecideQuery>(EMPTY_QUERY);
-  const [lens, setLens] = useState<string>("all"); // active chip key
-  const [openNow, setOpenNow] = useState(false);
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  const [extras, setExtras] = useState<Extras>({});
+  const [picker, setPicker] = useState<FilterField | null>(null); // open category list
+
   const [nl, setNl] = useState("");
   const [thinking, setThinking] = useState(false);
 
-  // New / Both lens (cuisine + free-text Swiggy keyword).
-  const [cuisine, setCuisine] = useState<string | null>(null);
-  const [kwInput, setKwInput] = useState("");
-  const [keyword, setKeyword] = useState("");
-
-  // The deck is swipe-only; its undo action surfaces here in the header.
   const [undoFn, setUndoFn] = useState<null | (() => void)>(null);
 
   const { sheetRef, handleProps } = useSheetDrag(onClose);
 
-  const deckQuery = useMemo<DecideQuery>(() => {
-    if (source === "saved") return { ...savedQuery, openNow };
-    if (source === "both") return { lifecycle: "any", ...(cuisine ? { cuisines: [cuisine] } : {}) };
-    return EMPTY_QUERY; // "new" — deck ignores query, uses cuisine + keyword
-  }, [source, savedQuery, openNow, cuisine]);
+  // The lens the deck runs on. New ignores the query (uses cuisine + keyword);
+  // Saved/Both run the full built query (Both only ever has cuisine set here).
+  const deckQuery = useMemo<DecideQuery>(
+    () => (source === "new" ? EMPTY_QUERY : buildQuery(filters, extras)),
+    [source, filters, extras]
+  );
+  const cuisineProp = filters.cuisine || null;
+  const keywordProp = source === "saved" ? "" : extras.keywords?.join(" ") ?? "";
 
   if (!open) return null;
 
-  const pickLens = (key: string, q: DecideQuery) => {
-    setLens(key);
-    setSavedQuery(q);
-    setNl("");
+  const cats = source === "saved" ? SAVED_CATS : [CUISINE_CAT];
+
+  const setField = (id: FilterField, value: string) => {
+    setFilters((f) => ({ ...f, [id]: value }));
+    setPicker(null);
   };
 
-  // NL "Ask" (Saved) — untouched Gemini path: free text → structured query.
+  // Ask — the ONE natural-language mechanism, same for every source. Gemini
+  // parses free text into the structured query; here we fan it out onto the
+  // category filters (so the chips reflect what you asked) plus the extras.
   const ask = async () => {
     const text = nl.trim();
     if (!text) return;
@@ -115,8 +186,29 @@ export default function DecideSheet({
         delete q.area;
       }
     }
-    setSavedQuery(q);
-    setLens("");
+    setFilters((f) => ({
+      ...f,
+      lifecycle: q.lifecycle ?? f.lifecycle,
+      cuisine: q.cuisines?.[0] ?? f.cuisine,
+      type: q.types?.[0] ?? f.type,
+      staple: q.staples?.[0] ?? f.staple,
+      occasion: q.occasions?.[0] ?? f.occasion,
+      vibe: q.vibes?.[0] ?? f.vibe,
+      practical: q.practical?.[0] ?? f.practical,
+      openNow: q.openNow ?? f.openNow,
+    }));
+    setExtras({
+      area: q.area,
+      areaCenter: q.areaCenter,
+      maxBudget: q.maxBudget,
+      keywords: q.keywords,
+      excludeCuisines: q.excludeCuisines,
+      excludeTypes: q.excludeTypes,
+      excludeStaples: q.excludeStaples,
+      excludeOccasions: q.excludeOccasions,
+      excludeVibes: q.excludeVibes,
+      excludePractical: q.excludePractical,
+    });
     setThinking(false);
   };
 
@@ -126,6 +218,8 @@ export default function DecideSheet({
     { key: "both", label: "Both" },
   ];
 
+  const openCat = picker ? cats.find((c) => c.id === picker) ?? null : null;
+
   return (
     <div className="fixed inset-0 z-50" style={{ background: "var(--bg-raised)" }}>
       <div
@@ -133,7 +227,7 @@ export default function DecideSheet({
         className="absolute inset-0 flex flex-col"
         style={{ background: "var(--bg-raised)" }}
       >
-        {/* ---- header (flex-none) ---- */}
+        {/* ---- header ---- */}
         <div className="flex-none px-5 pt-[max(0.5rem,env(safe-area-inset-top))]">
           <div {...handleProps} className="flex cursor-grab touch-none justify-center py-1.5">
             <div className="h-[4px] w-10 rounded-full" style={{ background: "var(--ink-line)" }} />
@@ -177,7 +271,7 @@ export default function DecideSheet({
             </div>
           </div>
 
-          {/* SOURCE — the first filter, a full-width segmented control */}
+          {/* SOURCE — the first filter */}
           <div
             className="mt-3.5 grid grid-cols-3 gap-1"
             style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-chip)", padding: 3 }}
@@ -187,7 +281,10 @@ export default function DecideSheet({
               return (
                 <button
                   key={s.key}
-                  onClick={() => setSource(s.key)}
+                  onClick={() => {
+                    setSource(s.key);
+                    setPicker(null);
+                  }}
                   className="press py-2 text-[13.5px] font-semibold transition-colors"
                   style={{
                     borderRadius: "calc(var(--radius-chip) - 3px)",
@@ -202,133 +299,111 @@ export default function DecideSheet({
           </div>
         </div>
 
-        {/* ---- controls: search + chips (flex-none) ---- */}
+        {/* ---- controls: one Ask box (every source) + category chips ---- */}
         <div className="flex-none px-5 pt-3">
-          {source === "saved" ? (
-            <div
-              className="flex items-center gap-2 px-3"
-              style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)" }}
+          <div
+            className="flex items-center gap-2 px-3"
+            style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)" }}
+          >
+            <Sparkles size={15} strokeWidth={2.25} style={{ color: "var(--accent)" }} />
+            <input
+              value={nl}
+              onChange={(e) => setNl(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && ask()}
+              placeholder="Tell me the mood…"
+              className="flex-1 bg-transparent py-2.5 text-[14px] outline-none"
+              style={{ color: "var(--text-primary)" }}
+            />
+            <button
+              onClick={ask}
+              disabled={thinking || !nl.trim()}
+              className="press flex items-center gap-1.5 px-3 py-1.5 text-[12.5px] font-bold disabled:opacity-40"
+              style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
             >
-              <Sparkles size={15} strokeWidth={2.25} style={{ color: "var(--accent)" }} />
-              <input
-                value={nl}
-                onChange={(e) => setNl(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && ask()}
-                placeholder="Tell me the mood…"
-                className="flex-1 bg-transparent py-2.5 text-[14px] outline-none"
-                style={{ color: "var(--text-primary)" }}
-              />
-              <button
-                onClick={ask}
-                disabled={thinking || !nl.trim()}
-                className="press flex items-center gap-1.5 px-3 py-1.5 text-[12.5px] font-bold disabled:opacity-40"
-                style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
-              >
-                {thinking ? <RefreshCw size={13} className="animate-spin" /> : <Sparkles size={13} strokeWidth={2.25} />}
-                Ask
-              </button>
-            </div>
-          ) : (
-            <div
-              className="flex items-center gap-2 px-3"
-              style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)" }}
-            >
-              <Search size={15} strokeWidth={2.25} style={{ color: "var(--accent)" }} />
-              <input
-                value={kwInput}
-                onChange={(e) => setKwInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && setKeyword(kwInput.trim())}
-                placeholder="Search Swiggy — a dish, a place…"
-                className="flex-1 bg-transparent py-2.5 text-[14px] outline-none"
-                style={{ color: "var(--text-primary)" }}
-              />
-              {kwInput && (
-                <button
-                  onClick={() => {
-                    setKwInput("");
-                    setKeyword("");
-                  }}
-                  aria-label="Clear search"
-                  className="press grid h-5 w-5 place-items-center rounded-full"
-                  style={{ background: "var(--bg-raised)", color: "var(--text-tertiary)" }}
-                >
-                  <X size={12} strokeWidth={2.5} />
-                </button>
-              )}
-              <button
-                onClick={() => setKeyword(kwInput.trim())}
-                className="press flex items-center gap-1.5 px-3 py-1.5 text-[12.5px] font-bold"
-                style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
-              >
-                <Search size={13} strokeWidth={2.5} />
-                Go
-              </button>
-            </div>
-          )}
+              {thinking ? <RefreshCw size={13} className="animate-spin" /> : <Sparkles size={13} strokeWidth={2.25} />}
+              Ask
+            </button>
+          </div>
 
-          {/* chips */}
-          {source === "saved" ? (
-            <div className="scroll-quiet mt-2.5 flex gap-1.5 overflow-x-auto pb-0.5">
-              {LIFECYCLE_CHIPS.map((c) => (
-                <Chip key={c.key} label={c.label} on={lens === c.key} onClick={() => pickLens(c.key, c.q)} />
-              ))}
-              {CUISINE_CHIPS.map((c) => (
-                <Chip
-                  key={`cuisine:${c}`}
-                  label={c}
-                  on={lens === `cuisine:${c}`}
-                  onClick={() => pickLens(`cuisine:${c}`, { lifecycle: "any", cuisines: [c] })}
-                />
-              ))}
-              {STAPLE_CHIPS.map((c) => (
-                <Chip
-                  key={`staple:${c}`}
-                  label={c}
-                  on={lens === `staple:${c}`}
-                  onClick={() => pickLens(`staple:${c}`, { lifecycle: "any", staples: [c] })}
-                />
-              ))}
-              {TYPE_CHIPS.map((c) => (
-                <Chip
-                  key={`type:${c}`}
-                  label={c}
-                  on={lens === `type:${c}`}
-                  onClick={() => pickLens(`type:${c}`, { lifecycle: "any", types: [c] })}
-                />
-              ))}
+          {/* category chips */}
+          <div className="scroll-quiet mt-2.5 flex gap-1.5 overflow-x-auto pb-0.5">
+            {cats.map((cat) => {
+              const val = filters[cat.id] as string;
+              const active = cat.id === "lifecycle" ? val !== "any" : val !== "";
+              const isOpen = picker === cat.id;
+              const shownLabel = active ? cat.values.find((v) => v.value === val)?.label ?? cat.label : cat.label;
+              const highlight = active || isOpen;
+              return (
+                <button
+                  key={cat.id}
+                  onClick={() => setPicker((p) => (p === cat.id ? null : cat.id))}
+                  className="press flex shrink-0 items-center gap-1 px-3 py-1.5 text-[12px] font-semibold capitalize transition-colors"
+                  style={{
+                    borderRadius: "var(--radius-chip)",
+                    background: highlight ? "oklch(0.97 0 0)" : "transparent",
+                    color: highlight ? "oklch(0.16 0.006 260)" : "var(--text-secondary)",
+                    border: `1px solid ${highlight ? "oklch(0.97 0 0)" : "var(--border-strong)"}`,
+                  }}
+                >
+                  {shownLabel}
+                  <ChevronDown size={12} strokeWidth={2.5} style={{ transform: isOpen ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
+                </button>
+              );
+            })}
+            {source === "saved" && (
               <button
-                onClick={() => setOpenNow((v) => !v)}
-                className="flex shrink-0 items-center gap-1 px-3 py-1.5 text-[12px] font-medium transition-colors"
+                onClick={() => setFilters((f) => ({ ...f, openNow: !f.openNow }))}
+                className="press flex shrink-0 items-center gap-1 px-3 py-1.5 text-[12px] font-medium transition-colors"
                 style={{
                   borderRadius: "var(--radius-chip)",
-                  background: openNow ? "var(--s-watchlist)" : "transparent",
-                  color: openNow ? "#1a1206" : "var(--text-secondary)",
-                  border: `1px solid ${openNow ? "var(--s-watchlist)" : "var(--border-strong)"}`,
+                  background: filters.openNow ? "var(--s-watchlist)" : "transparent",
+                  color: filters.openNow ? "#1a1206" : "var(--text-secondary)",
+                  border: `1px solid ${filters.openNow ? "var(--s-watchlist)" : "var(--border-strong)"}`,
                 }}
               >
                 <Clock size={11} /> Open now
               </button>
-            </div>
-          ) : (
-            <div className="scroll-quiet mt-2.5 flex gap-1.5 overflow-x-auto pb-0.5">
-              <Chip label="Any" on={cuisine === null} onClick={() => setCuisine(null)} />
-              {CUISINE_CHIPS.map((c) => (
-                <Chip key={c} label={c} on={cuisine === c} onClick={() => setCuisine(c)} />
-              ))}
+            )}
+          </div>
+
+          {/* value list — appears under the row when a category is tapped */}
+          {openCat && (
+            <div
+              className="animate-rise scroll-quiet mt-2 flex max-h-[34vh] flex-wrap gap-1.5 overflow-y-auto p-3"
+              style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)" }}
+            >
+              {(openCat.id === "lifecycle" ? openCat.values : [{ value: "", label: "Any" }, ...openCat.values]).map((v) => {
+                const on = (filters[openCat.id] as string) === v.value;
+                return (
+                  <button
+                    key={v.value || "any"}
+                    onClick={() => setField(openCat.id, v.value)}
+                    className="press px-3 py-1.5 text-[12.5px] font-semibold capitalize transition-colors"
+                    style={{
+                      borderRadius: "var(--radius-chip)",
+                      background: on ? "oklch(0.97 0 0)" : "transparent",
+                      color: on ? "oklch(0.16 0.006 260)" : "var(--text-secondary)",
+                      border: `1px solid ${on ? "oklch(0.97 0 0)" : "var(--border-strong)"}`,
+                    }}
+                  >
+                    {v.label}
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
 
-        {/* ---- deck fills the rest ---- */}
+        {/* ---- deck ---- */}
         <div className="min-h-0 flex-1 px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3">
           <SwipeDeck
             source={source}
             query={deckQuery}
-            cuisine={cuisine}
-            keyword={source === "saved" ? "" : keyword}
+            cuisine={cuisineProp}
+            keyword={keywordProp}
             onOpenSaved={(id) => {
               onView(id);
-              onClose(); // PlaceDetail (z-40) sits under the sheet — eject to show it
+              onClose();
             }}
             onToast={onToast}
             onUndoChange={(fn) => setUndoFn(() => fn)}
@@ -336,22 +411,5 @@ export default function DecideSheet({
         </div>
       </div>
     </div>
-  );
-}
-
-function Chip({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className="press shrink-0 px-3 py-1.5 text-[12px] font-semibold capitalize transition-colors"
-      style={{
-        borderRadius: "var(--radius-chip)",
-        background: on ? "oklch(0.97 0 0)" : "transparent",
-        color: on ? "oklch(0.16 0.006 260)" : "var(--text-secondary)",
-        border: `1px solid ${on ? "oklch(0.97 0 0)" : "var(--border-strong)"}`,
-      }}
-    >
-      {label}
-    </button>
   );
 }

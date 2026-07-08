@@ -25,31 +25,38 @@ export default function DeckHint({ visible }: { visible: boolean }) {
       style={{ opacity: visible ? 1 : 0, transition: "opacity 450ms ease" }}
       aria-hidden
     >
+      {/* Positioning (outer, static transform) is kept separate from the nudge
+          animation (inner) — a CSS animation replaces the whole `transform`, so
+          animating on the same element would drop the centering offset. */}
+
       {/* left = No */}
-      <div
-        className="hint-x absolute left-3 top-1/2 flex -translate-y-1/2 items-center gap-1"
-        style={{ "--hint-dx": "-9px", color: "var(--s-favorite)" } as CSSProperties}
-      >
-        <ChevronLeft size={20} strokeWidth={2.75} />
-        <span className="text-[12.5px] font-bold">No</span>
+      <div className="absolute left-3 top-1/2 -translate-y-1/2">
+        <div
+          className="hint-x flex items-center gap-1"
+          style={{ "--hint-dx": "-9px", color: "var(--s-favorite)" } as CSSProperties}
+        >
+          <ChevronLeft size={20} strokeWidth={2.75} />
+          <span className="text-[12.5px] font-bold">No</span>
+        </div>
       </div>
 
       {/* right = Add to watchlist */}
-      <div
-        className="hint-x absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-1"
-        style={{ "--hint-dx": "9px", color: "var(--s-watchlist)" } as CSSProperties}
-      >
-        <span className="text-[12.5px] font-bold">Watchlist</span>
-        <ChevronRight size={20} strokeWidth={2.75} />
+      <div className="absolute right-3 top-1/2 -translate-y-1/2">
+        <div
+          className="hint-x flex items-center gap-1"
+          style={{ "--hint-dx": "9px", color: "var(--s-watchlist)" } as CSSProperties}
+        >
+          <span className="text-[12.5px] font-bold">Watchlist</span>
+          <ChevronRight size={20} strokeWidth={2.75} />
+        </div>
       </div>
 
       {/* up = Details */}
-      <div
-        className="hint-y absolute left-1/2 top-4 flex -translate-x-1/2 flex-col items-center gap-0.5"
-        style={{ color: "var(--accent)" }}
-      >
-        <ChevronUp size={20} strokeWidth={2.75} />
-        <span className="text-[12.5px] font-bold">Details</span>
+      <div className="absolute left-1/2 top-4 -translate-x-1/2">
+        <div className="hint-y flex flex-col items-center gap-0.5" style={{ color: "var(--accent)" }}>
+          <ChevronUp size={20} strokeWidth={2.75} />
+          <span className="text-[12.5px] font-bold">Details</span>
+        </div>
       </div>
 
       {/* keyboard equivalents — desktop has no swipe */}
