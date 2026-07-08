@@ -377,6 +377,30 @@ export function snapshotForSync(): Place[] {
   return read();
 }
 
+// Record a photo's Blob URL after upload — a real change, so it syncs like any
+// edit (the URL is the cross-device handle for the bytes).
+export function setPhotoBlobUrl(placeId: string, photoId: string, blobUrl: string): void {
+  const p = read().find((x) => x.id === placeId);
+  if (!p) return;
+  updatePlace(placeId, { photos: p.photos.map((ph) => (ph.id === photoId ? { ...ph, blobUrl } : ph)) });
+}
+
+// Hydrate a photo's bytes (downloaded from Blob on another device) into the
+// in-memory cache for display. Not persisted or dirtied — the bytes live in IDB
+// (written by the caller) and re-hydrate from there on next boot.
+export function applyRemotePhoto(photoId: string, dataUrl: string): void {
+  let found = false;
+  const next = read().map((p) => {
+    if (!p.photos.some((ph) => ph.id === photoId && !ph.dataUrl)) return p;
+    found = true;
+    return { ...p, photos: p.photos.map((ph) => (ph.id === photoId ? { ...ph, dataUrl } : ph)) };
+  });
+  if (!found) return;
+  cache = next;
+  visibleMemo = null;
+  notify();
+}
+
 // ---- Custom tags vocabulary ----------------------------------------------
 // User-added tag values per namespace, merged with the fixed TAG_OPTIONS in the
 // UI. Persisting them here makes a tag you invent on one place available on all.

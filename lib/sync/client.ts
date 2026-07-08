@@ -11,11 +11,14 @@
 import { useSyncExternalStore } from "react";
 import type { Place } from "@/lib/types";
 import {
+  applyRemotePhoto,
   applyRemotePlaces,
   onLocalChange,
+  setPhotoBlobUrl,
   snapshotForSync,
   type RemotePlaceRow,
 } from "@/lib/store";
+import { idbGetAllPhotos, idbPutPhoto } from "@/lib/photoStore";
 
 const OWNER_KEY = "imhungry.sync.owner"; // sha256(passphrase) — the capability token
 const CURSOR_KEY = "imhungry.sync.cursor"; // max updated_at pulled so far
@@ -100,8 +103,15 @@ export async function hashPassphrase(passphrase: string): Promise<string> {
 }
 
 // ---- push / pull -----------------------------------------------------------
+// Strip base64 bytes only from own photos already in Blob (blobUrl set). Google
+// photos keep their small remote URL; a not-yet-uploaded photo keeps its bytes
+// so it's never lost in transit.
 function stripPhotos(p: Place): Place {
-  return p.photos.length ? { ...p, photos: p.photos.map((ph) => ({ ...ph, dataUrl: "" })) } : p;
+  if (!p.photos.length) return p;
+  return {
+    ...p,
+    photos: p.photos.map((ph) => (ph.source === "mine" && ph.blobUrl ? { ...ph, dataUrl: "" } : ph)),
+  };
 }
 
 async function push(): Promise<void> {
@@ -141,6 +151,64 @@ async function pull(): Promise<void> {
   if (max) lsSet(CURSOR_KEY, max);
 }
 
+// ---- photos (private Blob, proxied through /api/photo) --------------------
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result as string);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(blob);
+  });
+}
+
+// Upload own photos not yet in Blob; on success set blobUrl (which marks the
+// record dirty, so the same sync's push carries it). Also the migration path —
+// photos added before sync upload on the first connected run.
+async function uploadPhotos(): Promise<void> {
+  if (!owner) return;
+  for (const p of snapshotForSync()) {
+    for (const ph of p.photos) {
+      if (ph.source !== "mine" || ph.blobUrl || !ph.dataUrl?.startsWith("data:")) continue;
+      try {
+        const res = await fetch("/api/photo", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${owner}` },
+          body: JSON.stringify({ id: ph.id, dataUrl: ph.dataUrl }),
+        });
+        if (!res.ok) continue;
+        const { url } = (await res.json()) as { url?: string };
+        if (url) setPhotoBlobUrl(p.id, ph.id, url);
+      } catch {
+        /* leave for the next sync */
+      }
+    }
+  }
+}
+
+// Fetch photos that synced in with a blobUrl but have no local bytes; cache to
+// IDB and hydrate for display.
+async function downloadPhotos(): Promise<void> {
+  if (!owner) return;
+  const have = await idbGetAllPhotos().catch(() => new Map<string, string>());
+  for (const p of snapshotForSync()) {
+    for (const ph of p.photos) {
+      if (!ph.blobUrl || ph.dataUrl || have.has(ph.id)) continue;
+      try {
+        const res = await fetch(`/api/photo?url=${encodeURIComponent(ph.blobUrl)}`, {
+          headers: { Authorization: `Bearer ${owner}` },
+        });
+        if (!res.ok) continue;
+        const dataUrl = await blobToDataUrl(await res.blob());
+        await idbPutPhoto(ph.id, dataUrl);
+        applyRemotePhoto(ph.id, dataUrl);
+      } catch {
+        /* leave for the next sync */
+      }
+    }
+  }
+}
+
 // One sync = push local changes, then pull remote. Serialised: overlapping
 // triggers coalesce into a single trailing run.
 let running = false;
@@ -158,8 +226,10 @@ export async function sync(): Promise<void> {
   running = true;
   setStatus({ state: "syncing", error: null });
   try {
+    await uploadPhotos();
     await push();
     await pull();
+    await downloadPhotos();
     setStatus({ state: "idle", lastSyncedAt: new Date().toISOString(), error: null, pending: dirty.size });
   } catch (e) {
     setStatus({ state: "error", error: e instanceof Error ? e.message : "sync failed", pending: dirty.size });

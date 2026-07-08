@@ -48,6 +48,7 @@ export interface Visit {
 export interface Photo {
   id: string;
   dataUrl: string; // resized data URL (own uploads) or remote URL (google)
+  blobUrl?: string; // private Vercel Blob URL once uploaded — the sync handle for the bytes
   source: "mine" | "google";
   scope: "place" | "visit"; // place = general; visit = tied to one visit
   visitId: string | null; // set when scope === "visit"
