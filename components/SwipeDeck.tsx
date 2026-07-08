@@ -9,6 +9,9 @@ import { bumpSkip, resetSkip, decSkip } from "@/lib/skips";
 import { type DecideQuery } from "@/lib/decide";
 import SwipeCard from "./SwipeCard";
 import NewCardDetail from "./NewCardDetail";
+import DeckHint from "./DeckHint";
+
+const HINT_KEY = "imhungry.deckHintSeen.v1"; // first-run swipe coach, shown once
 
 const SWIPE_THRESHOLD = 92; // px past which a release commits (horizontal)
 const UP_THRESHOLD = 88; // px up-drag that opens details
@@ -83,6 +86,35 @@ export default function SwipeDeck({
   const [detailNew, setDetailNew] = useState<SwiggyRestaurant | null>(null);
   // 2nd-skip escalation: the saved card to offer a permanent hide for.
   const [confirmHide, setConfirmHide] = useState<Extract<DeckCard, { kind: "saved" }> | null>(null);
+
+  // First-run coach — shown once (persisted flag), retires on the first swipe/key
+  // or a timeout. Lazy-read here: SwipeDeck only ever mounts client-side (Decide
+  // is opened by a tap), so localStorage is available and there's no SSR of it.
+  const [hintMounted, setHintMounted] = useState(() => {
+    try {
+      return localStorage.getItem(HINT_KEY) !== "1";
+    } catch {
+      return false;
+    }
+  });
+  const [hintVisible, setHintVisible] = useState(hintMounted);
+  const hintDoneRef = useRef(!hintMounted);
+  const dismissHint = () => {
+    if (hintDoneRef.current) return;
+    hintDoneRef.current = true;
+    try {
+      localStorage.setItem(HINT_KEY, "1");
+    } catch {
+      /* private mode — worst case it shows again, harmless */
+    }
+    setHintVisible(false);
+    window.setTimeout(() => setHintMounted(false), 480); // fade out, then unmount
+  };
+  useEffect(() => {
+    if (hintDoneRef.current) return;
+    const auto = window.setTimeout(dismissHint, 6500); // retire on its own if untouched
+    return () => clearTimeout(auto);
+  }, []);
 
   // Fetch Swiggy's catalog for New/Both whenever the source or cuisine changes.
   useEffect(() => {
@@ -223,6 +255,7 @@ export default function SwipeDeck({
   // ---- pointer gestures (top card only) ----------------------------------
   const onPointerDown = (e: ReactPointerEvent) => {
     if (exiting || !current) return;
+    dismissHint();
     startRef.current = { x: e.clientX, y: e.clientY };
     (e.target as Element).setPointerCapture?.(e.pointerId);
     setDrag({ dx: 0, dy: 0 });
@@ -258,6 +291,9 @@ export default function SwipeDeck({
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
       if (detailNew || confirmHide) return;
+      if (["ArrowLeft", "ArrowRight", "ArrowUp", "Backspace"].includes(e.key) || e.key.toLowerCase() === "u") {
+        dismissHint();
+      }
       if (e.key === "ArrowLeft") {
         e.preventDefault();
         commit("left");
@@ -357,7 +393,8 @@ export default function SwipeDeck({
             </button>
           </Centered>
         ) : (
-          stack
+          <>
+            {stack
             .map((card, i) => {
               const top = i === 0;
               const peek: CSSProperties = top
@@ -385,7 +422,9 @@ export default function SwipeDeck({
               );
             })
             // paint the top card LAST so it wins stacking + receives the pointer
-            .reverse()
+            .reverse()}
+            {hintMounted && current && <DeckHint visible={hintVisible} />}
+          </>
         )}
       </div>
 

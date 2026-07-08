@@ -276,11 +276,33 @@ body {
   }
 }
 
+/* First-run swipe coach — faint directional nudges that imply the gesture,
+   then the whole layer retires once you swipe. Deliberately low-contrast. */
+@keyframes hint-x {
+  0%, 100% { transform: translateX(0); opacity: 0.4; }
+  50% { transform: translateX(var(--hint-dx)); opacity: 0.9; }
+}
+@keyframes hint-y {
+  0%, 100% { transform: translateY(0); opacity: 0.4; }
+  50% { transform: translateY(-9px); opacity: 0.9; }
+}
+.hint-x {
+  animation: hint-x 1.7s var(--ease-out) infinite;
+}
+.hint-y {
+  animation: hint-y 1.7s var(--ease-out) infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .light-on,
   .animate-rise,
   .animate-pop {
     animation: none;
+  }
+  .hint-x,
+  .hint-y {
+    animation: none;
+    opacity: 0.6;
   }
   .me-pulse {
     animation: none;
