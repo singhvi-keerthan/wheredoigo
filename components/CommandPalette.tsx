@@ -150,10 +150,13 @@ export default function CommandPalette({
                 value={q}
                 onValueChange={setQ}
                 placeholder="Name, tag, or area — “jayanagar”, “date”…"
-                className="flex-1 bg-transparent py-3 text-[15px] outline-none"
+                className="min-w-0 flex-1 bg-transparent py-3 text-[15px] outline-none"
                 style={{ color: "var(--text-primary)" }}
               />
-              {geoLoading && shouldGeo && <Loader2 size={14} className="animate-spin" style={{ color: "var(--text-tertiary)" }} />}
+              {/* fixed slot — the spinner appears/disappears without nudging the field */}
+              <span className="grid h-3.5 w-3.5 shrink-0 place-items-center">
+                {geoLoading && shouldGeo && <Loader2 size={14} className="animate-spin" style={{ color: "var(--text-tertiary)" }} />}
+              </span>
               <button
                 onClick={close}
                 aria-label="Close"
@@ -165,7 +168,10 @@ export default function CommandPalette({
             </div>
           </div>
 
-          <Command.List className="scroll-quiet max-h-[44vh] overflow-y-auto px-3 pb-1 pt-2">
+          {/* Fixed height (not max-height): the sheet is bottom-anchored, so a
+              growing/shrinking list would ride the search field up and down as
+              you type. A constant panel height keeps the field dead still. */}
+          <Command.List className="scroll-quiet h-[44vh] overflow-y-auto px-3 pb-1 pt-2">
             {activeArea ? (
               <>
                 <div className="flex items-center gap-1.5 px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-[0.06em]" style={{ color: "var(--text-tertiary)" }}>

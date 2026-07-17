@@ -16,6 +16,14 @@ const HINT_KEY = "imhungry.deckHintSeen.v1"; // first-run swipe coach, shown onc
 const SWIPE_THRESHOLD = 92; // px past which a release commits (horizontal)
 const UP_THRESHOLD = 88; // px up-drag that opens details
 const EXIT_MS = 240;
+// A fast flick commits before the distance threshold — so a confident wrist
+// flick sends the card without dragging it all the way across (the main thing
+// that made the old 1:1 drag feel "loose").
+const FLICK_VELOCITY = 0.55; // px/ms
+const FLICK_MIN = 44; // px — ignore taps / jitter below this travel
+// Sideways swipes stay level: vertical follow is damped hard unless the gesture
+// is genuinely an up-swipe (that opens details).
+const DY_DAMP = 0.2;
 
 // placeId → reverse a real add on undo; skipId → decrement the skip count on undo
 type UndoEntry = { key: string; placeId: string | null; skipId?: string };
@@ -83,6 +91,9 @@ export default function SwipeDeck({
   const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
   const [exiting, setExiting] = useState<{ dir: "left" | "right"; key: string } | null>(null);
   const startRef = useRef<{ x: number; y: number } | null>(null);
+  // Rolling sample of the pointer for release velocity (a smoothed px/ms on x).
+  const moveRef = useRef<{ x: number; t: number } | null>(null);
+  const velRef = useRef(0);
   const [detailNew, setDetailNew] = useState<SwiggyRestaurant | null>(null);
   // 3rd-skip escalation: the saved card to offer a permanent hide for.
   const [confirmHide, setConfirmHide] = useState<Extract<DeckCard, { kind: "saved" }> | null>(null);
@@ -257,18 +268,31 @@ export default function SwipeDeck({
     if (exiting || !current) return;
     dismissHint();
     startRef.current = { x: e.clientX, y: e.clientY };
+    moveRef.current = { x: e.clientX, t: e.timeStamp };
+    velRef.current = 0;
     (e.target as Element).setPointerCapture?.(e.pointerId);
     setDrag({ dx: 0, dy: 0 });
   };
   const onPointerMove = (e: ReactPointerEvent) => {
     if (!startRef.current) return;
+    // Smoothed instantaneous x-velocity from the last sample (guard tiny dt).
+    if (moveRef.current) {
+      const dt = e.timeStamp - moveRef.current.t;
+      if (dt > 0) {
+        const v = (e.clientX - moveRef.current.x) / dt;
+        velRef.current = velRef.current * 0.4 + v * 0.6;
+      }
+    }
+    moveRef.current = { x: e.clientX, t: e.timeStamp };
     setDrag({ dx: e.clientX - startRef.current.x, dy: e.clientY - startRef.current.y });
   };
   const onPointerUp = (e: ReactPointerEvent) => {
     if (!startRef.current) return;
     const dx = e.clientX - startRef.current.x;
     const dy = e.clientY - startRef.current.y;
+    const vx = velRef.current;
     startRef.current = null;
+    moveRef.current = null;
     const adx = Math.abs(dx);
     const ady = Math.abs(dy);
     if (adx < 6 && ady < 6) {
@@ -280,8 +304,10 @@ export default function SwipeDeck({
       setDrag(null);
       return;
     }
-    if (dx > SWIPE_THRESHOLD) return commit("right");
-    if (dx < -SWIPE_THRESHOLD) return commit("left");
+    // Commit on distance OR a fast horizontal flick (whichever lands first).
+    const flick = adx > FLICK_MIN && Math.abs(vx) > FLICK_VELOCITY && adx > ady;
+    if (dx > SWIPE_THRESHOLD || (flick && vx > 0)) return commit("right");
+    if (dx < -SWIPE_THRESHOLD || (flick && vx < 0)) return commit("left");
     setDrag(null); // spring back
   };
 
@@ -340,12 +366,19 @@ export default function SwipeDeck({
       };
     }
     if (drag) {
+      // Keep a sideways swipe level: damp vertical follow hard unless the drag
+      // is genuinely vertical (an up-swipe for details). Rotation is coupled to
+      // the horizontal travel and clamped so the card never over-tilts.
+      const vertical = Math.abs(drag.dy) > Math.abs(drag.dx);
+      const dyEff = vertical ? drag.dy : drag.dy * DY_DAMP;
+      const rot = Math.max(-15, Math.min(15, drag.dx * 0.055));
       return {
-        transform: `translate(${drag.dx}px, ${drag.dy}px) rotate(${drag.dx * 0.05}deg)`,
+        transform: `translate(${drag.dx}px, ${dyEff}px) rotate(${rot}deg)`,
         transition: "none",
       };
     }
-    return { transform: "none", transition: "transform 0.24s cubic-bezier(0.22,1,0.36,1)" };
+    // Snappy, slightly springy return — reads as "tight", not floaty.
+    return { transform: "none", transition: "transform 0.34s var(--ease-spring)" };
   };
 
   const stack = deck.slice(pos, pos + 3);
@@ -414,6 +447,7 @@ export default function SwipeDeck({
                   onPointerUp={top ? onPointerUp : undefined}
                   onPointerCancel={top ? () => {
                     startRef.current = null;
+                    moveRef.current = null;
                     setDrag(null);
                   } : undefined}
                 >

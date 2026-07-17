@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  X, Navigation, Heart, Ban, Star, Plus, ImagePlus, Camera, Trash2, MapPin, Check,
+  X, Navigation, Heart, Ban, Star, Plus, ImagePlus, Camera, Trash2, MapPin, Check, Clapperboard, Play, Pencil,
 } from "lucide-react";
 import {
   usePlace, updatePlace, toggleFavorite, toggleNeverAgain, setTags, addPhoto, removePhoto,
@@ -26,6 +26,7 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
   const enrichedRef = useRef<string | null>(null);
   const [editingTags, setEditingTags] = useState(false);
   const [editingNote, setEditingNote] = useState(false);
+  const [editingReel, setEditingReel] = useState(false); // add/edit the Instagram reel link
   const [visitWizard, setVisitWizard] = useState(false); // guided watchlist → visited form
   const [revealId, setRevealId] = useState<string | null>(null); // tap a photo → reveal its delete icon
   const [viewerIndex, setViewerIndex] = useState<number | null>(null); // tap again → full-screen swipe
@@ -246,6 +247,58 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
               <Ban size={18} />
             </button>
           </div>
+
+          {/* the reel it came from — most saves start on a reel, so this is the
+              "go back and see why" jump. Editable so any place can get a link. */}
+          {editingReel ? (
+            <div
+              className="mt-2 flex items-center gap-2.5 px-3.5"
+              style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)" }}
+            >
+              <Clapperboard size={16} strokeWidth={2} className="shrink-0" style={{ color: "var(--text-tertiary)" }} />
+              <input
+                autoFocus
+                defaultValue={place.reelUrl ?? ""}
+                inputMode="url"
+                placeholder="Paste the Instagram reel link"
+                onBlur={(e) => { updatePlace(place.id, { reelUrl: e.target.value.trim() || undefined }); setEditingReel(false); }}
+                onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                className="min-w-0 flex-1 bg-transparent py-3 text-[14px] outline-none"
+                style={{ color: "var(--text-primary)" }}
+              />
+            </div>
+          ) : place.reelUrl ? (
+            <div className="mt-2 flex items-center gap-2">
+              <a
+                href={place.reelUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="press flex flex-1 items-center justify-center gap-2 py-3 text-[14px] font-bold"
+                style={{ borderRadius: "var(--radius-chip)", background: "var(--bg-elevated)", color: "var(--text-primary)", border: "1px solid var(--border-strong)" }}
+              >
+                <span className="grid h-5 w-5 place-items-center rounded-[7px]" style={{ background: "linear-gradient(45deg,#feda75,#fa7e1e,#d62976,#962fbf,#4f5bd5)" }}>
+                  <Play size={11} strokeWidth={0} fill="#fff" style={{ color: "#fff" }} />
+                </span>
+                Watch on Instagram
+              </a>
+              <button
+                onClick={() => setEditingReel(true)}
+                aria-label="Edit reel link"
+                className="press grid h-11 w-11 shrink-0 place-items-center"
+                style={{ borderRadius: "var(--radius-chip)", border: "1px solid var(--border-strong)", color: "var(--text-tertiary)" }}
+              >
+                <Pencil size={14} />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setEditingReel(true)}
+              className="press mt-2 flex w-full items-center justify-center gap-2 py-2.5 text-[13px] font-semibold"
+              style={{ borderRadius: "var(--radius-chip)", border: "1px dashed var(--border-strong)", color: "var(--text-secondary)" }}
+            >
+              <Clapperboard size={15} strokeWidth={2.25} /> Add Instagram reel link
+            </button>
+          )}
 
           {/* the lowdown — Google's editorial line, the initial research on a
               place you haven't been to yet. Reference info (not your note). */}

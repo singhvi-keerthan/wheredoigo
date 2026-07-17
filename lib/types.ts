@@ -81,6 +81,9 @@ export interface Place {
   googlePriceLevel: number | null; // 0–4 ($ signs)
 
   notes: string;
+  // The Instagram reel (or any link) the place came from — most saves start on a
+  // reel, so this is the "go back and see why I saved it" handle. Optional.
+  reelUrl?: string;
   tags: Tag[];
   photos: Photo[];
   visits: Visit[];

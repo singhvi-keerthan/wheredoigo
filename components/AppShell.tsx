@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Search, Plus, Menu, MapPin, TriangleAlert, Heart } from "lucide-react";
+import { Search, Plus, Menu, MapPin, TriangleAlert, X } from "lucide-react";
 import { usePlaces, usePersistError } from "@/lib/store";
 import { displayState, type DisplayState } from "@/lib/types";
 import MapView from "./MapView";
@@ -50,6 +50,10 @@ const WHITE_ACTION: CSSProperties = {
   border: "none",
 };
 
+// One-time coach on the Decide mascot — most people don't guess a face-button
+// is "help me pick". Shown once (persisted), a few seconds in.
+const MASCOT_TIP_KEY = "imhungry.mascotTipSeen.v1";
+
 export default function AppShell() {
   const places = usePlaces();
   const persistError = usePersistError();
@@ -68,6 +72,47 @@ export default function AppShell() {
   const [browseMode, setBrowseMode] = useState<BrowseMode | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Decide-mascot explainer: mounts a few seconds after load, once ever. Read
+  // the live place count from a ref so the single mount-time timer sees the
+  // hydrated value without re-arming on every store change.
+  const [mascotTip, setMascotTip] = useState(false);
+  const [mascotTipShown, setMascotTipShown] = useState(false); // drives the fade
+  const placesLenRef = useRef(places.length);
+  useEffect(() => {
+    placesLenRef.current = places.length;
+  });
+  const dismissMascotTip = () => {
+    setMascotTipShown(false);
+    try {
+      localStorage.setItem(MASCOT_TIP_KEY, "1");
+    } catch {
+      /* private mode — worst case it shows again, harmless */
+    }
+    window.setTimeout(() => setMascotTip(false), 260); // fade, then unmount
+  };
+  useEffect(() => {
+    let seen = false;
+    try {
+      seen = localStorage.getItem(MASCOT_TIP_KEY) === "1";
+    } catch {
+      /* private mode */
+    }
+    if (seen) return;
+    let auto = 0;
+    let reveal = 0;
+    const t = window.setTimeout(() => {
+      if (placesLenRef.current === 0) return; // nothing to decide yet — try next launch
+      setMascotTip(true);
+      reveal = window.setTimeout(() => setMascotTipShown(true), 30); // next tick → fade in
+      auto = window.setTimeout(dismissMascotTip, 9000); // retire on its own if ignored
+    }, 3600);
+    return () => {
+      clearTimeout(t);
+      clearTimeout(auto);
+      clearTimeout(reveal);
+    };
+  }, []);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -110,29 +155,32 @@ export default function AppShell() {
       />
 
       {/* ===================== MASTHEAD — dark ink on the light map ===================== */}
-      <header className="fixed inset-x-0 top-0 z-10 flex items-end justify-between px-5 pt-[max(0.9rem,env(safe-area-inset-top))]">
-        <div>
+      {/* Title row and menu share one line (menu centred on the name), with the
+          count line tucked underneath — so the masthead reads as one unit, not
+          a name floating above a lower-sitting button. */}
+      <header className="fixed inset-x-0 top-0 z-10 px-5 pt-[max(0.9rem,env(safe-area-inset-top))]">
+        <div className="flex items-center justify-between">
           <h1
             className="text-[26px] font-medium leading-none tracking-[-0.015em]"
             style={{ fontFamily: "var(--font-display)", color: "#16181d" }}
           >
             im hungry
           </h1>
-          <p className="mt-1.5 text-[11px]" style={{ color: "#5b6470" }}>
-            <span style={{ fontFamily: "var(--font-mono)", color: "#16181d", fontWeight: 500 }}>
-              {places.length}
-            </span>{" "}
-            places · Bengaluru
-          </p>
+          <button
+            onClick={() => setMenuOpen(true)}
+            aria-label="Menu"
+            className="press grid h-9 w-9 place-items-center rounded-full"
+            style={GLASS}
+          >
+            <Menu size={17} style={{ color: "oklch(0.9 0 0)" }} />
+          </button>
         </div>
-        <button
-          onClick={() => setMenuOpen(true)}
-          aria-label="Menu"
-          className="press grid h-9 w-9 place-items-center rounded-full"
-          style={GLASS}
-        >
-          <Menu size={17} style={{ color: "oklch(0.9 0 0)" }} />
-        </button>
+        <p className="mt-1.5 text-[11px]" style={{ color: "#5b6470" }}>
+          <span style={{ fontFamily: "var(--font-mono)", color: "#16181d", fontWeight: 500 }}>
+            {places.length}
+          </span>{" "}
+          places · Bengaluru
+        </p>
       </header>
 
       {/* storage failure — silent persist loss is the one unforgivable state */}
@@ -197,9 +245,50 @@ export default function AppShell() {
               as the search dock below it, so the two rows read as one dock
               instead of two differently-sized ones stacked up. Sized to fit
               one line on a narrow phone with no horizontal swipe. */}
-          <div className="flex items-center gap-2.5 px-[18px] pb-2">
+          <div className="relative flex items-center gap-2.5 px-[18px] pb-2">
+            {/* one-time explainer bubble — points down at the mascot */}
+            {mascotTip && (
+              <div
+                className="absolute bottom-full left-2.5 z-30 mb-2.5"
+                style={{
+                  opacity: mascotTipShown ? 1 : 0,
+                  transform: mascotTipShown ? "translateY(0)" : "translateY(6px)",
+                  transition: "opacity 240ms var(--ease-out), transform 240ms var(--ease-out)",
+                }}
+              >
+                <div className="relative" style={{ ...GLASS, maxWidth: 252, borderRadius: 16, padding: "11px 13px" }}>
+                  <button
+                    onClick={dismissMascotTip}
+                    aria-label="Dismiss"
+                    className="press absolute right-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-full"
+                    style={{ color: "oklch(0.68 0 0)" }}
+                  >
+                    <X size={12} strokeWidth={2.5} />
+                  </button>
+                  <p className="pr-4 text-[12.5px] leading-snug" style={{ color: "oklch(0.92 0 0)" }}>
+                    <span className="font-semibold" style={{ color: "#fff" }}>Can’t decide?</span> Ask me and
+                    I’ll deal your places one at a time — swipe till you land on tonight’s spot.
+                  </p>
+                  {/* tail — a rotated square peeking out the bottom, over the mascot */}
+                  <span
+                    className="absolute h-3 w-3 rotate-45"
+                    style={{
+                      left: 18,
+                      top: "100%",
+                      marginTop: -6,
+                      background: "rgba(22,24,30,0.66)",
+                      borderRight: "1px solid rgba(255,255,255,0.1)",
+                      borderBottom: "1px solid rgba(255,255,255,0.1)",
+                    }}
+                  />
+                </div>
+              </div>
+            )}
             <button
-              onClick={() => setDecideOpen(true)}
+              onClick={() => {
+                dismissMascotTip();
+                setDecideOpen(true);
+              }}
               aria-label="Decide"
               className="press shrink-0 overflow-hidden"
               style={{
@@ -253,16 +342,9 @@ export default function AppShell() {
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {/* Favorites reads as its heart glyph — the universal fav
-                        mark, and it frees the longest word from a rail sized to
-                        one phone line. Colour follows the rail's on/off system
-                        (white active, muted idle); the red state hue stays on
-                        the underline, per the pin-colour discipline. */}
-                    {f.key === "favorite" ? (
-                      <Heart size={14} strokeWidth={2.25} fill={on ? "currentColor" : "none"} />
-                    ) : (
-                      f.label
-                    )}
+                    {/* Every chip reads as its word — the state hue stays on the
+                        underline, per the pin-colour discipline. */}
+                    {f.label}
                     <span
                       style={{
                         width: 14,

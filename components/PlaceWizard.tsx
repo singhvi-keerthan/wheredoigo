@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { X, ArrowLeft, ArrowRight, Check, Star, ImagePlus, Camera, Trash2 } from "lucide-react";
+import {
+  X, ArrowLeft, ArrowRight, Check, Star, ImagePlus, Camera, Trash2,
+  Heart, Ban, ChevronLeft, ChevronRight,
+} from "lucide-react";
 import {
   usePlace,
   updatePlace,
@@ -30,7 +33,7 @@ import { resizeImage } from "@/lib/image";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
-const VISIT_STEPS = ["when", "who", "rating", "spend", "notes", "tags", "photo"] as const;
+const VISIT_STEPS = ["when", "who", "rating", "spend", "notes", "tags", "photo", "verdict"] as const;
 
 const PROMPTS: Record<string, { title: string; sub?: string }> = {
   when: { title: "When did you go?" },
@@ -40,6 +43,7 @@ const PROMPTS: Record<string, { title: string; sub?: string }> = {
   notes: { title: "Anything to remember?", sub: "What you ate, what to order again." },
   tags: { title: "Tweak the tags?", sub: "Now that you've actually been." },
   photo: { title: "Add photos", sub: "Optional — shots from the visit. Pick as many as you like." },
+  verdict: { title: "So — what's the verdict?", sub: "Optional. Tuck it into Favorites, or skip it for good." },
 };
 
 export default function PlaceWizard({
@@ -53,7 +57,6 @@ export default function PlaceWizard({
   const customTags = useCustomTags();
   const uploadRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
-  const dateRef = useRef<HTMLInputElement>(null);
 
   const steps = VISIT_STEPS;
   const [step, setStep] = useState(0);
@@ -69,6 +72,8 @@ export default function PlaceWizard({
   );
   const [vSpend, setVSpend] = useState("");
   const [vNotes, setVNotes] = useState("");
+  // Final verdict — optionally files the place under Favorites or Skip on submit.
+  const [verdict, setVerdict] = useState<"favorite" | "skip" | null>(null);
 
   const key = steps[step];
   const last = step === steps.length - 1;
@@ -90,6 +95,10 @@ export default function PlaceWizard({
     if (vSpend.trim()) patch.myBudgetPerPerson = Math.round(+vSpend) || null;
     // Private sub-ratings (assistant-only) — merge onto whatever's there.
     if (Object.keys(subRatings).length) patch.ratings = { ...place.ratings, ...subRatings };
+    // Verdict → file it. Favorite and Skip are mutually exclusive flags here;
+    // leaving it unset touches neither (stays a plain "been").
+    if (verdict === "favorite") { patch.favorite = true; patch.neverAgain = false; }
+    else if (verdict === "skip") { patch.neverAgain = true; patch.favorite = false; }
     // Tags may have been adjusted on the "tags" step.
     setTags(place.id, draftTags);
     if (Object.keys(patch).length) updatePlace(place.id, patch);
@@ -103,19 +112,6 @@ export default function PlaceWizard({
 
   const next = () => (last ? submit() : setStep((s) => s + 1));
   const back = () => setStep((s) => Math.max(0, s - 1));
-
-  // Land on the "when" step already showing the calendar — a native date
-  // input otherwise needs a click into the field, then another to open the
-  // picker. showPicker() isn't supported everywhere; the plain field still
-  // works if it throws.
-  useEffect(() => {
-    if (steps[step] !== "when") return;
-    try {
-      dateRef.current?.showPicker?.();
-    } catch {
-      /* unsupported — the field itself still works */
-    }
-  }, [step, steps]);
 
   // Enter advances — but only from "empty" focus (chips / rating / photo).
   // Inside a text field Enter belongs to that field (newline, or committing a
@@ -238,7 +234,7 @@ export default function PlaceWizard({
             )}
 
             {key === "when" && (
-              <input ref={dateRef} type="date" value={vDate} max={today()} onChange={(e) => setVDate(e.target.value)} className="input-dark" />
+              <MiniCalendar value={vDate} max={today()} onChange={setVDate} />
             )}
 
             {key === "who" && (
@@ -335,6 +331,27 @@ export default function PlaceWizard({
                 </div>
                 <input ref={uploadRef} type="file" accept="image/*" multiple hidden onChange={onFile} />
                 <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={onFile} />
+              </div>
+            )}
+
+            {key === "verdict" && (
+              <div className="flex flex-col gap-2.5">
+                <VerdictButton
+                  active={verdict === "favorite"}
+                  onClick={() => setVerdict((v) => (v === "favorite" ? null : "favorite"))}
+                  icon={<Heart size={20} fill={verdict === "favorite" ? "currentColor" : "none"} />}
+                  color="var(--s-favorite)"
+                  title="Favorite"
+                  sub="One of your places — keep it close."
+                />
+                <VerdictButton
+                  active={verdict === "skip"}
+                  onClick={() => setVerdict((v) => (v === "skip" ? null : "skip"))}
+                  icon={<Ban size={20} />}
+                  color="var(--s-never)"
+                  title="Skip"
+                  sub="Been, not again — hide it from picks."
+                />
               </div>
             )}
           </div>
@@ -480,6 +497,159 @@ function WideBtn({ onClick, icon, label }: { onClick: () => void; icon: React.Re
       style={{ borderRadius: "var(--radius)", background: "var(--bg-elevated)", color: "var(--text-primary)", border: "1px dashed var(--border-strong)" }}
     >
       {icon} {label}
+    </button>
+  );
+}
+
+const pad2 = (n: number) => (n < 10 ? `0${n}` : `${n}`);
+const ymd = (y: number, m: number, d: number) => `${y}-${pad2(m + 1)}-${pad2(d)}`;
+
+// Always-open month calendar for the "when" step — no click-to-open native
+// picker. Future days are disabled (you can't have been somewhere tomorrow), and
+// the month can't page past the one containing `max` (today).
+function MiniCalendar({
+  value,
+  max,
+  onChange,
+}: {
+  value: string; // yyyy-mm-dd
+  max: string; // yyyy-mm-dd — today
+  onChange: (v: string) => void;
+}) {
+  const [sy, sm] = value.split("-").map(Number);
+  const [view, setView] = useState<{ y: number; m: number }>({ y: sy, m: sm - 1 });
+
+  const [maxY, maxM] = max.split("-").map(Number);
+  const maxM0 = maxM - 1;
+
+  const lead = new Date(view.y, view.m, 1).getDay(); // 0=Sun … 6=Sat
+  const days = new Date(view.y, view.m + 1, 0).getDate();
+  const nextDisabled = view.y > maxY || (view.y === maxY && view.m >= maxM0);
+  const label = new Date(view.y, view.m, 1).toLocaleString(undefined, { month: "long", year: "numeric" });
+  const cells: (number | null)[] = [
+    ...Array(lead).fill(null),
+    ...Array.from({ length: days }, (_, i) => i + 1),
+  ];
+
+  const shift = (delta: number) =>
+    setView((v) => {
+      const d = new Date(v.y, v.m + delta, 1);
+      return { y: d.getFullYear(), m: d.getMonth() };
+    });
+
+  return (
+    <div
+      className="p-3.5"
+      style={{ borderRadius: "var(--radius-sm)", border: "1px solid var(--border-strong)", background: "var(--bg-elevated)" }}
+    >
+      <div className="mb-3 flex items-center justify-between">
+        <button
+          onClick={() => shift(-1)}
+          aria-label="Previous month"
+          className="press grid h-8 w-8 place-items-center rounded-full"
+          style={{ border: "1px solid var(--border-strong)", color: "var(--text-secondary)" }}
+        >
+          <ChevronLeft size={16} />
+        </button>
+        <span className="text-[14.5px] font-semibold" style={{ color: "var(--text-primary)" }}>
+          {label}
+        </span>
+        <button
+          onClick={() => !nextDisabled && shift(1)}
+          disabled={nextDisabled}
+          aria-label="Next month"
+          className="press grid h-8 w-8 place-items-center rounded-full"
+          style={{
+            border: "1px solid var(--border-strong)",
+            color: "var(--text-secondary)",
+            opacity: nextDisabled ? 0.3 : 1,
+            cursor: nextDisabled ? "default" : "pointer",
+          }}
+        >
+          <ChevronRight size={16} />
+        </button>
+      </div>
+
+      <div className="mb-1 grid grid-cols-7 gap-1">
+        {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
+          <span key={i} className="grid h-7 place-items-center text-[11px] font-semibold" style={{ color: "var(--text-tertiary)" }}>
+            {d}
+          </span>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-7 gap-1">
+        {cells.map((d, i) => {
+          if (d == null) return <span key={`b${i}`} />;
+          const ds = ymd(view.y, view.m, d);
+          const disabled = ds > max;
+          const selected = ds === value;
+          const isToday = ds === max;
+          return (
+            <button
+              key={ds}
+              onClick={() => !disabled && onChange(ds)}
+              disabled={disabled}
+              className="press grid h-9 place-items-center text-[13.5px]"
+              style={{
+                borderRadius: 10,
+                background: selected ? "oklch(0.97 0 0)" : "transparent",
+                color: selected ? "oklch(0.16 0.006 260)" : "var(--text-primary)",
+                fontWeight: selected ? 700 : isToday ? 600 : 500,
+                border: `1px solid ${isToday && !selected ? "var(--border-strong)" : "transparent"}`,
+                opacity: disabled ? 0.28 : 1,
+                cursor: disabled ? "default" : "pointer",
+              }}
+            >
+              {d}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// One tap-to-toggle verdict option (Favorite / Skip) on the final step.
+function VerdictButton({
+  active,
+  onClick,
+  icon,
+  color,
+  title,
+  sub,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  color: string;
+  title: string;
+  sub: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="press flex items-center gap-3.5 px-4 py-3.5 text-left"
+      style={{
+        borderRadius: "var(--radius)",
+        background: active ? color : "var(--bg-elevated)",
+        border: `1px solid ${active ? color : "var(--border-strong)"}`,
+        color: active ? "#fff" : "var(--text-primary)",
+      }}
+    >
+      <span
+        className="grid h-10 w-10 shrink-0 place-items-center rounded-full"
+        style={{ background: active ? "rgba(255,255,255,0.18)" : "var(--bg-raised)", color: active ? "#fff" : color }}
+      >
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-[15.5px] font-semibold">{title}</span>
+        <span className="block text-[12.5px]" style={{ color: active ? "rgba(255,255,255,0.8)" : "var(--text-tertiary)" }}>
+          {sub}
+        </span>
+      </span>
+      {active && <Check size={18} strokeWidth={2.75} />}
     </button>
   );
 }

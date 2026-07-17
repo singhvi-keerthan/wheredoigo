@@ -14,6 +14,7 @@ import {
   Navigation2,
   Check,
   CalendarCheck,
+  Clapperboard,
 } from "lucide-react";
 import { addPlace, findDuplicate } from "@/lib/store";
 import { parseLocation, isUrl } from "@/lib/capture";
@@ -32,9 +33,9 @@ import { useSheetDrag } from "./useSheetDrag";
 // you can drop an optional one-line note.
 type Mode = "menu" | "search" | "link" | "nearby" | "confirm";
 
-// A picked-but-not-yet-saved place. `commit(notes)` creates it and returns its id;
-// `backTo` is the route to return to if you back out of the confirm screen.
-type Pending = { name: string; sub?: string; backTo: Mode; commit: (notes: string) => string };
+// A picked-but-not-yet-saved place. `commit(notes, reelUrl)` creates it and
+// returns its id; `backTo` is the route to return to if you back out of confirm.
+type Pending = { name: string; sub?: string; backTo: Mode; commit: (notes: string, reelUrl?: string) => string };
 
 const TITLES: Record<Mode, string> = {
   menu: "Add a place",
@@ -73,6 +74,7 @@ export default function AddPlaceSheet({
   const [geoError, setGeoError] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
   const [note, setNote] = useState("");
+  const [reel, setReel] = useState(""); // optional Instagram reel link, taken on confirm
   const inputRef = useRef<HTMLInputElement>(null);
   const { sheetRef, handleProps } = useSheetDrag(onClose);
 
@@ -158,8 +160,9 @@ export default function AddPlaceSheet({
   };
 
   // Move to the confirm screen (optional note), unless it's already saved.
-  const toConfirm = (name: string, sub: string | undefined, backTo: Mode, commit: (notes: string) => string) => {
+  const toConfirm = (name: string, sub: string | undefined, backTo: Mode, commit: (notes: string, reelUrl?: string) => string) => {
     setNote("");
+    setReel("");
     setPending({ name, sub, backTo, commit });
     setMode("confirm");
   };
@@ -167,7 +170,7 @@ export default function AddPlaceSheet({
   const addAt = (lat: number, lng: number, name: string, source: CaptureSource, backTo: Mode) => {
     const dup = findDuplicate({ name, lat, lng });
     if (dup) return finish(dup.id, { duplicate: true });
-    toConfirm(name, undefined, backTo, (notes) =>
+    toConfirm(name, undefined, backTo, (notes, reelUrl) =>
       addPlace({
         googlePlaceId: null,
         name,
@@ -180,6 +183,7 @@ export default function AddPlaceSheet({
         myBudgetPerPerson: null,
         googlePriceLevel: null,
         notes,
+        reelUrl,
         tags: [],
         source,
         enrichedAt: null,
@@ -192,7 +196,7 @@ export default function AddPlaceSheet({
   const addGoogle = (r: GooglePlace, backTo: Mode) => {
     const dup = findDuplicate({ googlePlaceId: r.placeId, name: r.name, lat: r.lat, lng: r.lng });
     if (dup) return finish(dup.id, { duplicate: true });
-    toConfirm(r.name, r.area || r.address || undefined, backTo, (notes) => {
+    toConfirm(r.name, r.area || r.address || undefined, backTo, (notes, reelUrl) => {
       const place = addPlace({
         googlePlaceId: r.placeId,
         name: r.name,
@@ -206,6 +210,7 @@ export default function AddPlaceSheet({
         myBudgetPerPerson: null,
         googlePriceLevel: r.googlePriceLevel,
         notes,
+        reelUrl,
         // Auto-derived from Google's types so it's searchable immediately.
         tags: tagsFromGoogleTypes(r.googleTypes),
         googleTypes: r.googleTypes,
@@ -222,7 +227,7 @@ export default function AddPlaceSheet({
   };
 
   const saveConfirm = (beenAlready = false) => {
-    if (pending) finish(pending.commit(note.trim()), { beenAlready });
+    if (pending) finish(pending.commit(note.trim(), reel.trim() || undefined), { beenAlready });
   };
 
   // "Pin where I am": reverse-match the GPS fix to the real places around it.
@@ -348,13 +353,19 @@ export default function AddPlaceSheet({
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
                   placeholder="e.g. Blue Tokai, Koramangala"
-                  className="flex-1 bg-transparent py-3.5 text-[14.5px] outline-none"
+                  className="min-w-0 flex-1 bg-transparent py-3.5 text-[14.5px] outline-none"
                   style={{ color: "var(--text-primary)" }}
                 />
-                {gLoading && <Loader2 size={15} className="animate-spin" style={{ color: "var(--text-tertiary)" }} />}
+                {/* fixed slot — the spinner never nudges the field */}
+                <span className="grid h-4 w-4 shrink-0 place-items-center">
+                  {gLoading && <Loader2 size={15} className="animate-spin" style={{ color: "var(--text-tertiary)" }} />}
+                </span>
               </div>
 
-              <div className="mt-2 flex flex-col gap-1.5">
+              {/* Once searching, the results live in a constant-height panel so the
+                  field above stays put no matter how many matches stream in (the
+                  sheet is bottom-anchored, so a growing list would push it up). */}
+              <div className={`mt-2 flex flex-col gap-1.5 ${showResults ? "scroll-quiet h-[42vh] overflow-y-auto" : ""}`}>
                 {showResults && gResults.map((r) => (
                   <ResultRow key={r.placeId} r={r} onPick={() => addGoogle(r, "search")} />
                 ))}
@@ -379,10 +390,12 @@ export default function AddPlaceSheet({
                   value={link}
                   onChange={(e) => setLink(e.target.value)}
                   placeholder="Paste a Google Maps link or lat, lng"
-                  className="flex-1 bg-transparent py-3.5 text-[14.5px] outline-none"
+                  className="min-w-0 flex-1 bg-transparent py-3.5 text-[14.5px] outline-none"
                   style={{ color: "var(--text-primary)" }}
                 />
-                {resolving && <Loader2 size={15} className="animate-spin" style={{ color: "var(--text-tertiary)" }} />}
+                <span className="grid h-4 w-4 shrink-0 place-items-center">
+                  {resolving && <Loader2 size={15} className="animate-spin" style={{ color: "var(--text-tertiary)" }} />}
+                </span>
               </div>
 
               {linkResults.length > 0 && (
@@ -483,6 +496,23 @@ export default function AddPlaceSheet({
               <p className="mt-1.5 px-1 text-[11.5px]" style={{ color: "var(--text-tertiary)" }}>
                 Why you saved it — searchable later, so “pizza” finds this place.
               </p>
+
+              {/* optional reel link — most saves start on a reel; this is the
+                  "go back and see why" handle, shown later as Watch on Instagram */}
+              <div
+                className="mt-2.5 flex items-center gap-2.5 px-3.5"
+                style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)" }}
+              >
+                <Clapperboard size={16} strokeWidth={2} className="shrink-0" style={{ color: "var(--text-tertiary)" }} />
+                <input
+                  value={reel}
+                  onChange={(e) => setReel(e.target.value)}
+                  inputMode="url"
+                  placeholder="Instagram reel link — optional"
+                  className="min-w-0 flex-1 bg-transparent py-3 text-[14px] outline-none"
+                  style={{ color: "var(--text-primary)" }}
+                />
+              </div>
 
               <button
                 onClick={() => saveConfirm()}
