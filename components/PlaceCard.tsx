@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Star, Navigation, X, ChevronRight, ImagePlus, Camera, Trash2, Check, Ban, MapPin } from "lucide-react";
+import { Star, Navigation, X, ChevronRight, ImagePlus, Camera, Trash2, Check, Ban, MapPin, Play } from "lucide-react";
 import { displayState, type Place } from "@/lib/types";
 import { addPhoto, removePhoto, addVisit, toggleNeverAgain } from "@/lib/store";
 import { resizeImage } from "@/lib/image";
@@ -237,16 +237,33 @@ export default function PlaceCard({
         </div>
       )}
 
-      <a
-        href={directionsUrl(place)}
-        target="_blank"
-        rel="noreferrer"
-        className={`press ${watchlist ? "mt-2" : "mt-3.5"} flex items-center justify-center gap-2 py-3 text-[14px] font-bold`}
-        style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
-      >
-        <Navigation size={15} strokeWidth={2.5} fill="currentColor" />
-        Directions
-      </a>
+      {/* the reel it came from sits beside Directions — same jump PlaceDetail offers */}
+      <div className={`${watchlist ? "mt-2" : "mt-3.5"} ${place.reelUrl ? "grid grid-cols-2 gap-2" : ""}`}>
+        {place.reelUrl && (
+          <a
+            href={place.reelUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="press flex items-center justify-center gap-2 py-3 text-[14px] font-bold"
+            style={{ borderRadius: "var(--radius-chip)", background: "var(--bg-elevated)", color: "var(--text-primary)", border: "1px solid var(--border-strong)" }}
+          >
+            <span className="grid h-5 w-5 place-items-center rounded-[7px]" style={{ background: "linear-gradient(45deg,#feda75,#fa7e1e,#d62976,#962fbf,#4f5bd5)" }}>
+              <Play size={11} strokeWidth={0} fill="#fff" style={{ color: "#fff" }} />
+            </span>
+            Watch reel
+          </a>
+        )}
+        <a
+          href={directionsUrl(place)}
+          target="_blank"
+          rel="noreferrer"
+          className="press flex items-center justify-center gap-2 py-3 text-[14px] font-bold"
+          style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
+        >
+          <Navigation size={15} strokeWidth={2.5} fill="currentColor" />
+          Directions
+        </a>
+      </div>
 
       {viewerIndex !== null && (
         <PhotoViewer
