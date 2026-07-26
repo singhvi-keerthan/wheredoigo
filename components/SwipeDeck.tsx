@@ -11,7 +11,7 @@ import SwipeCard from "./SwipeCard";
 import NewCardDetail from "./NewCardDetail";
 import DeckHint from "./DeckHint";
 
-const HINT_KEY = "imhungry.deckHintSeen.v1"; // first-run swipe coach, shown once
+const HINT_KEY = "wheredoigokeerthan.deckHintSeen.v1"; // first-run swipe coach, shown once
 
 const SWIPE_THRESHOLD = 92; // px past which a release commits (horizontal)
 const UP_THRESHOLD = 88; // px up-drag that opens details

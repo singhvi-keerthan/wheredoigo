@@ -1,4 +1,4 @@
-# im hungry — Design System (as shipped)
+# wheredoigokeerthan — Design System (as shipped)
 
 This documents the system the code actually implements (tokens live in
 `app/globals.css`; anything here disagreeing with the code is a bug in one of
@@ -38,7 +38,7 @@ Beli (photo-forward warmth) + Partiful (rounded, springy delight).
 
 | Role | Font | Notes |
 |---|---|---|
-| Brand + sheet titles | **Zodiak** (`--font-display`) | masthead "im hungry", sheet headers |
+| Brand + sheet titles | **Zodiak** (`--font-display`) | masthead "wheredoigokeerthan", sheet headers |
 | Place names | **Instrument Serif** (`--font-serif`) | names only — the identity layer |
 | UI / controls | **General Sans** (`--font-sans`) | everything else |
 | Data | **Spline Sans Mono** (`--font-mono`) | ratings, prices, counts, distances — data ONLY |

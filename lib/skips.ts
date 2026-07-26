@@ -8,7 +8,7 @@
 // current deck, so the "2nd time" only ever lands when the place resurfaces in a
 // later session or after a reshuffle.
 
-const KEY = "imhungry.skips.v1";
+const KEY = "wheredoigokeerthan.skips.v1";
 type SkipMap = Record<string, number>;
 
 function read(): SkipMap {

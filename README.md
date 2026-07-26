@@ -1,4 +1,4 @@
-# im hungry
+# wheredoigokeerthan
 
 Personal, single-user, $0-infra PWA: a map-first second brain for going out.
 Every place you've been or want to go is a pin; the two loops are **capture**

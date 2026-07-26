@@ -52,7 +52,7 @@ const WHITE_ACTION: CSSProperties = {
 
 // One-time coach on the Decide mascot — most people don't guess a face-button
 // is "help me pick". Shown once (persisted), a few seconds in.
-const MASCOT_TIP_KEY = "imhungry.mascotTipSeen.v1";
+const MASCOT_TIP_KEY = "wheredoigokeerthan.mascotTipSeen.v1";
 
 export default function AppShell() {
   const places = usePlaces();
@@ -161,10 +161,17 @@ export default function AppShell() {
       <header className="fixed inset-x-0 top-0 z-10 px-5 pt-[max(0.9rem,env(safe-area-inset-top))]">
         <div className="flex items-center justify-between">
           <h1
-            className="text-[26px] font-medium leading-none tracking-[-0.015em]"
-            style={{ fontFamily: "var(--font-display)", color: "#16181d" }}
+            className="font-medium leading-none tracking-[-0.015em]"
+            style={{
+              fontFamily: "var(--font-display)",
+              color: "#16181d",
+              // 26px everywhere ≥ ~313px wide; below that, scale so the full
+              // 18-char name (≈8.8em in Zodiak) never clips against the menu
+              // button (84px = side padding + button + gap).
+              fontSize: "min(26px, calc((100vw - 84px) / 8.81))",
+            }}
           >
-            im hungry
+            wheredoigokeerthan
           </h1>
           <button
             onClick={() => setMenuOpen(true)}

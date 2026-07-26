@@ -21,11 +21,11 @@ const serif = Instrument_Serif({
 });
 
 export const metadata: Metadata = {
-  title: "im hungry — where are we eating?",
+  title: "wheredoigokeerthan — where are we eating?",
   description: "A private map of every place you've been and want to go.",
   manifest: "/manifest.webmanifest",
   icons: { icon: "/icon.png", apple: "/apple-touch-icon.png" },
-  appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "im hungry" },
+  appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "wheredoigo" },
 };
 
 export const viewport: Viewport = {

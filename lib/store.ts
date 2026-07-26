@@ -4,6 +4,7 @@ import { useSyncExternalStore } from "react";
 import type { Photo, Place, Tag, TagNamespace, Visit } from "./types";
 import { SEED_PLACES } from "./seed";
 import { idbAvailable, idbDeletePhoto, idbGetAllPhotos, idbPutPhoto } from "./photoStore";
+import "./migrate"; // one-time imhungry.* → wheredoigokeerthan.* key copy — must eval before any read
 
 // ---------------------------------------------------------------------------
 // Local-first store. Place records live in localStorage; photo bytes live in
@@ -13,7 +14,7 @@ import { idbAvailable, idbDeletePhoto, idbGetAllPhotos, idbPutPhoto } from "./ph
 // persistence layer for Neon (Postgres) without changing the call sites.
 // ---------------------------------------------------------------------------
 
-const KEY = "imhungry.places.v1";
+const KEY = "wheredoigokeerthan.places.v1";
 
 let cache: Place[] | null = null;
 const listeners = new Set<() => void>();
@@ -406,7 +407,7 @@ export function applyRemotePhoto(photoId: string, dataUrl: string): void {
 // UI. Persisting them here makes a tag you invent on one place available on all.
 
 type TagVocab = Record<TagNamespace, string[]>;
-const TAG_KEY = "imhungry.tags.v1";
+const TAG_KEY = "wheredoigokeerthan.tags.v1";
 const EMPTY_VOCAB: TagVocab = { type: [], cuisine: [], staple: [], occasion: [], vibe: [], practical: [] };
 
 let tagCache: TagVocab | null = null;
@@ -429,7 +430,7 @@ function commitTags(next: TagVocab) {
   try {
     window.localStorage.setItem(TAG_KEY, JSON.stringify(next));
   } catch (e) {
-    console.warn("im hungry: could not persist tags.", e);
+    console.warn("wheredoigokeerthan: could not persist tags.", e);
   }
   tagListeners.forEach((l) => l());
 }
@@ -458,7 +459,7 @@ export function addCustomTag(ns: TagNamespace, raw: string): string {
 // in one JSON file. Also the migration path to the v2 cloud store.
 
 export interface BackupFile {
-  app: "im-hungry";
+  app: "wheredoigokeerthan";
   version: 1;
   exportedAt: string;
   places: Place[];
@@ -467,7 +468,7 @@ export interface BackupFile {
 
 export function exportData(): BackupFile {
   return {
-    app: "im-hungry",
+    app: "wheredoigokeerthan",
     version: 1,
     exportedAt: new Date().toISOString(),
     places: readVisible(), // hydrated, tombstones excluded — photo dataUrls embedded in the file
@@ -483,7 +484,7 @@ export function downloadBackup(): number {
   const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `im-hungry-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = `wheredoigokeerthan-backup-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   URL.revokeObjectURL(a.href);
   return data.places.length;
@@ -501,7 +502,7 @@ export function importData(text: string): number {
   if (!Array.isArray(b.places)) throw new Error("No places found in that file.");
   for (const p of b.places) {
     if (typeof p?.id !== "string" || typeof p?.name !== "string" || typeof p?.lat !== "number" || typeof p?.lng !== "number") {
-      throw new Error("That file doesn’t look like an im hungry backup.");
+      throw new Error("That file doesn’t look like a wheredoigokeerthan backup.");
     }
   }
   commit(b.places as Place[]);

@@ -20,9 +20,9 @@ import {
 } from "@/lib/store";
 import { idbGetAllPhotos, idbPutPhoto } from "@/lib/photoStore";
 
-const OWNER_KEY = "imhungry.sync.owner"; // sha256(passphrase) — the capability token
-const CURSOR_KEY = "imhungry.sync.cursor"; // max updated_at pulled so far
-const DIRTY_KEY = "imhungry.sync.dirty"; // ids changed locally but not yet pushed
+const OWNER_KEY = "wheredoigokeerthan.sync.owner"; // sha256(passphrase) — the capability token
+const CURSOR_KEY = "wheredoigokeerthan.sync.cursor"; // max updated_at pulled so far
+const DIRTY_KEY = "wheredoigokeerthan.sync.dirty"; // ids changed locally but not yet pushed
 
 export type SyncState = "disabled" | "idle" | "syncing" | "error" | "offline";
 export interface SyncStatus {
