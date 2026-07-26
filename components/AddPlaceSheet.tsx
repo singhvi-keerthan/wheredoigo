@@ -15,6 +15,7 @@ import {
   Check,
   CalendarCheck,
   Clapperboard,
+  Play,
 } from "lucide-react";
 import { addPlace, findDuplicate } from "@/lib/store";
 import { parseLocation, isUrl } from "@/lib/capture";
@@ -475,6 +476,20 @@ export default function AddPlaceSheet({
                   <p className="mt-0.5 truncate text-[12px]" style={{ color: "var(--text-tertiary)" }}>
                     {pending.sub}
                   </p>
+                )}
+                {reel.trim() && (
+                  <a
+                    href={/^https?:\/\//i.test(reel.trim()) ? reel.trim() : `https://${reel.trim()}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="press mt-2 inline-flex items-center gap-1.5 text-[12.5px] font-semibold"
+                    style={{ color: "var(--text-secondary)" }}
+                  >
+                    <span className="grid h-5 w-5 place-items-center rounded-[7px]" style={{ background: "linear-gradient(45deg,#feda75,#fa7e1e,#d62976,#962fbf,#4f5bd5)" }}>
+                      <Play size={11} strokeWidth={0} fill="#fff" style={{ color: "#fff" }} />
+                    </span>
+                    Watch reel
+                  </a>
                 )}
               </div>
 
