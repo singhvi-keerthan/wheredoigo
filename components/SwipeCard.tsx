@@ -48,7 +48,7 @@ function newView(card: Extract<DeckCard, { kind: "new" }>): CardView {
   const { r } = card;
   return {
     name: r.name,
-    cover: null,
+    cover: r.photo,
     ratingValue: r.rating,
     ratingMine: false,
     priceLabel: r.priceForTwo != null ? `₹${r.priceForTwo.toLocaleString("en-IN")} for two` : "—",
@@ -95,21 +95,35 @@ export default function SwipeCard({
         ...style,
       }}
     >
-      {/* photo, or a typographic gradient for a photo-less card */}
-      {v.cover ? (
-        <div className="absolute inset-0" style={{ background: `center/cover url(${v.cover})` }} />
-      ) : (
-        <div
-          className="absolute inset-0 grid place-items-center"
-          style={{ background: "linear-gradient(155deg, oklch(0.34 0.05 265), oklch(0.22 0.03 265))" }}
+      {/* Typographic gradient always renders; the photo lays over it. Swiggy's
+          images are remote CDN URLs, so a 404 or a blocked request degrades to
+          the initial instead of leaving a blank card. */}
+      <div
+        className="absolute inset-0 grid place-items-center"
+        style={{ background: "linear-gradient(155deg, oklch(0.34 0.05 265), oklch(0.22 0.03 265))" }}
+      >
+        <span
+          className="text-[84px] leading-none opacity-25"
+          style={{ fontFamily: "var(--font-serif)", color: "#fff" }}
         >
-          <span
-            className="text-[84px] leading-none opacity-25"
-            style={{ fontFamily: "var(--font-serif)", color: "#fff" }}
-          >
-            {v.name.slice(0, 1).toUpperCase()}
-          </span>
-        </div>
+          {v.name.slice(0, 1).toUpperCase()}
+        </span>
+      </div>
+      {v.cover && (
+        // A real <img>, not a CSS background: Swiggy's photos are remote CDN
+        // URLs, and an element gives us an onError to fall back to the initial
+        // when one 404s. draggable=false keeps the native image drag from
+        // hijacking the swipe gesture.
+        <img
+          src={v.cover}
+          alt=""
+          aria-hidden
+          draggable={false}
+          className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+          onError={(e) => {
+            e.currentTarget.style.display = "none";
+          }}
+        />
       )}
 
       {/* scrim so the info reads over any photo */}

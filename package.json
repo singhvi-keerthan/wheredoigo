@@ -8,9 +8,11 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "eval:decide": "tsx scripts/eval-decide.ts"
+    "eval:decide": "tsx scripts/eval-decide.ts",
+    "swiggy:auth": "tsx scripts/swiggy-auth.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@neondatabase/serverless": "^1.1.0",
     "@vercel/blob": "^2.6.0",
     "cmdk": "^1.1.1",

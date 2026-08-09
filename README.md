@@ -16,12 +16,28 @@ npm install
 npm run dev        # boots with zero credentials (capture degrades to manual)
 ```
 
-`.env.local` (both optional):
+`.env.local` (all optional):
 
 ```
 GOOGLE_PLACES_API_KEY=…            # live search/enrich/nearby/photo
 GOOGLE_GENERATIVE_AI_API_KEY=…     # Decide's natural-language parsing (Gemini)
+SWIGGY_MCP_TOKEN=…                 # Dineout: the deck's "New" source + booking
 ```
+
+### Swiggy Dineout
+
+The deck's **New** source and **Book a table** run on Swiggy's Builders Club MCP
+server (`mcp.swiggy.com/dineout`). Without `SWIGGY_MCP_TOKEN` both fall back to
+mock data, so the app is fully usable with no credentials.
+
+```bash
+npm run swiggy:auth   # browser consent (phone + OTP) → prints the env line
+```
+
+Swiggy's access tokens last **5 days** and v1.0 has **no refresh tokens** — the
+docs say to treat every 401 as "re-run authorization". So this is a recurring
+chore, not one-time setup: when the deck says *"Swiggy needs reconnecting"*,
+re-run the command above and update the env var (locally and on Vercel).
 
 ## Checks
 

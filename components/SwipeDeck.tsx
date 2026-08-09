@@ -3,7 +3,13 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { RotateCcw, Sparkles } from "lucide-react";
 import { usePlaces, addPlace, removePlace, toggleNeverAgain } from "@/lib/store";
-import { searchDineout, type SwiggyRestaurant } from "@/lib/swiggyClient";
+import {
+  searchDineout,
+  FALLBACK_COORDS,
+  type SwiggyRestaurant,
+  type SwiggyError,
+  type UserCoords,
+} from "@/lib/swiggyClient";
 import { buildDeck, type DeckCard, type DeckSource } from "@/lib/deck";
 import { bumpSkip, resetSkip, decSkip } from "@/lib/skips";
 import { type DecideQuery } from "@/lib/decide";
@@ -87,6 +93,17 @@ export default function SwipeDeck({
 
   const [swiggy, setSwiggy] = useState<SwiggyRestaurant[]>([]);
   const [loadingNew, setLoadingNew] = useState(false);
+  const [newError, setNewError] = useState<SwiggyError | null>(null);
+  // Every Swiggy tool takes the user's coordinates, and the same pair must be
+  // echoed from search through slots to the booking — so it's resolved once
+  // here and handed down. Null means "still asking"; the search waits for it
+  // rather than firing twice, which would reshuffle the stack mid-swipe.
+  // Lazily seeded so the no-geolocation case is settled at first render rather
+  // than by a setState inside the effect (same reasoning as the hint flag
+  // below: this deck only ever mounts client-side, off a tap).
+  const [coords, setCoords] = useState<UserCoords | null>(() =>
+    typeof navigator !== "undefined" && "geolocation" in navigator ? null : FALLBACK_COORDS
+  );
 
   const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
   const [exiting, setExiting] = useState<{ dir: "left" | "right"; key: string } | null>(null);
@@ -127,18 +144,40 @@ export default function SwipeDeck({
     return () => clearTimeout(auto);
   }, []);
 
+  // Ask for a position once. Denied, unavailable, or slow all land on the city
+  // centre — Swiggy requires *some* location, and a Bengaluru-wide search is a
+  // far better failure mode than no results at all.
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("geolocation" in navigator)) return; // already seeded
+    let settled = false;
+    const done = (c: UserCoords) => {
+      if (settled) return;
+      settled = true;
+      setCoords(c);
+    };
+    navigator.geolocation.getCurrentPosition(
+      (p) => done({ lat: p.coords.latitude, lng: p.coords.longitude }),
+      () => done(FALLBACK_COORDS),
+      { enableHighAccuracy: false, timeout: 6000, maximumAge: 300_000 }
+    );
+  }, []);
+
   // Fetch Swiggy's catalog for New/Both whenever the source or cuisine changes.
   useEffect(() => {
     if (source === "saved") return; // buildDeck ignores swiggy for "saved"
+    if (!coords) return; // wait for the location the tool requires
     let cancelled = false;
     const run = async () => {
       setLoadingNew(true);
-      const { results } = await searchDineout({
+      const { results, error } = await searchDineout({
         cuisine: cuisine ?? undefined,
         keyword: keyword.trim() || undefined,
+        lat: coords.lat,
+        lng: coords.lng,
       });
       if (!cancelled) {
         setSwiggy(results);
+        setNewError(error ?? null);
         setLoadingNew(false);
       }
     };
@@ -146,7 +185,7 @@ export default function SwipeDeck({
     return () => {
       cancelled = true;
     };
-  }, [source, cuisine, keyword]);
+  }, [source, cuisine, keyword, coords]);
 
   // Rebuild the ordered deck when the lens changes (source / query / results /
   // seed). Reads places + seen from refs so a mid-session add or a dismiss
@@ -387,7 +426,10 @@ export default function SwipeDeck({
   // Busy the whole time a Swiggy fetch is in flight — not just on first load — so
   // a cuisine/keyword change hides the previous pool's cards immediately instead
   // of leaving them swipeable against a lens they no longer match.
-  const busy = source !== "saved" && loadingNew;
+  const busy = source !== "saved" && (loadingNew || !coords);
+  // A Swiggy failure has to read differently from "no matches" — the deck is
+  // empty either way, but only one of them is fixable by changing the filter.
+  const newFailed = source !== "saved" && newError !== null;
 
   return (
     <div className="flex h-full flex-col">
@@ -398,6 +440,17 @@ export default function SwipeDeck({
             <Sparkles size={20} className="animate-pulse" style={{ color: "var(--accent)" }} />
             <p className="mt-2 text-[13px]" style={{ color: "var(--text-tertiary)" }}>
               Finding places…
+            </p>
+          </Centered>
+        ) : newFailed ? (
+          <Centered>
+            <p className="text-[15px] font-semibold" style={{ color: "var(--text-secondary)" }}>
+              {newError === "swiggy_reauth" ? "Swiggy needs reconnecting" : "Swiggy didn’t answer"}
+            </p>
+            <p className="mt-1 text-[12.5px] leading-snug" style={{ color: "var(--text-tertiary)" }}>
+              {newError === "swiggy_reauth"
+                ? "Access tokens last 5 days. Run npm run swiggy:auth to sign in again."
+                : "Dineout is unreachable right now — your saved places still work."}
             </p>
           </Centered>
         ) : empty ? (
@@ -463,7 +516,12 @@ export default function SwipeDeck({
       </div>
 
       {detailNew && (
-        <NewCardDetail r={detailNew} onAdd={addFromDetail} onClose={() => setDetailNew(null)} />
+        <NewCardDetail
+          r={detailNew}
+          coords={coords ?? FALLBACK_COORDS}
+          onAdd={addFromDetail}
+          onClose={() => setDetailNew(null)}
+        />
       )}
 
       {confirmHide && (
