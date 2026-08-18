@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { RotateCcw, Sparkles, X, Heart, Check } from "lucide-react";
+import { RotateCcw, Sparkles, X, Heart, Check, SlidersHorizontal } from "lucide-react";
 import { usePlaces, addPlace, removePlace, toggleNeverAgain } from "@/lib/store";
 import {
   searchDineout,
@@ -11,13 +11,14 @@ import {
   type UserCoords,
 } from "@/lib/swiggyClient";
 import { searchBias } from "@/lib/bias";
-import { buildDeck, type DeckCard, type DeckSource } from "@/lib/deck";
+import { buildDeck, type DeckCard } from "@/lib/deck";
 import { bumpSkip, resetSkip, decSkip, peekSkip, setSkip } from "@/lib/skips";
-import { type DecideQuery } from "@/lib/decide";
 import SwipeCard, { FOOTER_SPACE } from "./SwipeCard";
 import NewCardDetail from "./NewCardDetail";
 import DeckHint from "./DeckHint";
 import { useCardSwipe, DY_DAMP } from "./useCardSwipe";
+import ModeSwitch from "./ModeSwitch";
+import LensPanel, { useLens } from "./LensPanel";
 
 const HINT_KEY = "wheredoigokeerthan.deckHintSeen.v1"; // first-run swipe coach, shown once
 
@@ -34,13 +35,6 @@ const CARD_INSET = 10; // px of surround, so the next card peeks and it still re
 // swipe RESETS the count, and neither decSkip nor a second reset can undo that),
 // absent when the swipe merely bumped it and a decrement is the reverse.
 type UndoEntry = { key: string; placeId: string | null; skipId?: string; restoreSkip?: number };
-
-export type SwipeLaunch = {
-  source: DeckSource;
-  query: DecideQuery;
-  cuisine: string | null;
-  keyword: string;
-};
 
 // Maps a Swiggy result to the app's Place shape — same mapping the old Swiggy
 // panel used, so a swipe-saved find is consistent with places added any way.
@@ -65,22 +59,24 @@ function saveNew(r: SwiggyRestaurant): string {
   return created.id;
 }
 
-// Swipe mode: its own full-screen surface, launched from DecideSheet with a
-// frozen lens (source + query + filters). Decide stays the place you SET UP a
-// session; this is the place you run it. Closing returns to Decide with the
-// filters still there, so "refine and go again" is one tap.
+// Swipe mode — one of the app's two ways of looking at your places, not a
+// feature of the other one. It used to be reached by opening a sheet and
+// pressing a button inside it, which made it read as that sheet's payoff; the
+// mode switch now sits at the top here and in the map's dock, the same control
+// in both. Because it is a mode and not a destination, it carries its own lens
+// (source + ask + filters) instead of being handed one on the way in.
 export default function SwipeMode({
-  launch,
-  onClose,
+  onExit,
   onOpenSaved,
   onToast,
 }: {
-  launch: SwipeLaunch;
-  onClose: () => void;
+  onExit: () => void; // back to the map — the other half of the mode switch
   onOpenSaved: (id: string) => void; // the escape hatch — full place screen
   onToast: (msg: string) => void;
 }) {
-  const { source, query, cuisine, keyword } = launch;
+  const lens = useLens();
+  const { source, query, cuisine, keyword } = lens;
+  const [lensOpen, setLensOpen] = useState(false);
   const places = usePlaces();
   // Latest-places snapshot read only at deck-build time — kept in a ref (updated
   // in an effect, never during render) so a mid-session add doesn't reshuffle
@@ -297,10 +293,11 @@ export default function SwipeMode({
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      if (detailNew || confirmHide) {
+      if (detailNew || confirmHide || lensOpen) {
         if (e.key === "Escape") {
           e.preventDefault();
-          if (detailNew) setDetailNew(null);
+          if (lensOpen) setLensOpen(false);
+          else if (detailNew) setDetailNew(null);
           else keepAround();
         }
         return;
@@ -319,13 +316,14 @@ export default function SwipeMode({
         doUndo();
       } else if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        if (lensOpen) setLensOpen(false);
+        else onExit();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deck, pos, exiting, detailNew, confirmHide, undo.length]);
+  }, [deck, pos, exiting, detailNew, confirmHide, lensOpen, undo.length]);
 
   // ---- render ------------------------------------------------------------
   // A right swipe does two different things, so it can't wear one label. On a
@@ -380,7 +378,10 @@ export default function SwipeMode({
   const newFailed = source !== "saved" && newError !== null;
   const showCards = !busy && !newFailed && !empty && !exhausted;
 
-  const lens = source === "saved" ? "Your map" : source === "new" ? "New · Swiggy" : "Everything";
+  // What the collapsed trigger says. Never just "filters" — the mode should be
+  // able to tell you what it is dealing you without being opened up.
+  const sourceLabel = source === "saved" ? "Your map" : source === "new" ? "New · Swiggy" : "Everything";
+
 
   return (
     <div className="fixed inset-0 z-[52]" style={{ background: "var(--bg-base)" }}>
@@ -475,46 +476,45 @@ export default function SwipeMode({
         )}
       </div>
 
-      {/* Scrim under the floating header. Without it the hero's title slides
-          under the close button mid-scroll and gets sliced in half. */}
+      {/* Scrim under the floating chrome. Without it the hero's title slides
+          under the controls mid-scroll and gets sliced in half. */}
       <div
         className="pointer-events-none absolute inset-x-0 top-0"
         style={{
           zIndex: 9,
-          height: 120,
-          background: "linear-gradient(180deg, rgba(6,7,10,0.75) 0%, rgba(6,7,10,0) 100%)",
+          height: 170,
+          background: "linear-gradient(180deg, rgba(6,7,10,0.8) 0%, rgba(6,7,10,0) 100%)",
         }}
       />
 
-      {/* ---- header: close + the lens you launched with ---- */}
+      {/* ---- chrome: the mode switch, then what this mode is showing ---- */}
       <div
-        className="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-between gap-3 px-4 pt-[max(0.75rem,env(safe-area-inset-top))]"
+        className="absolute inset-x-0 top-0 flex flex-col items-center gap-2 px-4 pt-[max(0.75rem,env(safe-area-inset-top))]"
         style={{ zIndex: 10 }}
       >
+        <div className="w-full max-w-[260px]">
+          <ModeSwitch mode="swipe" onChange={(m) => m === "map" && onExit()} />
+        </div>
+
         <button
-          onClick={onClose}
-          aria-label="Close swipe mode"
-          className="press pointer-events-auto grid h-10 w-10 place-items-center rounded-full"
+          onClick={() => setLensOpen(true)}
+          className="press flex max-w-full items-center gap-1.5 rounded-full px-3 py-1.5"
           style={{
             background: "var(--glass)",
             backdropFilter: "blur(22px)",
             WebkitBackdropFilter: "blur(22px)",
-            color: "var(--text-primary)",
+            border: "1px solid var(--border-strong)",
+            color: "oklch(0.9 0 0)",
           }}
         >
-          <X size={17} strokeWidth={2.25} />
+          <SlidersHorizontal size={12} strokeWidth={2.5} />
+          <span className="truncate text-[12px] font-semibold">
+            {sourceLabel}
+            {lens.summary.length > 0 && (
+              <span className="capitalize"> · {lens.summary.join(" · ")}</span>
+            )}
+          </span>
         </button>
-        <span
-          className="pointer-events-auto rounded-full px-3 py-1.5 text-[12px] font-semibold"
-          style={{
-            background: "var(--glass)",
-            backdropFilter: "blur(22px)",
-            WebkitBackdropFilter: "blur(22px)",
-            color: "var(--text-secondary)",
-          }}
-        >
-          {lens}
-        </span>
       </div>
 
       {/* ---- action bar: pinned, so it never scrolls away with the card ---- */}
@@ -572,6 +572,8 @@ export default function SwipeMode({
           </ActionCircle>
         </div>
       )}
+
+      {lensOpen && <LensPanel lens={lens} onClose={() => setLensOpen(false)} />}
 
       {detailNew && (
         <NewCardDetail

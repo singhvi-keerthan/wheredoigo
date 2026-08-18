@@ -22,6 +22,10 @@ export const FOOTER_SPACE = 104;
 // one surface instead of a visible seam mid-scroll.
 const BODY_BG = "#06070a";
 
+// Where the photo pager's tap zones start — clear of the mode switch, the lens
+// chip and the progress dots stacked above them.
+const PAGER_TOP = 148;
+
 // Normalised display fields, so the card renders the same shape whether it's a
 // saved Place or a raw Swiggy result (which has no photos, tags or hours).
 type CardView = {
@@ -380,7 +384,7 @@ export default function SwipeCard({
               images are remote CDN URLs, so a 404 or a blocked request degrades to
               the initial instead of leaving a blank card. */}
           <div
-            className="absolute inset-0 grid place-items-center"
+            className="pointer-events-none absolute inset-0 grid place-items-center"
             style={{ background: "linear-gradient(155deg, oklch(0.34 0.05 265), oklch(0.22 0.03 265))" }}
           >
             <span
@@ -408,13 +412,22 @@ export default function SwipeCard({
             />
           )}
 
+          {/* Scrim so the info reads over any photo. pointer-events-none is
+              load-bearing, not tidiness: it covers the bottom 60% of the hero,
+              so without it the photo pager underneath is dead everywhere the
+              gradient reaches — which is most of where a thumb lands. */}
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-3/5"
+            style={{ background: "linear-gradient(0deg, rgba(6,7,10,0.92) 8%, rgba(6,7,10,0.55) 45%, transparent)" }}
+          />
+
           {/* Tap zones + segment dots, only once there's more than one image.
               They cover the upper part of the hero only, so a tap near the name
               does nothing rather than surprising you. A scroll cancels the
               click, so paging can't fire mid-flick. */}
           {interactive && photos.length > 1 && (
             <>
-              <div className="absolute inset-x-0 top-0 flex gap-1.5 px-4 pt-[max(4.25rem,calc(env(safe-area-inset-top)+3.5rem))]">
+              <div className="absolute inset-x-0 top-0 flex gap-1.5 px-4 pt-[max(6.75rem,calc(env(safe-area-inset-top)+6rem))]">
                 {photos.map((_, i) => (
                   <span
                     key={i}
@@ -426,6 +439,12 @@ export default function SwipeCard({
                   />
                 ))}
               </div>
+              {/* Left and right HALVES, not thirds, and inset below the mode
+                  chrome. The old zones were a third wide and started at the very
+                  top: the close button sat inside the left one (so the top-left
+                  corner left the mode instead of paging back), the middle third
+                  did nothing at all, and the bottom 40% was inert. A pager you
+                  have to aim at isn't a pager. */}
               <button
                 aria-label="Previous photo"
                 onClick={() => {
@@ -433,7 +452,8 @@ export default function SwipeCard({
                   setShot(Math.max(0, at - 1));
                 }}
                 disabled={at === 0}
-                className="absolute left-0 top-0 h-[62%] w-1/3 disabled:pointer-events-none"
+                className="absolute left-0 w-1/2 disabled:pointer-events-none"
+                style={{ top: PAGER_TOP, bottom: FOOTER_SPACE }}
               />
               <button
                 aria-label="Next photo"
@@ -442,19 +462,17 @@ export default function SwipeCard({
                   setShot(Math.min(photos.length - 1, at + 1));
                 }}
                 disabled={at === photos.length - 1}
-                className="absolute right-0 top-0 h-[62%] w-1/3 disabled:pointer-events-none"
+                className="absolute right-0 w-1/2 disabled:pointer-events-none"
+                style={{ top: PAGER_TOP, bottom: FOOTER_SPACE }}
               />
             </>
           )}
 
-          {/* scrim so the info reads over any photo */}
-          <div
-            className="absolute inset-x-0 bottom-0 h-3/5"
-            style={{ background: "linear-gradient(0deg, rgba(6,7,10,0.92) 8%, rgba(6,7,10,0.55) 45%, transparent)" }}
-          />
-
           {/* info */}
-          <div className="absolute inset-x-0 bottom-0 p-5" style={{ paddingBottom: FOOTER_SPACE }}>
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-0 p-5"
+            style={{ paddingBottom: FOOTER_SPACE }}
+          >
             <div className="flex items-center gap-1.5">
               <span className="h-[7px] w-[7px] rounded-[2px]" style={{ background: v.badge.color }} />
               <span className="text-[11.5px] font-semibold" style={{ color: v.badge.color }}>

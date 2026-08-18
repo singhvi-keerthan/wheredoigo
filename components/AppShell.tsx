@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Search, Plus, Menu, MapPin, TriangleAlert, X } from "lucide-react";
+import { Search, Plus, Menu, MapPin, TriangleAlert } from "lucide-react";
 import { usePlaces, usePersistError } from "@/lib/store";
 import { displayState, type DisplayState } from "@/lib/types";
 import { cityLabel } from "@/lib/city";
@@ -10,8 +10,8 @@ import PlaceCard from "./PlaceCard";
 import PlaceDetail from "./PlaceDetail";
 import CommandPalette from "./CommandPalette";
 import AddPlaceSheet from "./AddPlaceSheet";
-import DecideSheet from "./DecideSheet";
-import SwipeMode, { type SwipeLaunch } from "./SwipeMode";
+import SwipeMode from "./SwipeMode";
+import ModeSwitch, { type AppMode } from "./ModeSwitch";
 import PlaceWizard from "./PlaceWizard";
 import MenuSheet from "./MenuSheet";
 import BrowseSheet, { type BrowseMode } from "./BrowseSheet";
@@ -52,10 +52,6 @@ const WHITE_ACTION: CSSProperties = {
   border: "none",
 };
 
-// One-time coach on the Decide mascot — most people don't guess a face-button
-// is "help me pick". Shown once (persisted), a few seconds in.
-const MASCOT_TIP_KEY = "wheredoigokeerthan.mascotTipSeen.v1";
-
 export default function AppShell() {
   const places = usePlaces();
   const persistError = usePersistError();
@@ -66,10 +62,9 @@ export default function AppShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [addQuery, setAddQuery] = useState<string | null>(null); // palette → + sheet carry-over
-  const [decideOpen, setDecideOpen] = useState(false);
-  // Swipe mode is its own full-screen surface layered ABOVE the Decide sheet, so
-  // closing it lands back on the filters that launched it rather than the map.
-  const [swipeLaunch, setSwipeLaunch] = useState<SwipeLaunch | null>(null);
+  // Map or Swipe. Two ways of looking at the same places, switched by one
+  // control that lives in both — not a sheet you open on top of the map.
+  const [mode, setMode] = useState<AppMode>("map");
   const [detailId, setDetailId] = useState<string | null>(null);
   // Visit-logging form. A fresh watchlist add opens NO form — its details come
   // from Google and the one-line note is taken on the add sheet. This only opens
@@ -79,47 +74,6 @@ export default function AppShell() {
   const [browseMode, setBrowseMode] = useState<BrowseMode | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Decide-mascot explainer: mounts a few seconds after load, once ever. Read
-  // the live place count from a ref so the single mount-time timer sees the
-  // hydrated value without re-arming on every store change.
-  const [mascotTip, setMascotTip] = useState(false);
-  const [mascotTipShown, setMascotTipShown] = useState(false); // drives the fade
-  const placesLenRef = useRef(places.length);
-  useEffect(() => {
-    placesLenRef.current = places.length;
-  });
-  const dismissMascotTip = () => {
-    setMascotTipShown(false);
-    try {
-      localStorage.setItem(MASCOT_TIP_KEY, "1");
-    } catch {
-      /* private mode — worst case it shows again, harmless */
-    }
-    window.setTimeout(() => setMascotTip(false), 260); // fade, then unmount
-  };
-  useEffect(() => {
-    let seen = false;
-    try {
-      seen = localStorage.getItem(MASCOT_TIP_KEY) === "1";
-    } catch {
-      /* private mode */
-    }
-    if (seen) return;
-    let auto = 0;
-    let reveal = 0;
-    const t = window.setTimeout(() => {
-      if (placesLenRef.current === 0) return; // nothing to decide yet — try next launch
-      setMascotTip(true);
-      reveal = window.setTimeout(() => setMascotTipShown(true), 30); // next tick → fade in
-      auto = window.setTimeout(dismissMascotTip, 9000); // retire on its own if ignored
-    }, 3600);
-    return () => {
-      clearTimeout(t);
-      clearTimeout(auto);
-      clearTimeout(reveal);
-    };
-  }, []);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -263,64 +217,16 @@ export default function AppShell() {
               as the search dock below it, so the two rows read as one dock
               instead of two differently-sized ones stacked up. Sized to fit
               one line on a narrow phone with no horizontal swipe. */}
-          <div className="relative flex items-center gap-2.5 px-[18px] pb-2">
-            {/* one-time explainer bubble — points down at the mascot */}
-            {mascotTip && (
-              <div
-                className="absolute bottom-full left-2.5 z-30 mb-2.5"
-                style={{
-                  opacity: mascotTipShown ? 1 : 0,
-                  transform: mascotTipShown ? "translateY(0)" : "translateY(6px)",
-                  transition: "opacity 240ms var(--ease-out), transform 240ms var(--ease-out)",
-                }}
-              >
-                <div className="relative" style={{ ...GLASS, maxWidth: 252, borderRadius: 16, padding: "11px 13px" }}>
-                  <button
-                    onClick={dismissMascotTip}
-                    aria-label="Dismiss"
-                    className="press absolute right-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-full"
-                    style={{ color: "oklch(0.68 0 0)" }}
-                  >
-                    <X size={12} strokeWidth={2.5} />
-                  </button>
-                  <p className="pr-4 text-[12.5px] leading-snug" style={{ color: "oklch(0.92 0 0)" }}>
-                    <span className="font-semibold" style={{ color: "#fff" }}>Can’t decide?</span> Ask me and
-                    I’ll deal your places one at a time — swipe till you land on tonight’s spot.
-                  </p>
-                  {/* tail — a rotated square peeking out the bottom, over the mascot */}
-                  <span
-                    className="absolute h-3 w-3 rotate-45"
-                    style={{
-                      left: 18,
-                      top: "100%",
-                      marginTop: -6,
-                      background: "rgba(22,24,30,0.66)",
-                      borderRight: "1px solid rgba(255,255,255,0.1)",
-                      borderBottom: "1px solid rgba(255,255,255,0.1)",
-                    }}
-                  />
-                </div>
-              </div>
-            )}
-            <button
-              onClick={() => {
-                dismissMascotTip();
-                setDecideOpen(true);
-              }}
-              aria-label="Decide"
-              className="press shrink-0 overflow-hidden"
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: "50%",
-                border: "2px solid oklch(0.97 0 0)",
-                boxShadow: "0 8px 22px -8px rgba(0,0,0,0.5)",
-                cursor: "pointer",
-              }}
-            >
-              <img src="/decide-mascot.png" alt="" className="h-full w-full object-cover" />
-            </button>
+          {/* Mode — Map or Swipe. Its own row, full width, above the map's own
+              filters: swipe used to hide behind a 36px mascot that opened a
+              sheet with a button in it, which made a whole mode read as one of
+              the map's accessories. The same control sits at the top of swipe
+              mode, so neither side is a detour from the other. */}
+          <div className="px-[18px] pb-2">
+            <ModeSwitch mode={mode} onChange={setMode} />
+          </div>
 
+          <div className="relative flex items-center gap-2.5 px-[18px] pb-2">
             {/* Filter tray — one dark-glass control, underline-select chips */}
             <div
               className="min-w-0 flex-1"
@@ -480,23 +386,13 @@ export default function AppShell() {
         />
       )}
 
-      {decideOpen && (
-        <DecideSheet
-          open={decideOpen}
-          onClose={() => setDecideOpen(false)}
-          onStartSwiping={setSwipeLaunch}
-        />
-      )}
-
-      {swipeLaunch && (
+      {mode === "swipe" && (
         <SwipeMode
-          launch={swipeLaunch}
-          onClose={() => setSwipeLaunch(null)}
-          // The escape hatch at the bottom of a card: leaves swipe mode AND the
-          // Decide sheet, because PlaceDetail sits below both (z-40).
+          onExit={() => setMode("map")}
+          // The escape hatch at the bottom of a card: returns to the map and
+          // opens the place, because PlaceDetail sits below the mode (z-40).
           onOpenSaved={(id) => {
-            setSwipeLaunch(null);
-            setDecideOpen(false);
+            setMode("map");
             setSelectedId(id);
             setDetailId(id);
           }}

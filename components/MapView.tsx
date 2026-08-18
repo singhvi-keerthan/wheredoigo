@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Place } from "@/lib/types";
 import { displayState } from "@/lib/types";
 import { DEFAULT_VIEW } from "@/lib/seed";
-import { noteGpsFix, noteMapCenter, geoEverGranted, onGeoGranted } from "@/lib/bias";
+import { noteGpsFix, noteMapCenter, onGeoGranted } from "@/lib/bias";
 import Pin, { type PinVariant } from "./Pin";
 import PlaceGlyph from "./PlaceGlyph";
 
@@ -30,6 +30,14 @@ function cssVar(name: string): string {
 // city-wide view once the map grows, so pins degrade: name cards up close,
 // glyph discs at mid zoom, dots city-wide — always, regardless of how many
 // places are on the map (even two overlapping label-stickers read as clutter).
+// The map opens on you at neighbourhood zoom — close enough to read the street
+// you are standing on, not so close that nothing else is on screen.
+const ME_ZOOM = 14;
+// How long the saved-places fit waits for a location fix before giving up and
+// taking the view itself. Long enough for a warm fix, short enough that a denied
+// or absent one is not a visible stall.
+const LOCATION_GRACE_MS = 1800;
+
 function bandFor(zoom: number): PinVariant {
   return zoom >= 13.5 ? "full" : zoom >= 12 ? "disc" : "dot";
 }
@@ -47,9 +55,13 @@ export default function MapView({
   const [band, setBand] = useState<PinVariant>(() => bandFor(DEFAULT_VIEW.zoom));
   const [ready, setReady] = useState(false);
 
-  // Live "you are here": watch the GPS fix and drop the avatar marker at it,
-  // but only after the browser already has permission. App startup must not
-  // trigger a location prompt; explicit actions like "Pin where I am" can ask.
+  // Live "you are here": watch the GPS fix and drop the avatar marker at it.
+  // Startup DOES ask for location, deliberately: the avatar is a first-class
+  // part of this screen and the map opens on your position, so there is nothing
+  // to defer the question for. (An earlier revision gated the watch on an
+  // already-granted permission to avoid a startup prompt — that silently
+  // removed the marker for anyone who had never been asked.) Only an outright
+  // denial stops the watch; the location is used to draw you, never stored.
   const [me, setMe] = useState<{ lat: number; lng: number } | null>(null);
   useEffect(() => {
     if (typeof navigator === "undefined" || !("geolocation" in navigator)) return;
@@ -104,17 +116,14 @@ export default function MapView({
 
     const syncPermission = () => {
       if (cancelled || !permission) return;
-      if (permission.state === "granted") startWatch();
-      else clearWatch();
+      // "prompt" starts the watch too — that IS the ask. Only a denial is a no.
+      if (permission.state === "denied") clearWatch();
+      else startWatch();
     };
 
-    // No Permissions API (Safari) — we cannot ask what the state is, so fall
-    // back to what we remember. A remembered grant means watchPosition will not
-    // prompt, which is the only thing the startup gate exists to prevent.
-    const withoutPermissionsApi = () => {
-      if (geoEverGranted()) startWatch();
-      else noteGpsFix(null);
-    };
+    // No Permissions API (Safari) — we cannot ask what the state is, so we ask
+    // the browser directly. It shows its own prompt once and remembers.
+    const withoutPermissionsApi = () => startWatch();
 
     if (!("permissions" in navigator)) {
       withoutPermissionsApi();
@@ -143,38 +152,57 @@ export default function MapView({
     };
   }, []);
 
-  // Open on YOUR places, not on a city. The initial view was a hard-coded
-  // Bengaluru centre, so a library in Jaipur opened 2,000km from its own pins.
-  // Fit their bounds once, the first time a non-empty set arrives (records
-  // hydrate from localStorage after mount). DEFAULT_VIEW survives only as the
-  // empty-library fallback.
-  const fitted = useRef(false);
+  // ---- where the map opens -------------------------------------------------
+  // Your own location first: that is the view you want when the app comes up.
+  // The saved-places fit is the FALLBACK — for location denied, unavailable, or
+  // simply slow — and DEFAULT_VIEW is the last resort behind both. Whichever
+  // resolves first wins, and only once.
+  const viewSet = useRef(false);
+
+  // 1. Your location, the moment there is a fix.
   useEffect(() => {
-    if (fitted.current || !ready || !places.length) return;
+    if (viewSet.current || !ready || !me) return;
     const map = mapRef.current?.getMap();
     if (!map) return;
-    // mapGooglePlace falls back to `lat: 0, lng: 0` when Google returns no
-    // location, so a single such record drags the bounds to Null Island and
-    // opens the map on the Atlantic. Fit to the places that actually have a
-    // position — and if none do, leave `fitted` false so the next set of
-    // records still gets its chance instead of being locked out forever.
-    const locatable = places.filter(
-      (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng) && !(p.lat === 0 && p.lng === 0)
-    );
-    if (!locatable.length) return;
-    fitted.current = true;
-    const lngs = locatable.map((p) => p.lng);
-    const lats = locatable.map((p) => p.lat);
-    map.fitBounds(
-      [
-        [Math.min(...lngs), Math.min(...lats)],
-        [Math.max(...lngs), Math.max(...lats)],
-      ],
-      // Bottom padding clears the docked controls; maxZoom stops a single pin
-      // (or a tight cluster) from slamming the camera into the pavement.
-      { padding: { top: 96, bottom: 240, left: 48, right: 48 }, maxZoom: 14, duration: 0 }
-    );
-    setBand(bandFor(map.getZoom()));
+    viewSet.current = true;
+    map.jumpTo({ center: [me.lng, me.lat], zoom: ME_ZOOM });
+    setBand(bandFor(ME_ZOOM));
+  }, [ready, me]);
+
+  // 2. Fallback: fit the saved places — but give the fix a moment to land
+  //    first. Records hydrate from localStorage instantly while a GPS fix takes
+  //    seconds, so fitting the moment they arrive would beat location to the
+  //    view every single time and you would never open on yourself.
+  useEffect(() => {
+    if (viewSet.current || !ready || !places.length) return;
+    const t = window.setTimeout(() => {
+      if (viewSet.current) return; // a fix landed inside the grace window
+      const map = mapRef.current?.getMap();
+      if (!map) return;
+      // mapGooglePlace falls back to `lat: 0, lng: 0` when Google returns no
+      // location, so a single such record drags the bounds to Null Island and
+      // opens the map on the Atlantic. Fit to the places that actually have a
+      // position — and if none do, leave the view unset so the next set of
+      // records still gets its chance instead of being locked out forever.
+      const locatable = places.filter(
+        (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng) && !(p.lat === 0 && p.lng === 0)
+      );
+      if (!locatable.length) return;
+      viewSet.current = true;
+      const lngs = locatable.map((p) => p.lng);
+      const lats = locatable.map((p) => p.lat);
+      map.fitBounds(
+        [
+          [Math.min(...lngs), Math.min(...lats)],
+          [Math.max(...lngs), Math.max(...lats)],
+        ],
+        // Bottom padding clears the docked controls; maxZoom stops a single pin
+        // (or a tight cluster) from slamming the camera into the pavement.
+        { padding: { top: 96, bottom: 240, left: 48, right: 48 }, maxZoom: 14, duration: 0 }
+      );
+      setBand(bandFor(map.getZoom()));
+    }, LOCATION_GRACE_MS);
+    return () => window.clearTimeout(t);
   }, [ready, places]);
 
   // Fly to a place when it becomes selected (pin tap or search pick). Bottom
@@ -255,6 +283,11 @@ export default function MapView({
           e.viewState.zoom
         )
       }
+      // Touch the map yourself and you own the view: a fix landing a second
+      // later must not yank the camera out from under your thumb.
+      onDragStart={() => {
+        viewSet.current = true;
+      }}
       onClick={() => onSelect(null)}
       style={{ position: "absolute", inset: 0 }}
     >
