@@ -11,6 +11,7 @@ import PlaceDetail from "./PlaceDetail";
 import CommandPalette from "./CommandPalette";
 import AddPlaceSheet from "./AddPlaceSheet";
 import DecideSheet from "./DecideSheet";
+import SwipeMode, { type SwipeLaunch } from "./SwipeMode";
 import PlaceWizard from "./PlaceWizard";
 import MenuSheet from "./MenuSheet";
 import BrowseSheet, { type BrowseMode } from "./BrowseSheet";
@@ -66,6 +67,9 @@ export default function AppShell() {
   const [addOpen, setAddOpen] = useState(false);
   const [addQuery, setAddQuery] = useState<string | null>(null); // palette → + sheet carry-over
   const [decideOpen, setDecideOpen] = useState(false);
+  // Swipe mode is its own full-screen surface layered ABOVE the Decide sheet, so
+  // closing it lands back on the filters that launched it rather than the map.
+  const [swipeLaunch, setSwipeLaunch] = useState<SwipeLaunch | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
   // Visit-logging form. A fresh watchlist add opens NO form — its details come
   // from Google and the one-line note is taken on the add sheet. This only opens
@@ -192,7 +196,8 @@ export default function AppShell() {
           <span style={{ fontFamily: "var(--font-mono)", color: "#16181d", fontWeight: 500 }}>
             {places.length}
           </span>{" "}
-          places{where && ` · ${where}`}
+          {places.length === 1 ? "place" : "places"}
+          {where && ` · ${where}`}
         </p>
       </header>
 
@@ -479,7 +484,19 @@ export default function AppShell() {
         <DecideSheet
           open={decideOpen}
           onClose={() => setDecideOpen(false)}
-          onView={(id) => {
+          onStartSwiping={setSwipeLaunch}
+        />
+      )}
+
+      {swipeLaunch && (
+        <SwipeMode
+          launch={swipeLaunch}
+          onClose={() => setSwipeLaunch(null)}
+          // The escape hatch at the bottom of a card: leaves swipe mode AND the
+          // Decide sheet, because PlaceDetail sits below both (z-40).
+          onOpenSaved={(id) => {
+            setSwipeLaunch(null);
+            setDecideOpen(false);
             setSelectedId(id);
             setDetailId(id);
           }}

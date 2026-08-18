@@ -1,13 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { X, Sparkles, RefreshCw, ChevronDown, RotateCcw, Clock } from "lucide-react";
+import { X, Sparkles, RefreshCw, ChevronDown, Clock, Layers } from "lucide-react";
 import { geocodeArea } from "@/lib/places";
 import { parseFallback } from "@/lib/decide-fallback";
-import { EMPTY_QUERY, type DecideQuery } from "@/lib/decide";
+import { EMPTY_QUERY, rankPlaces, type DecideQuery } from "@/lib/decide";
 import { TAG_OPTIONS } from "@/lib/types";
+import { usePlaces } from "@/lib/store";
 import type { DeckSource } from "@/lib/deck";
-import SwipeDeck from "./SwipeDeck";
+import type { SwipeLaunch } from "./SwipeMode";
 import { useSheetDrag } from "./useSheetDrag";
 
 // Rotating title — a fresh quirky line each time the sheet opens (it mounts
@@ -116,15 +117,17 @@ function buildQuery(f: Filters, x: Extras): DecideQuery {
 export default function DecideSheet({
   open,
   onClose,
-  onView,
-  onToast,
+  onStartSwiping,
 }: {
   open: boolean;
   onClose: () => void;
-  onView: (id: string) => void;
-  onToast: (msg: string) => void;
+  // Decide sets the lens; swiping happens on its own full-screen surface, which
+  // AppShell mounts above this sheet. Closing swipe mode lands back here with
+  // the filters intact, so "refine and go again" stays one tap.
+  onStartSwiping: (launch: SwipeLaunch) => void;
 }) {
   const [title] = useState(() => PHRASES[Math.floor(Math.random() * PHRASES.length)]);
+  const places = usePlaces();
   const [source, setSource] = useState<DeckSource>("saved");
 
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
@@ -133,8 +136,6 @@ export default function DecideSheet({
 
   const [nl, setNl] = useState("");
   const [thinking, setThinking] = useState(false);
-
-  const [undoFn, setUndoFn] = useState<null | (() => void)>(null);
 
   const { sheetRef, handleProps } = useSheetDrag(onClose);
 
@@ -146,6 +147,13 @@ export default function DecideSheet({
   );
   const cuisineProp = filters.cuisine || null;
   const keywordProp = source === "saved" ? "" : extras.keywords?.join(" ") ?? "";
+
+  // Cheap and local (rankPlaces is pure), so the chips get live feedback: change
+  // a filter, watch the number move. Only meaningful for the saved lens.
+  const savedMatches = useMemo(
+    () => (source === "new" ? 0 : rankPlaces(places, deckQuery, 1).length),
+    [source, places, deckQuery]
+  );
 
   if (!open) return null;
 
@@ -249,17 +257,6 @@ export default function DecideSheet({
               </h1>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              {undoFn && (
-                <button
-                  onClick={() => undoFn()}
-                  aria-label="Undo last swipe"
-                  className="press flex h-9 items-center gap-1.5 rounded-full px-3"
-                  style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)" }}
-                >
-                  <RotateCcw size={14} strokeWidth={2.25} />
-                  <span className="text-[12.5px] font-semibold">Undo</span>
-                </button>
-              )}
               <button
                 onClick={onClose}
                 aria-label="Close"
@@ -394,20 +391,39 @@ export default function DecideSheet({
           )}
         </div>
 
-        {/* ---- deck ---- */}
-        <div className="min-h-0 flex-1 px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3">
-          <SwipeDeck
-            source={source}
-            query={deckQuery}
-            cuisine={cuisineProp}
-            keyword={keywordProp}
-            onOpenSaved={(id) => {
-              onView(id);
-              onClose();
+        {/* ---- the hand-off ----
+            Everything above sets the lens; this launches it. The match count is
+            only computable for the saved lens (New/Both need a Swiggy round-trip
+            this sheet deliberately doesn't make), so it shows there and nowhere
+            else rather than guessing a number. */}
+        <div className="mt-auto px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4">
+          {source === "saved" && (
+            <p className="mb-2.5 text-center text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>
+              {savedMatches === 0
+                ? "Nothing matches this lens yet"
+                : `${savedMatches} ${savedMatches === 1 ? "place" : "places"} match`}
+            </p>
+          )}
+          <button
+            onClick={() =>
+              onStartSwiping({
+                source,
+                query: deckQuery,
+                cuisine: cuisineProp,
+                keyword: keywordProp,
+              })
+            }
+            disabled={source === "saved" && savedMatches === 0}
+            className="press flex w-full items-center justify-center gap-2 py-3.5 text-[15px] font-bold disabled:opacity-40"
+            style={{
+              background: "oklch(0.97 0 0)",
+              color: "oklch(0.16 0.006 260)",
+              borderRadius: "var(--radius-chip)",
             }}
-            onToast={onToast}
-            onUndoChange={(fn) => setUndoFn(() => fn)}
-          />
+          >
+            <Layers size={16} strokeWidth={2.5} />
+            Start swiping
+          </button>
         </div>
       </div>
     </div>

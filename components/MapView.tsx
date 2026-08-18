@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Place } from "@/lib/types";
 import { displayState } from "@/lib/types";
 import { DEFAULT_VIEW } from "@/lib/seed";
-import { noteGpsFix, noteMapCenter } from "@/lib/bias";
+import { noteGpsFix, noteMapCenter, geoEverGranted, onGeoGranted } from "@/lib/bias";
 import Pin, { type PinVariant } from "./Pin";
 import PlaceGlyph from "./PlaceGlyph";
 
@@ -47,25 +47,100 @@ export default function MapView({
   const [band, setBand] = useState<PinVariant>(() => bandFor(DEFAULT_VIEW.zoom));
   const [ready, setReady] = useState(false);
 
-  // Live "you are here": watch the GPS fix and drop the avatar marker at it.
-  // Transient — the location is used to show where I am, never stored as a
-  // place. Silently absent if permission is denied or location is unavailable.
+  // Live "you are here": watch the GPS fix and drop the avatar marker at it,
+  // but only after the browser already has permission. App startup must not
+  // trigger a location prompt; explicit actions like "Pin where I am" can ask.
   const [me, setMe] = useState<{ lat: number; lng: number } | null>(null);
   useEffect(() => {
     if (typeof navigator === "undefined" || !("geolocation" in navigator)) return;
-    const id = navigator.geolocation.watchPosition(
-      (pos) => {
-        const c = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        setMe(c);
-        noteGpsFix(c); // doubles as the search bias — see lib/bias.ts
-      },
-      () => {
-        setMe(null);
-        noteGpsFix(null);
-      },
-      { enableHighAccuracy: true, maximumAge: 15_000, timeout: 20_000 }
-    );
-    return () => navigator.geolocation.clearWatch(id);
+
+    let cancelled = false;
+    let permission: PermissionStatus | null = null;
+    let watchId: number | null = null;
+
+    const clearWatch = () => {
+      if (watchId != null) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+      }
+      setMe(null);
+      noteGpsFix(null);
+    };
+
+    const startWatch = () => {
+      if (watchId != null) return;
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          const c = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          setMe(c);
+          noteGpsFix(c); // doubles as the search bias — see lib/bias.ts
+        },
+        (err) => {
+          // A geolocation watch is NOT cancelled by an error — the browser
+          // keeps trying. Tearing it down here (what this did) turned one
+          // routine indoor TIMEOUT into "no avatar until reload", because
+          // nothing restarts it: syncPermission only re-runs on
+          // permission.onchange, which a timeout never fires. Only a denial is
+          // permanent; a timeout or an unavailable fix is a bad moment, not a
+          // bad session. Drop the stale marker either way — a "you are here"
+          // pin we can no longer confirm is worse than none.
+          if (err.code === err.PERMISSION_DENIED) {
+            clearWatch();
+            return;
+          }
+          setMe(null);
+          noteGpsFix(null);
+        },
+        { enableHighAccuracy: true, maximumAge: 15_000, timeout: 20_000 }
+      );
+    };
+
+    // "Pin where I am" succeeding proves permission exists, in this session, on
+    // any browser. Safe to register unconditionally: where the Permissions API
+    // works, onchange gets there first and startWatch is idempotent.
+    const offGrant = onGeoGranted(() => {
+      if (!cancelled) startWatch();
+    });
+
+    const syncPermission = () => {
+      if (cancelled || !permission) return;
+      if (permission.state === "granted") startWatch();
+      else clearWatch();
+    };
+
+    // No Permissions API (Safari) — we cannot ask what the state is, so fall
+    // back to what we remember. A remembered grant means watchPosition will not
+    // prompt, which is the only thing the startup gate exists to prevent.
+    const withoutPermissionsApi = () => {
+      if (geoEverGranted()) startWatch();
+      else noteGpsFix(null);
+    };
+
+    if (!("permissions" in navigator)) {
+      withoutPermissionsApi();
+      return;
+    }
+
+    navigator.permissions
+      .query({ name: "geolocation" as PermissionName })
+      .then((status) => {
+        if (cancelled) return;
+        permission = status;
+        permission.onchange = syncPermission;
+        syncPermission();
+      })
+      // Safari HAS navigator.permissions but rejects the geolocation name, so
+      // this catch — not the branch above — is the live path there.
+      .catch(() => {
+        if (!cancelled) withoutPermissionsApi();
+      });
+
+    return () => {
+      cancelled = true;
+      if (permission) permission.onchange = null;
+      offGrant();
+      clearWatch();
+    };
   }, []);
 
   // Open on YOUR places, not on a city. The initial view was a hard-coded
@@ -78,9 +153,18 @@ export default function MapView({
     if (fitted.current || !ready || !places.length) return;
     const map = mapRef.current?.getMap();
     if (!map) return;
+    // mapGooglePlace falls back to `lat: 0, lng: 0` when Google returns no
+    // location, so a single such record drags the bounds to Null Island and
+    // opens the map on the Atlantic. Fit to the places that actually have a
+    // position — and if none do, leave `fitted` false so the next set of
+    // records still gets its chance instead of being locked out forever.
+    const locatable = places.filter(
+      (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng) && !(p.lat === 0 && p.lng === 0)
+    );
+    if (!locatable.length) return;
     fitted.current = true;
-    const lngs = places.map((p) => p.lng);
-    const lats = places.map((p) => p.lat);
+    const lngs = locatable.map((p) => p.lng);
+    const lats = locatable.map((p) => p.lat);
     map.fitBounds(
       [
         [Math.min(...lngs), Math.min(...lats)],
@@ -163,7 +247,14 @@ export default function MapView({
         const b = bandFor(e.viewState.zoom);
         setBand((prev) => (prev === b ? prev : b)); // no re-render unless the band flips
       }}
-      onMoveEnd={(e) => noteMapCenter({ lat: e.viewState.latitude, lng: e.viewState.longitude })}
+      // Zoom goes with the centre: lib/bias.ts drops views too wide to mean
+      // anything, which is what stops a two-city fit becoming the search bias.
+      onMoveEnd={(e) =>
+        noteMapCenter(
+          { lat: e.viewState.latitude, lng: e.viewState.longitude },
+          e.viewState.zoom
+        )
+      }
       onClick={() => onSelect(null)}
       style={{ position: "absolute", inset: 0 }}
     >

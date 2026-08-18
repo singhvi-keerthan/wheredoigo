@@ -23,7 +23,7 @@ import { searchPlaces, nearbyPlaces, resolveMapsLink, enrichPlaceFromGoogle, typ
 import { tagsFromGoogleTypes } from "@/lib/googleTags";
 import { priceSigns } from "@/lib/format";
 import { TAG_OPTIONS, type CaptureSource, type Tag } from "@/lib/types";
-import { searchBias } from "@/lib/bias";
+import { searchBias, noteGpsFix, noteGeoGranted } from "@/lib/bias";
 import { useSheetDrag } from "./useSheetDrag";
 
 // The + surface = ADDING a place, not searching what's already logged (that's
@@ -266,6 +266,11 @@ export default function AddPlaceSheet({
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         const { latitude: lat, longitude: lng, accuracy } = pos.coords;
+        // The one place the app is allowed to ask for location is also the only
+        // proof of permission some browsers will ever give us — bank both the
+        // fix and the fact that it was granted. See lib/bias.ts.
+        noteGpsFix({ lat, lng });
+        noteGeoGranted();
         const { results } = await nearbyPlaces(lat, lng, accuracy);
         setLocating(false);
         if (results.length) {

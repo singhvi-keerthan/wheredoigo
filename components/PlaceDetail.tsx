@@ -8,7 +8,7 @@ import {
   usePlace, updatePlace, toggleFavorite, toggleNeverAgain, setTags, addPhoto, removePhoto,
   removePlace, useCustomTags, addCustomTag,
 } from "@/lib/store";
-import { TAG_OPTIONS, NAMESPACE_LABELS, isOpenNow, type TagNamespace, type Tag } from "@/lib/types";
+import { TAG_OPTIONS, NAMESPACE_LABELS, isOpenNow, namespacesFor, type TagNamespace, type Tag } from "@/lib/types";
 import { stateMeta, priceSigns, directionsUrl, relativeDate, photosSorted } from "@/lib/format";
 import { enrichPlaceFromGoogle } from "@/lib/places";
 import { resizeImage } from "@/lib/image";
@@ -361,7 +361,10 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
           >
             {editingTags ? (
               <div className="flex flex-col gap-3.5">
-                {(Object.keys(TAG_OPTIONS) as TagNamespace[]).map((ns) => {
+                {/* Same rule the visit form uses: a viewpoint has no cuisine
+                    and no staple dish, so it isn't asked for one. Tag a place
+                    café or restaurant and both rows come back. */}
+                {namespacesFor(place.tags).map((ns) => {
                   const options = Array.from(new Set([...TAG_OPTIONS[ns], ...customTags[ns]]));
                   return (
                     <TagGroup

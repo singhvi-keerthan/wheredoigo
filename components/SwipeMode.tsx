@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
-import { RotateCcw, Sparkles } from "lucide-react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { RotateCcw, Sparkles, X, Heart, Check } from "lucide-react";
 import { usePlaces, addPlace, removePlace, toggleNeverAgain } from "@/lib/store";
 import {
   searchDineout,
@@ -10,29 +10,37 @@ import {
   type SwiggyError,
   type UserCoords,
 } from "@/lib/swiggyClient";
+import { searchBias } from "@/lib/bias";
 import { buildDeck, type DeckCard, type DeckSource } from "@/lib/deck";
-import { bumpSkip, resetSkip, decSkip } from "@/lib/skips";
+import { bumpSkip, resetSkip, decSkip, peekSkip, setSkip } from "@/lib/skips";
 import { type DecideQuery } from "@/lib/decide";
-import SwipeCard from "./SwipeCard";
+import SwipeCard, { FOOTER_SPACE } from "./SwipeCard";
 import NewCardDetail from "./NewCardDetail";
 import DeckHint from "./DeckHint";
+import { useCardSwipe, DY_DAMP } from "./useCardSwipe";
 
 const HINT_KEY = "wheredoigokeerthan.deckHintSeen.v1"; // first-run swipe coach, shown once
 
 const SWIPE_THRESHOLD = 92; // px past which a release commits (horizontal)
-const UP_THRESHOLD = 88; // px up-drag that opens details
 const EXIT_MS = 240;
 // A fast flick commits before the distance threshold — so a confident wrist
-// flick sends the card without dragging it all the way across (the main thing
-// that made the old 1:1 drag feel "loose").
+// flick sends the card without dragging it all the way across.
 const FLICK_VELOCITY = 0.55; // px/ms
 const FLICK_MIN = 44; // px — ignore taps / jitter below this travel
-// Sideways swipes stay level: vertical follow is damped hard unless the gesture
-// is genuinely an up-swipe (that opens details).
-const DY_DAMP = 0.2;
+const CARD_INSET = 10; // px of surround, so the next card peeks and it still reads as a card
 
-// placeId → reverse a real add on undo; skipId → decrement the skip count on undo
-type UndoEntry = { key: string; placeId: string | null; skipId?: string };
+// placeId → reverse a real add on undo; skipId → the place whose skip count the
+// undo has to put right; restoreSkip → the exact count to put back (a right
+// swipe RESETS the count, and neither decSkip nor a second reset can undo that),
+// absent when the swipe merely bumped it and a decrement is the reverse.
+type UndoEntry = { key: string; placeId: string | null; skipId?: string; restoreSkip?: number };
+
+export type SwipeLaunch = {
+  source: DeckSource;
+  query: DecideQuery;
+  cuisine: string | null;
+  keyword: string;
+};
 
 // Maps a Swiggy result to the app's Place shape — same mapping the old Swiggy
 // panel used, so a swipe-saved find is consistent with places added any way.
@@ -57,25 +65,22 @@ function saveNew(r: SwiggyRestaurant): string {
   return created.id;
 }
 
-export default function SwipeDeck({
-  source,
-  query,
-  cuisine,
-  keyword,
+// Swipe mode: its own full-screen surface, launched from DecideSheet with a
+// frozen lens (source + query + filters). Decide stays the place you SET UP a
+// session; this is the place you run it. Closing returns to Decide with the
+// filters still there, so "refine and go again" is one tap.
+export default function SwipeMode({
+  launch,
+  onClose,
   onOpenSaved,
   onToast,
-  onUndoChange,
 }: {
-  source: DeckSource;
-  query: DecideQuery; // drives the "saved" lens; ignored for "new"
-  cuisine: string | null; // cuisine filter for the "new"/"both" lens
-  keyword: string; // free-text Swiggy search for "new"/"both"
-  onOpenSaved: (id: string) => void; // saved-card details → PlaceDetail (closes the deck sheet)
+  launch: SwipeLaunch;
+  onClose: () => void;
+  onOpenSaved: (id: string) => void; // the escape hatch — full place screen
   onToast: (msg: string) => void;
-  // Undo lives in the sheet header (the deck itself is swipe-only), so the deck
-  // hands its undo action up whenever one is available, null when not.
-  onUndoChange: (undo: (() => void) | null) => void;
 }) {
+  const { source, query, cuisine, keyword } = launch;
   const places = usePlaces();
   // Latest-places snapshot read only at deck-build time — kept in a ref (updated
   // in an effect, never during render) so a mid-session add doesn't reshuffle
@@ -94,29 +99,19 @@ export default function SwipeDeck({
   const [swiggy, setSwiggy] = useState<SwiggyRestaurant[]>([]);
   const [loadingNew, setLoadingNew] = useState(false);
   const [newError, setNewError] = useState<SwiggyError | null>(null);
-  // Every Swiggy tool takes the user's coordinates, and the same pair must be
-  // echoed from search through slots to the booking — so it's resolved once
-  // here and handed down. Null means "still asking"; the search waits for it
-  // rather than firing twice, which would reshuffle the stack mid-swipe.
-  // Lazily seeded so the no-geolocation case is settled at first render rather
-  // than by a setState inside the effect (same reasoning as the hint flag
-  // below: this deck only ever mounts client-side, off a tap).
-  const [coords, setCoords] = useState<UserCoords | null>(() =>
-    typeof navigator !== "undefined" && "geolocation" in navigator ? null : FALLBACK_COORDS
-  );
+  // Every Swiggy tool takes the same coordinate pair from search through slots
+  // to booking. Use whatever bias the app already has (GPS only if permission
+  // was previously granted, otherwise the map centre), then fall back. Swipe
+  // mode must not trigger a browser location prompt just by opening.
+  const [coords] = useState<UserCoords>(() => searchBias() ?? FALLBACK_COORDS);
 
-  const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
   const [exiting, setExiting] = useState<{ dir: "left" | "right"; key: string } | null>(null);
-  const startRef = useRef<{ x: number; y: number } | null>(null);
-  // Rolling sample of the pointer for release velocity (a smoothed px/ms on x).
-  const moveRef = useRef<{ x: number; t: number } | null>(null);
-  const velRef = useRef(0);
   const [detailNew, setDetailNew] = useState<SwiggyRestaurant | null>(null);
   // 3rd-skip escalation: the saved card to offer a permanent hide for.
   const [confirmHide, setConfirmHide] = useState<Extract<DeckCard, { kind: "saved" }> | null>(null);
 
   // First-run coach — shown once (persisted flag), retires on the first swipe/key
-  // or a timeout. Lazy-read here: SwipeDeck only ever mounts client-side (Decide
+  // or a timeout. Lazy-read here: this only ever mounts client-side (swipe mode
   // is opened by a tap), so localStorage is available and there's no SSR of it.
   const [hintMounted, setHintMounted] = useState(() => {
     try {
@@ -144,28 +139,9 @@ export default function SwipeDeck({
     return () => clearTimeout(auto);
   }, []);
 
-  // Ask for a position once. Denied, unavailable, or slow all land on the city
-  // centre — Swiggy requires *some* location, and a Bengaluru-wide search is a
-  // far better failure mode than no results at all.
-  useEffect(() => {
-    if (typeof navigator === "undefined" || !("geolocation" in navigator)) return; // already seeded
-    let settled = false;
-    const done = (c: UserCoords) => {
-      if (settled) return;
-      settled = true;
-      setCoords(c);
-    };
-    navigator.geolocation.getCurrentPosition(
-      (p) => done({ lat: p.coords.latitude, lng: p.coords.longitude }),
-      () => done(FALLBACK_COORDS),
-      { enableHighAccuracy: false, timeout: 6000, maximumAge: 300_000 }
-    );
-  }, []);
-
   // Fetch Swiggy's catalog for New/Both whenever the source or cuisine changes.
   useEffect(() => {
     if (source === "saved") return; // buildDeck ignores swiggy for "saved"
-    if (!coords) return; // wait for the location the tool requires
     let cancelled = false;
     const run = async () => {
       setLoadingNew(true);
@@ -187,9 +163,9 @@ export default function SwipeDeck({
     };
   }, [source, cuisine, keyword, coords]);
 
-  // Rebuild the ordered deck when the lens changes (source / query / results /
-  // seed). Reads places + seen from refs so a mid-session add or a dismiss
-  // doesn't reshuffle the stack under the user's thumb.
+  // Rebuild the ordered deck when the lens changes (results / seed). The lens
+  // itself is frozen at launch, so in practice this is the Swiggy fetch landing
+  // and the "start over" reshuffle.
   const queryKey = JSON.stringify(query);
   useEffect(() => {
     setDeck(
@@ -205,20 +181,12 @@ export default function SwipeDeck({
     setPos(0);
     setUndo([]);
     setExiting(null);
-    setDrag(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, queryKey, swiggy, seed]);
 
   const current = deck[pos] ?? null;
 
   // ---- actions -----------------------------------------------------------
-  const details = () => {
-    if (!current) return;
-    setDrag(null);
-    if (current.kind === "saved") onOpenSaved(current.place.id);
-    else setDetailNew(current.r);
-  };
-
   const commit = (dir: "left" | "right") => {
     if (!current || exiting) return;
     const card = current;
@@ -229,7 +197,11 @@ export default function SwipeDeck({
         entry = { key: card.key, placeId: saveNew(card.r) };
         onToast("Added to watchlist");
       } else {
-        resetSkip(card.place.id); // changed your mind — drop the skip ramp
+        // Changed your mind — drop the skip ramp, but remember where it was so
+        // Undo genuinely reverses the swipe instead of quietly keeping the reset.
+        const prior = peekSkip(card.place.id);
+        resetSkip(card.place.id);
+        entry = { key: card.key, placeId: null, skipId: card.place.id, restoreSkip: prior };
         onToast("Already on your map");
       }
     } else if (card.kind === "saved") {
@@ -240,7 +212,8 @@ export default function SwipeDeck({
     }
     setUndo((u) => [...u, entry]);
     setExiting({ dir, key: card.key });
-    setDrag(null);
+    // No drag reset needed here: useCardSwipe clears its own state before it
+    // calls onCommit, and the keyboard/button paths never had a drag.
     window.setTimeout(() => {
       seenRef.current.add(card.key);
       setPos((p) => p + 1);
@@ -248,6 +221,18 @@ export default function SwipeDeck({
       if (prompt && card.kind === "saved") setConfirmHide(card);
     }, EXIT_MS);
   };
+
+  const swipe = useCardSwipe({
+    enabled: !exiting && !!current,
+    threshold: SWIPE_THRESHOLD,
+    flickVelocity: FLICK_VELOCITY,
+    flickMin: FLICK_MIN,
+    onCommit: (dir) => {
+      dismissHint();
+      commit(dir);
+    },
+  });
+  const drag = swipe.drag;
 
   // "Hide for good" — the escalation's yes. The card is already dismissed; this
   // just also flags neverAgain so it never surfaces anywhere again, and drops
@@ -268,8 +253,8 @@ export default function SwipeDeck({
     setConfirmHide(null);
   };
 
-  // Add from the New detail sheet — same effect as a right swipe, minus the
-  // fly-out (the detail overlay already covers the card), then close.
+  // Add from the booking sheet — same effect as a right swipe, minus the
+  // fly-out (the sheet already covers the card), then close.
   const addFromDetail = () => {
     if (current?.kind !== "new") {
       setDetailNew(null);
@@ -291,7 +276,12 @@ export default function SwipeDeck({
     // (React runs those during render, and store writes fan out to other
     // components mid-render).
     if (last.placeId) removePlace(last.placeId); // reverse the add
-    if (last.skipId) decSkip(last.skipId); // reverse the skip-count bump
+    if (last.skipId) {
+      // A right swipe reset the count (restore it exactly); a left swipe bumped
+      // it by one (step it back).
+      if (last.restoreSkip != null) setSkip(last.skipId, last.restoreSkip);
+      else decSkip(last.skipId);
+    }
     seenRef.current.delete(last.key);
     setUndo((u) => u.slice(0, -1));
     setPos((p) => Math.max(0, p - 1));
@@ -302,61 +292,20 @@ export default function SwipeDeck({
     setSeed((s) => s + 1);
   };
 
-  // ---- pointer gestures (top card only) ----------------------------------
-  const onPointerDown = (e: ReactPointerEvent) => {
-    if (exiting || !current) return;
-    dismissHint();
-    startRef.current = { x: e.clientX, y: e.clientY };
-    moveRef.current = { x: e.clientX, t: e.timeStamp };
-    velRef.current = 0;
-    (e.target as Element).setPointerCapture?.(e.pointerId);
-    setDrag({ dx: 0, dy: 0 });
-  };
-  const onPointerMove = (e: ReactPointerEvent) => {
-    if (!startRef.current) return;
-    // Smoothed instantaneous x-velocity from the last sample (guard tiny dt).
-    if (moveRef.current) {
-      const dt = e.timeStamp - moveRef.current.t;
-      if (dt > 0) {
-        const v = (e.clientX - moveRef.current.x) / dt;
-        velRef.current = velRef.current * 0.4 + v * 0.6;
-      }
-    }
-    moveRef.current = { x: e.clientX, t: e.timeStamp };
-    setDrag({ dx: e.clientX - startRef.current.x, dy: e.clientY - startRef.current.y });
-  };
-  const onPointerUp = (e: ReactPointerEvent) => {
-    if (!startRef.current) return;
-    const dx = e.clientX - startRef.current.x;
-    const dy = e.clientY - startRef.current.y;
-    const vx = velRef.current;
-    startRef.current = null;
-    moveRef.current = null;
-    const adx = Math.abs(dx);
-    const ady = Math.abs(dy);
-    if (adx < 6 && ady < 6) {
-      details(); // a tap
-      return;
-    }
-    if (dy < -UP_THRESHOLD && ady > adx) {
-      details();
-      setDrag(null);
-      return;
-    }
-    // Commit on distance OR a fast horizontal flick (whichever lands first).
-    const flick = adx > FLICK_MIN && Math.abs(vx) > FLICK_VELOCITY && adx > ady;
-    if (dx > SWIPE_THRESHOLD || (flick && vx > 0)) return commit("right");
-    if (dx < -SWIPE_THRESHOLD || (flick && vx < 0)) return commit("left");
-    setDrag(null); // spring back
-  };
-
   // ---- keyboard (desktop / PWA — no touch) -------------------------------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      if (detailNew || confirmHide) return;
-      if (["ArrowLeft", "ArrowRight", "ArrowUp", "Backspace"].includes(e.key) || e.key.toLowerCase() === "u") {
+      if (detailNew || confirmHide) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          if (detailNew) setDetailNew(null);
+          else keepAround();
+        }
+        return;
+      }
+      if (["ArrowLeft", "ArrowRight", "Backspace"].includes(e.key) || e.key.toLowerCase() === "u") {
         dismissHint();
       }
       if (e.key === "ArrowLeft") {
@@ -365,12 +314,12 @@ export default function SwipeDeck({
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
         commit("right");
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        details();
       } else if (e.key === "Backspace" || e.key.toLowerCase() === "u") {
         e.preventDefault();
         doUndo();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -378,20 +327,21 @@ export default function SwipeDeck({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deck, pos, exiting, detailNew, confirmHide, undo.length]);
 
-  // Publish the current undo action (or null) to the sheet header.
-  useEffect(() => {
-    onUndoChange(undo.length && !exiting ? doUndo : null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [undo.length, exiting]);
-
   // ---- render ------------------------------------------------------------
+  // A right swipe does two different things, so it can't wear one label. On a
+  // NEW card it genuinely adds to the watchlist. On a SAVED card it adds
+  // nothing — the place is already on your map (it may be visited, or a
+  // favourite); the swipe just picks it and clears its skip ramp. Promising
+  // "Add to watchlist" there is a lie the stamp, the button and the coach were
+  // all telling.
+  const isNewCard = current?.kind === "new";
+  const rightStamp = isNewCard ? "Watchlist" : "Yes";
+  const rightAction = isNewCard ? "Add to watchlist" : "Yes, I’d go";
+
   const stamp = (() => {
     if (!drag) return null;
-    const { dx, dy } = drag;
-    const adx = Math.abs(dx);
-    const ady = Math.abs(dy);
-    if (dy < 0 && ady > adx) return { label: "Details", color: "var(--accent)", opacity: ady / UP_THRESHOLD };
-    if (dx > 0) return { label: "Watchlist", color: "var(--s-watchlist)", opacity: dx / SWIPE_THRESHOLD };
+    const { dx } = drag;
+    if (dx > 0) return { label: rightStamp, color: "var(--s-watchlist)", opacity: dx / SWIPE_THRESHOLD };
     if (dx < 0) return { label: "Nope", color: "var(--s-favorite)", opacity: -dx / SWIPE_THRESHOLD };
     return null;
   })();
@@ -405,14 +355,12 @@ export default function SwipeDeck({
       };
     }
     if (drag) {
-      // Keep a sideways swipe level: damp vertical follow hard unless the drag
-      // is genuinely vertical (an up-swipe for details). Rotation is coupled to
-      // the horizontal travel and clamped so the card never over-tilts.
-      const vertical = Math.abs(drag.dy) > Math.abs(drag.dx);
-      const dyEff = vertical ? drag.dy : drag.dy * DY_DAMP;
+      // The axis lock guarantees this only ever runs on a horizontal gesture,
+      // so dy here is thumb-arc, not scroll intent — damped hard to keep the
+      // card level. Rotation is coupled to horizontal travel and clamped.
       const rot = Math.max(-15, Math.min(15, drag.dx * 0.055));
       return {
-        transform: `translate(${drag.dx}px, ${dyEff}px) rotate(${rot}deg)`,
+        transform: `translate(${drag.dx}px, ${drag.dy * DY_DAMP}px) rotate(${rot}deg)`,
         transition: "none",
       };
     }
@@ -426,15 +374,18 @@ export default function SwipeDeck({
   // Busy the whole time a Swiggy fetch is in flight — not just on first load — so
   // a cuisine/keyword change hides the previous pool's cards immediately instead
   // of leaving them swipeable against a lens they no longer match.
-  const busy = source !== "saved" && (loadingNew || !coords);
+  const busy = source !== "saved" && loadingNew;
   // A Swiggy failure has to read differently from "no matches" — the deck is
   // empty either way, but only one of them is fixable by changing the filter.
   const newFailed = source !== "saved" && newError !== null;
+  const showCards = !busy && !newFailed && !empty && !exhausted;
+
+  const lens = source === "saved" ? "Your map" : source === "new" ? "New · Swiggy" : "Everything";
 
   return (
-    <div className="flex h-full flex-col">
-      {/* stage — takes all the space the controls and rail leave */}
-      <div className="relative min-h-0 flex-1">
+    <div className="fixed inset-0 z-[52]" style={{ background: "var(--bg-base)" }}>
+      {/* ---- card stage: the whole screen ---- */}
+      <div className="absolute" style={{ inset: CARD_INSET }}>
         {busy ? (
           <Centered>
             <Sparkles size={20} className="animate-pulse" style={{ color: "var(--accent)" }} />
@@ -459,7 +410,7 @@ export default function SwipeDeck({
               Nothing matches this filter
             </p>
             <p className="mt-1 text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>
-              Pick another cuisine, or switch source above.
+              Close and pick another lens.
             </p>
           </Centered>
         ) : exhausted ? (
@@ -481,44 +432,151 @@ export default function SwipeDeck({
         ) : (
           <>
             {stack
-            .map((card, i) => {
-              const top = i === 0;
-              const peek: CSSProperties = top
-                ? topTransform()
-                : {
-                    transform: `scale(${1 - i * 0.04}) translateY(${i * 12}px)`,
-                    opacity: 1 - i * 0.12,
-                    transition: "transform 0.24s ease, opacity 0.24s ease",
-                  };
-              return (
-                <div
-                  key={card.key}
-                  className="absolute inset-0"
-                  style={{ zIndex: stack.length - i, ...peek }}
-                  onPointerDown={top ? onPointerDown : undefined}
-                  onPointerMove={top ? onPointerMove : undefined}
-                  onPointerUp={top ? onPointerUp : undefined}
-                  onPointerCancel={top ? () => {
-                    startRef.current = null;
-                    moveRef.current = null;
-                    setDrag(null);
-                  } : undefined}
-                >
-                  <SwipeCard card={card} stamp={top ? stamp : null} interactive={top} />
-                </div>
-              );
-            })
-            // paint the top card LAST so it wins stacking + receives the pointer
-            .reverse()}
-            {hintMounted && current && <DeckHint visible={hintVisible} />}
+              .map((card, i) => {
+                const top = i === 0;
+                const peek: CSSProperties = top
+                  ? topTransform()
+                  : {
+                      transform: `scale(${1 - i * 0.03}) translateY(${i * 10}px)`,
+                      opacity: 1 - i * 0.14,
+                      transition: "transform 0.24s ease, opacity 0.24s ease",
+                    };
+                return (
+                  <div
+                    key={card.key}
+                    className="absolute inset-0"
+                    style={{ zIndex: stack.length - i, ...peek }}
+                    // The cards underneath are decoration until they're on top:
+                    // inert keeps their Directions/Full-details controls out of
+                    // the tab order and out of a screen reader, which otherwise
+                    // reads three stacked copies of every card.
+                    inert={!top}
+                    {...(top ? swipe.handlers : {})}
+                  >
+                    <SwipeCard
+                      card={card}
+                      stamp={top ? stamp : null}
+                      interactive={top}
+                      wasDrag={swipe.wasDrag}
+                      onOpenDetails={() => {
+                        if (card.kind === "saved") onOpenSaved(card.place.id);
+                      }}
+                      onBook={() => {
+                        if (card.kind === "new") setDetailNew(card.r);
+                      }}
+                    />
+                  </div>
+                );
+              })
+              // paint the top card LAST so it wins stacking + receives the pointer
+              .reverse()}
+            {hintMounted && current && <DeckHint visible={hintVisible} rightLabel={rightStamp} />}
           </>
         )}
       </div>
 
+      {/* Scrim under the floating header. Without it the hero's title slides
+          under the close button mid-scroll and gets sliced in half. */}
+      <div
+        className="pointer-events-none absolute inset-x-0 top-0"
+        style={{
+          zIndex: 9,
+          height: 120,
+          background: "linear-gradient(180deg, rgba(6,7,10,0.75) 0%, rgba(6,7,10,0) 100%)",
+        }}
+      />
+
+      {/* ---- header: close + the lens you launched with ---- */}
+      <div
+        className="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-between gap-3 px-4 pt-[max(0.75rem,env(safe-area-inset-top))]"
+        style={{ zIndex: 10 }}
+      >
+        <button
+          onClick={onClose}
+          aria-label="Close swipe mode"
+          className="press pointer-events-auto grid h-10 w-10 place-items-center rounded-full"
+          style={{
+            background: "var(--glass)",
+            backdropFilter: "blur(22px)",
+            WebkitBackdropFilter: "blur(22px)",
+            color: "var(--text-primary)",
+          }}
+        >
+          <X size={17} strokeWidth={2.25} />
+        </button>
+        <span
+          className="pointer-events-auto rounded-full px-3 py-1.5 text-[12px] font-semibold"
+          style={{
+            background: "var(--glass)",
+            backdropFilter: "blur(22px)",
+            WebkitBackdropFilter: "blur(22px)",
+            color: "var(--text-secondary)",
+          }}
+        >
+          {lens}
+        </span>
+      </div>
+
+      {/* ---- action bar: pinned, so it never scrolls away with the card ---- */}
+      {/* Undo has to outlive the cards. Gating the whole bar on showCards meant
+          mis-swiping the LAST card unmounted the only touch affordance for
+          taking it back — "That's everyone" would render over a deck you never
+          meant to finish, with recovery available on desktop keys alone. The
+          bar now also renders whenever there is something to undo; skip/like
+          simply go inert with no card under them. */}
+      {(showCards || undo.length > 0) && (
+        <div
+          className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]"
+          style={{ zIndex: 10, height: FOOTER_SPACE }}
+        >
+          <ActionCircle
+            onClick={() => {
+              dismissHint();
+              commit("left");
+            }}
+            label="Skip"
+            color="var(--s-favorite)"
+            size={60}
+            disabled={!current || !!exiting}
+          >
+            <X size={26} strokeWidth={2.75} />
+          </ActionCircle>
+
+          <ActionCircle
+            onClick={doUndo}
+            label="Undo last swipe"
+            color="var(--text-tertiary)"
+            size={46}
+            disabled={!undo.length || !!exiting}
+          >
+            <RotateCcw size={18} strokeWidth={2.5} />
+          </ActionCircle>
+
+          <ActionCircle
+            onClick={() => {
+              dismissHint();
+              commit("right");
+            }}
+            label={rightAction}
+            color="var(--s-watchlist)"
+            size={60}
+            disabled={!current || !!exiting}
+          >
+            {isNewCard ? (
+              <Heart size={24} strokeWidth={2.5} fill="currentColor" />
+            ) : (
+              // A heart over a place you already saved reads as "save it" too —
+              // same false promise as the label, so the glyph branches with it.
+              <Check size={26} strokeWidth={3} />
+            )}
+          </ActionCircle>
+        </div>
+      )}
+
       {detailNew && (
         <NewCardDetail
           r={detailNew}
-          coords={coords ?? FALLBACK_COORDS}
+          coords={coords}
           onAdd={addFromDetail}
           onClose={() => setDetailNew(null)}
         />
@@ -559,6 +617,46 @@ export default function SwipeDeck({
   );
 }
 
+// Dark-glass circle over the card — the state colour rides the glyph, never a
+// fill, so the deck's existing stamp vocabulary (amber = watchlist, red = nope)
+// carries through to the buttons without turning them into coloured actions.
+function ActionCircle({
+  onClick,
+  label,
+  color,
+  size,
+  disabled,
+  children,
+}: {
+  onClick: () => void;
+  label: string;
+  color: string;
+  size: number;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label={label}
+      disabled={disabled}
+      className="press grid place-items-center rounded-full disabled:opacity-35"
+      style={{
+        height: size,
+        width: size,
+        color,
+        background: "var(--glass)",
+        backdropFilter: "blur(22px)",
+        WebkitBackdropFilter: "blur(22px)",
+        border: "1px solid var(--border-strong)",
+        boxShadow: "var(--shadow-pop)",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
 function Centered({ children }: { children: React.ReactNode }) {
   return (
     <div
@@ -569,4 +667,3 @@ function Centered({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
-

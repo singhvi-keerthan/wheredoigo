@@ -1,12 +1,15 @@
 "use client";
 
 import { type CSSProperties } from "react";
-import { ChevronLeft, ChevronRight, ChevronUp } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
 // First-run coach over the card: faint directional cues that imply each swipe,
 // plus the keyboard equivalents for desktop. Non-interactive (pointer-events
 // none) so it never intercepts a swipe, and low-contrast by design — it teaches,
-// then fades on the first gesture. Shown once (SwipeDeck persists a seen flag).
+// then fades on the first gesture. Shown once (SwipeMode persists a seen flag).
+// Horizontal only: vertical now belongs to the card's own scroll, and the card
+// carries its own "scroll for more" cue, so an up-arrow here would teach a
+// gesture that no longer exists.
 function Key({ children }: { children: React.ReactNode }) {
   return (
     <span
@@ -18,7 +21,16 @@ function Key({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function DeckHint({ visible }: { visible: boolean }) {
+export default function DeckHint({
+  visible,
+  rightLabel,
+}: {
+  visible: boolean;
+  // What a right swipe actually does depends on the card: a Swiggy find gets
+  // saved, a place already on your map just gets picked. Teaching "Watchlist"
+  // over a place you saved months ago promises something that never happens.
+  rightLabel: string;
+}) {
   return (
     <div
       className="pointer-events-none absolute inset-0 z-[6]"
@@ -40,22 +52,14 @@ export default function DeckHint({ visible }: { visible: boolean }) {
         </div>
       </div>
 
-      {/* right = Add to watchlist */}
+      {/* right = save it (new) / pick it (saved) */}
       <div className="absolute right-3 top-1/2 -translate-y-1/2">
         <div
           className="hint-x flex items-center gap-1"
           style={{ "--hint-dx": "9px", color: "var(--s-watchlist)" } as CSSProperties}
         >
-          <span className="text-[12.5px] font-bold">Watchlist</span>
+          <span className="text-[12.5px] font-bold">{rightLabel}</span>
           <ChevronRight size={20} strokeWidth={2.75} />
-        </div>
-      </div>
-
-      {/* up = Details */}
-      <div className="absolute left-1/2 top-4 -translate-x-1/2">
-        <div className="hint-y flex flex-col items-center gap-0.5" style={{ color: "var(--accent)" }}>
-          <ChevronUp size={20} strokeWidth={2.75} />
-          <span className="text-[12.5px] font-bold">Details</span>
         </div>
       </div>
 
@@ -65,7 +69,6 @@ export default function DeckHint({ visible }: { visible: boolean }) {
         style={{ background: "rgba(10,10,14,0.5)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)" }}
       >
         <Key>←</Key>
-        <Key>↑</Key>
         <Key>→</Key>
         <span className="ml-1 text-[11.5px] font-medium" style={{ color: "rgba(255,255,255,0.72)" }}>
           or swipe

@@ -31,6 +31,16 @@ function wordHits(hay: string, needle: string): number[] {
   return out;
 }
 
+// Words people actually type for a value they'd never spell out. `park-garden`
+// is the only one the current vocabulary needs: "a park nearby" contains
+// neither the hyphenated nor the spaced form, so without this it matched
+// nothing at all. Aliases run through the same wordHits matcher as everything
+// else, so "parking" still doesn't match `park` — the guard this module was
+// built around stays intact.
+const ALIASES: Record<string, string[]> = {
+  "park-garden": ["park", "garden"],
+};
+
 // Split matched vocabulary into wanted vs avoided by looking for a negation word
 // just before each hit. Scans EVERY occurrence: any negated mention excludes;
 // any plain mention includes (a value can legitimately end up in both).
@@ -41,7 +51,8 @@ function classify(vals: string[], t: string): { inc: string[]; exc: string[] } {
   const exc: string[] = [];
   for (const v of vals) {
     const spaced = v.replace(/-/g, " ");
-    const hits = [...wordHits(t, v), ...(spaced === v ? [] : wordHits(t, spaced))];
+    const forms = [v, ...(spaced === v ? [] : [spaced]), ...(ALIASES[v] ?? [])];
+    const hits = forms.flatMap((f) => wordHits(t, f));
     if (!hits.length) continue;
     let negated = false;
     let plain = false;

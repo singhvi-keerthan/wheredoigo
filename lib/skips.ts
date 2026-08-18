@@ -46,6 +46,23 @@ export function resetSkip(id: string): void {
   }
 }
 
+// Read the count without touching it — used to remember what a reset is about
+// to throw away, so undo can put it back.
+export function peekSkip(id: string): number {
+  return read()[id] ?? 0;
+}
+
+// Restore an exact count. resetSkip() deletes the entry outright and decSkip()
+// can only step down by one, so neither can reverse a reset: a place skipped
+// twice and then right-swiped comes back at 0, silently pushing the
+// hide-for-good prompt two skips further away than the user ever asked for.
+export function setSkip(id: string, n: number): void {
+  const m = read();
+  if (n <= 0) delete m[id];
+  else m[id] = n;
+  write(m);
+}
+
 // Undo a single skip (reverses the last left-swipe's count bump).
 export function decSkip(id: string): void {
   const m = read();
