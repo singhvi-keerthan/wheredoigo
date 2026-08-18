@@ -6,7 +6,9 @@ export type { SwiggyRestaurant, SwiggySlot, SwiggyBooking, UserCoords };
 
 // Swiggy tools all take the user's coordinates, and the same pair has to travel
 // search → slots → book unchanged. Bengaluru's city centre is the fallback when
-// the browser won't give up a position — the same default the map opens on.
+// the browser won't give up a position.
+// Swiggy Dineout is a restaurant-booking API scoped to a city, so unlike the
+// rest of the app this one really does need a concrete fallback.
 export const FALLBACK_COORDS: UserCoords = { lat: 12.972, lng: 77.61 };
 
 // The access token lasts 5 days and Swiggy has no refresh flow in v1.0, so

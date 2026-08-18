@@ -9,18 +9,43 @@ import { keywordsFromText, STOPWORDS } from "./decide-prompt";
 
 const NEG_BEFORE = /\b(no|not|non|without|avoid|skip|except|hate|dislike)\b[\s\w-]{0,12}$/;
 
+// Vocabulary is matched on WORD BOUNDARIES, not raw substrings. Plain
+// `includes` made "barbecue" match `bar`, "working" match `work`, and would
+// have made "parking" match any value starting "park". A TRAILING PLURAL still
+// counts as a hit, because "no bars" has to keep excluding `bar` — that phrase
+// is this module's own canonical example, and a naive \b…\b fix silently
+// breaks it.
+const WORD = /[\p{L}\p{N}]/u;
+
+// Every index at which `needle` occurs as a whole word.
+function wordHits(hay: string, needle: string): number[] {
+  const out: number[] = [];
+  for (let i = hay.indexOf(needle); i !== -1; i = hay.indexOf(needle, i + 1)) {
+    if (i > 0 && WORD.test(hay[i - 1])) continue; // starts mid-word ("rebar")
+    let end = i + needle.length;
+    if (hay.slice(end, end + 2) === "es") end += 2; // "dosas" / "boxes"
+    else if (hay[end] === "s") end += 1;
+    if (end < hay.length && WORD.test(hay[end])) continue; // runs on ("barbecue")
+    out.push(i);
+  }
+  return out;
+}
+
 // Split matched vocabulary into wanted vs avoided by looking for a negation word
 // just before each hit. Scans EVERY occurrence: any negated mention excludes;
 // any plain mention includes (a value can legitimately end up in both).
+// Hyphenated values also match their spaced form, so "fine dining" still finds
+// `fine-dining` and "street food" still finds `street-food`.
 function classify(vals: string[], t: string): { inc: string[]; exc: string[] } {
   const inc: string[] = [];
   const exc: string[] = [];
   for (const v of vals) {
-    const needle = t.includes(v) ? v : t.includes(v.replace("-", " ")) ? v.replace("-", " ") : null;
-    if (!needle) continue;
+    const spaced = v.replace(/-/g, " ");
+    const hits = [...wordHits(t, v), ...(spaced === v ? [] : wordHits(t, spaced))];
+    if (!hits.length) continue;
     let negated = false;
     let plain = false;
-    for (let i = t.indexOf(needle); i !== -1; i = t.indexOf(needle, i + 1)) {
+    for (const i of hits) {
       if (NEG_BEFORE.test(t.slice(Math.max(0, i - 16), i))) negated = true;
       else plain = true;
     }
@@ -42,7 +67,9 @@ function parseArea(t: string): string | undefined {
 }
 
 export function parseFallback(text: string): DecideQuery {
-  const t = text.toLowerCase();
+  // Normalise the US spelling onto the vocabulary's British one ("theaters" →
+  // "theatres", still a hit via the plural rule above).
+  const t = text.toLowerCase().replace(/theater/g, "theatre");
   const q: DecideQuery = { intent: text.trim().slice(0, 40), lifecycle: "any" };
 
   const fields: { ns: keyof typeof TAG_OPTIONS; inc: keyof DecideQuery; exc: keyof DecideQuery }[] = [
@@ -76,6 +103,8 @@ export function parseFallback(text: string): DecideQuery {
   const boost: string[] = [];
   if (/ambian|ambien|atmosphere/.test(t)) boost.push("ambiance");
   if (/delicious|tasty|amazing food|great food|best food|incredible food/.test(t)) boost.push("food");
+  // `experience` is the non-food counterpart of `food` — see dimensionsFor().
+  if (/worth (a )?(visit|seeing)|amazing to see|great day out|must see|must visit/.test(t)) boost.push("experience");
   if (/great service|good service|attentive|friendly staff/.test(t)) boost.push("service");
   if (/value for money|worth it|good value|great value|bang for buck/.test(t)) boost.push("value");
   if (boost.length) q.boostRatings = boost;

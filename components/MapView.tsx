@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Place } from "@/lib/types";
 import { displayState } from "@/lib/types";
 import { DEFAULT_VIEW } from "@/lib/seed";
+import { noteGpsFix, noteMapCenter } from "@/lib/bias";
 import Pin, { type PinVariant } from "./Pin";
 import PlaceGlyph from "./PlaceGlyph";
 
@@ -44,6 +45,7 @@ export default function MapView({
 }) {
   const mapRef = useRef<MapRef | null>(null);
   const [band, setBand] = useState<PinVariant>(() => bandFor(DEFAULT_VIEW.zoom));
+  const [ready, setReady] = useState(false);
 
   // Live "you are here": watch the GPS fix and drop the avatar marker at it.
   // Transient — the location is used to show where I am, never stored as a
@@ -52,12 +54,44 @@ export default function MapView({
   useEffect(() => {
     if (typeof navigator === "undefined" || !("geolocation" in navigator)) return;
     const id = navigator.geolocation.watchPosition(
-      (pos) => setMe({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-      () => setMe(null),
+      (pos) => {
+        const c = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setMe(c);
+        noteGpsFix(c); // doubles as the search bias — see lib/bias.ts
+      },
+      () => {
+        setMe(null);
+        noteGpsFix(null);
+      },
       { enableHighAccuracy: true, maximumAge: 15_000, timeout: 20_000 }
     );
     return () => navigator.geolocation.clearWatch(id);
   }, []);
+
+  // Open on YOUR places, not on a city. The initial view was a hard-coded
+  // Bengaluru centre, so a library in Jaipur opened 2,000km from its own pins.
+  // Fit their bounds once, the first time a non-empty set arrives (records
+  // hydrate from localStorage after mount). DEFAULT_VIEW survives only as the
+  // empty-library fallback.
+  const fitted = useRef(false);
+  useEffect(() => {
+    if (fitted.current || !ready || !places.length) return;
+    const map = mapRef.current?.getMap();
+    if (!map) return;
+    fitted.current = true;
+    const lngs = places.map((p) => p.lng);
+    const lats = places.map((p) => p.lat);
+    map.fitBounds(
+      [
+        [Math.min(...lngs), Math.min(...lats)],
+        [Math.max(...lngs), Math.max(...lats)],
+      ],
+      // Bottom padding clears the docked controls; maxZoom stops a single pin
+      // (or a tight cluster) from slamming the camera into the pavement.
+      { padding: { top: 96, bottom: 240, left: 48, right: 48 }, maxZoom: 14, duration: 0 }
+    );
+    setBand(bandFor(map.getZoom()));
+  }, [ready, places]);
 
   // Fly to a place when it becomes selected (pin tap or search pick). Bottom
   // padding keeps the pin above the docked sheet.
@@ -80,6 +114,7 @@ export default function MapView({
   const onLoad = useCallback(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
+    setReady(true);
 
     const ink = "#55565a"; // neutral gray ink labels
     const halo = "rgba(247,247,245,0.95)";
@@ -128,6 +163,7 @@ export default function MapView({
         const b = bandFor(e.viewState.zoom);
         setBand((prev) => (prev === b ? prev : b)); // no re-render unless the band flips
       }}
+      onMoveEnd={(e) => noteMapCenter({ lat: e.viewState.latitude, lng: e.viewState.longitude })}
       onClick={() => onSelect(null)}
       style={{ position: "absolute", inset: 0 }}
     >

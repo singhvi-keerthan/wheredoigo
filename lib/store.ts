@@ -4,6 +4,7 @@ import { useSyncExternalStore } from "react";
 import type { Photo, Place, Tag, TagNamespace, Visit } from "./types";
 import { SEED_PLACES } from "./seed";
 import { idbAvailable, idbDeletePhoto, idbGetAllPhotos, idbPutPhoto } from "./photoStore";
+import { mergeTags, tagsFromGoogleTypes } from "./googleTags";
 import "./migrate"; // one-time imhungry.* → wheredoigokeerthan.* key copy — must eval before any read
 
 // ---------------------------------------------------------------------------
@@ -87,6 +88,38 @@ function read(): Place[] {
   return cache;
 }
 
+// One-time repair for places captured before the `type` vocabulary covered
+// anything but food — the reason a saved fort or lake shows a generic pin and
+// appears under no Browse group. Re-derives from the `googleTypes` ALREADY on
+// the record, so it costs no API call.
+//
+// Deliberately a repair and not a migration. Every condition below narrows it:
+//   · only records that have googleTypes to derive from
+//   · only records carrying no `type` tag at all — a typed place is never read
+//     past this line, so nothing you set by hand can be overwritten
+//   · only `type` tags are added (cuisine/staple stay where they were)
+//   · only records that actually gain a tag are rewritten, so only those get a
+//     fresh updatedAt and only those are dirtied for sync
+// Mass-stamping updatedAt across the library would beat newer remote records in
+// the last-write-wins merge in applyRemotePlaces() — that is the failure this
+// shape exists to avoid.
+export function rederiveTypeTags(places: Place[]): { places: Place[]; changedIds: string[] } {
+  const changedIds: string[] = [];
+  const ts = new Date().toISOString();
+  const next = places.map((p) => {
+    if (!p.googleTypes?.length) return p;
+    if (p.tags.some((t) => t.namespace === "type")) return p;
+    const derived = tagsFromGoogleTypes(p.googleTypes).filter((t) => t.namespace === "type");
+    if (!derived.length) return p;
+    const merged = mergeTags(p.tags, derived);
+    if (merged.length === p.tags.length) return p;
+    changedIds.push(p.id);
+    return { ...p, tags: merged, updatedAt: ts };
+  });
+  // Same array reference back when nothing changed — no commit, no dirty records.
+  return changedIds.length ? { places: next, changedIds } : { places, changedIds };
+}
+
 // Async boot: hydrate photo dataUrls from IndexedDB, migrate any photos still
 // embedded in localStorage into IDB, then persist the slimmed record set.
 // Deferred out of read() so the sync render path never mutates storage.
@@ -95,6 +128,13 @@ function scheduleInit(persistNeeded: boolean) {
   initStarted = true;
   setTimeout(async () => {
     let changed = persistNeeded;
+
+    // Repair untyped places before anything else reads the cache. commit()
+    // diffs by reference, so exactly the rewritten records are announced to the
+    // sync engine as dirty.
+    const repaired = rederiveTypeTags(cache ?? []);
+    if (repaired.changedIds.length) commit(repaired.places);
+
     if (idbAvailable()) {
       try {
         const stored = await idbGetAllPhotos();

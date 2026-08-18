@@ -16,8 +16,10 @@ import {
 } from "@/lib/store";
 import {
   TAG_OPTIONS,
-  RATING_DIMENSIONS,
   RATING_LABELS,
+  dimensionsFor,
+  namespacesFor,
+  isFoodPlace,
   type TagNamespace,
   type Tag,
   type RatingDimension,
@@ -44,6 +46,18 @@ const PROMPTS: Record<string, { title: string; sub?: string }> = {
   tags: { title: "Tweak the tags?", sub: "Now that you've actually been." },
   photo: { title: "Add photos", sub: "Optional — shots from the visit. Pick as many as you like." },
   verdict: { title: "So — what's the verdict?", sub: "Optional. Tuck it into Favorites, or skip it for good." },
+};
+
+// The questions that read wrong anywhere you don't eat. Everything not listed
+// here is asked the same way at a fort as at a restaurant — "when did you go"
+// and "who were you with" don't care what kind of place it is.
+const NON_FOOD_PROMPTS: Record<string, { title: string; sub?: string }> = {
+  notes: { title: "Anything to remember?", sub: "What stood out, what you'd tell someone going." },
+};
+
+const NOTES_PLACEHOLDER = {
+  food: "What you ate, how it was, what to order again…",
+  other: "What it was like, what to do differently next time…",
 };
 
 export default function PlaceWizard({
@@ -155,7 +169,10 @@ export default function PlaceWizard({
   const tagOn = (ns: TagNamespace, value: string) =>
     draftTags.some((t) => t.namespace === ns && t.value === value);
 
-  const prompt = PROMPTS[key];
+  // Everything type-dependent hangs off the live draft, so correcting the type
+  // on the "tags" step and stepping back re-asks the right questions.
+  const food = isFoodPlace(draftTags);
+  const prompt = (!food && NON_FOOD_PROMPTS[key]) || PROMPTS[key];
   const pct = ((step + 1) / steps.length) * 100;
 
   return (
@@ -214,7 +231,7 @@ export default function PlaceWizard({
           <div className="mt-5 pb-4">
             {key === "tags" && (
               <div className="flex flex-col gap-4">
-                {(Object.keys(TAG_OPTIONS) as TagNamespace[]).map((ns) => (
+                {namespacesFor(draftTags).map((ns) => (
                   <div key={ns}>
                     <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.07em]" style={{ color: "var(--text-tertiary)" }}>
                       {ns}
@@ -256,7 +273,7 @@ export default function PlaceWizard({
                     Break it down · only you see these
                   </p>
                   <div className="flex flex-col gap-3">
-                    {RATING_DIMENSIONS.map((dim) => (
+                    {dimensionsFor(draftTags).map((dim) => (
                       <div key={dim} className="flex items-center justify-between">
                         <span className="text-[14px]" style={{ color: "var(--text-secondary)" }}>
                           {RATING_LABELS[dim]}
@@ -295,7 +312,7 @@ export default function PlaceWizard({
                 autoFocus
                 value={vNotes}
                 onChange={(e) => setVNotes(e.target.value)}
-                placeholder="What you ate, how it was, what to order again…"
+                placeholder={food ? NOTES_PLACEHOLDER.food : NOTES_PLACEHOLDER.other}
                 rows={5}
                 className="w-full resize-none bg-transparent text-[16px] leading-relaxed outline-none"
                 style={{ color: "var(--text-primary)" }}

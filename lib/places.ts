@@ -3,13 +3,11 @@
 import type { GooglePlace } from "./google";
 import { isAreaResult } from "./geo";
 import { addPhoto, updatePlace, getPlace } from "./store";
-import { DEFAULT_VIEW } from "./seed";
+import { searchBias } from "./bias";
 
 // Thin client wrappers around the server route handlers. Keep the response
 // types aligned with GooglePlace so the UI maps once.
 export type { GooglePlace };
-
-const CITY = { lat: DEFAULT_VIEW.latitude, lng: DEFAULT_VIEW.longitude };
 
 export async function searchPlaces(
   query: string,
@@ -45,11 +43,11 @@ export async function getPlaceDetails(
 }
 
 // Geocode a neighbourhood name to a centroid (first area-typed text-search
-// result, biased to the home city). null when the name isn't an area.
+// result, biased to where you are). null when the name isn't an area.
 export async function geocodeArea(
   name: string
 ): Promise<{ name: string; lat: number; lng: number } | null> {
-  const { results } = await searchPlaces(name, CITY);
+  const { results } = await searchPlaces(name, searchBias());
   const hit = results.find((r) => isAreaResult(r.googleTypes));
   return hit ? { name: hit.name, lat: hit.lat, lng: hit.lng } : null;
 }
@@ -109,6 +107,7 @@ export async function enrichPlaceFromGoogle(placeId: string, googlePlaceId: stri
     openingPeriods: g.openingPeriods,
     hoursText: g.hoursText,
     ...(g.area ? { area: g.area } : {}),
+    ...(g.city ? { city: g.city } : {}),
     ...(g.summary ? { summary: g.summary } : {}),
     enrichedAt: new Date().toISOString(),
   });

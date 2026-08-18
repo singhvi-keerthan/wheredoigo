@@ -8,7 +8,7 @@ import { displayState, TAG_OPTIONS, type Place } from "@/lib/types";
 import { stateMeta } from "@/lib/format";
 import { searchPlaces } from "@/lib/places";
 import { distanceKm, isAreaResult } from "@/lib/geo";
-import { DEFAULT_VIEW } from "@/lib/seed";
+import { searchBias } from "@/lib/bias";
 import { useSheetDrag } from "./useSheetDrag";
 
 // Search across the places you've ALREADY saved — nothing else. Adding lives on
@@ -16,7 +16,6 @@ import { useSheetDrag } from "./useSheetDrag";
 //   • text  → substring match on name / tags / area ("pizza", "date", "toit").
 //   • area  → if the query geocodes to a neighbourhood ("jayanagar"), switch to
 //             a radius view: saved places within ~2.5km, nearest first.
-const CITY = { lat: DEFAULT_VIEW.latitude, lng: DEFAULT_VIEW.longitude };
 const RADIUS_KM = 2.5;
 const ALL_TAG_VALUES = Object.values(TAG_OPTIONS).flat();
 
@@ -67,7 +66,7 @@ export default function CommandPalette({
     const t = setTimeout(async () => {
       if (!active) return;
       setGeoLoading(true);
-      const { results } = await searchPlaces(trimmed, CITY, ctrl.signal);
+      const { results } = await searchPlaces(trimmed, searchBias(), ctrl.signal);
       if (!active || ctrl.signal.aborted) return;
       // Scan for the first neighbourhood-typed result — Google often ranks a POI
       // (e.g. "Jayanagar Metro Station") above the locality itself.

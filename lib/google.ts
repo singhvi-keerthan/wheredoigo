@@ -16,6 +16,7 @@ export interface GooglePlace {
   name: string;
   address: string;
   area: string; // neighbourhood / locality, from addressComponents ("Jayanagar")
+  city: string; // the city itself, from addressComponents ("Bengaluru", "Jaipur")
   lat: number;
   lng: number;
   googleRating: number | null;
@@ -44,10 +45,16 @@ export const FIELD_MASK_SEARCH =
 // as the neighbourhood; better to leave area blank than mislabel it.
 const AREA_COMPONENT_TYPES = ["sublocality_level_1", "sublocality", "neighborhood"];
 
+// The city, kept SEPARATE from `area` on purpose. `locality` is deliberately
+// absent from the list above — as a neighbourhood label it would say
+// "Bengaluru", which is useless. As a city label it is exactly right, and it is
+// what lets the app stop claiming every pin is in one city.
+const CITY_COMPONENT_TYPES = ["locality", "postal_town", "administrative_area_level_2"];
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
-function pickArea(components: any[]): string {
+function pickComponent(components: any[], wanted: string[]): string {
   if (!Array.isArray(components)) return "";
-  for (const t of AREA_COMPONENT_TYPES) {
+  for (const t of wanted) {
     const c = components.find((comp) => comp?.types?.includes(t));
     const label = c?.longText ?? c?.shortText;
     if (label) return label; // skip to the next type if this component has no text
@@ -60,7 +67,8 @@ export function mapGooglePlace(p: any): GooglePlace {
     placeId: p.id,
     name: p.displayName?.text ?? "",
     address: p.formattedAddress ?? "",
-    area: pickArea(p.addressComponents),
+    area: pickComponent(p.addressComponents, AREA_COMPONENT_TYPES),
+    city: pickComponent(p.addressComponents, CITY_COMPONENT_TYPES),
     lat: p.location?.latitude ?? 0,
     lng: p.location?.longitude ?? 0,
     googleRating: typeof p.rating === "number" ? p.rating : null,

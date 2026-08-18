@@ -12,6 +12,10 @@ import {
   Sandwich,
   Pizza,
   Soup,
+  Castle,
+  Trees,
+  Drama,
+  ShoppingBag,
   MapPin,
   type LucideIcon,
 } from "lucide-react";
@@ -25,11 +29,15 @@ const TYPE_ICON: Record<string, LucideIcon> = {
   restaurant: Utensils,
   café: Coffee,
   bar: Martini,
-  museum: Landmark,
-  activity: Ticket,
-  viewpoint: Mountain,
   dessert: IceCreamCone,
   "street-food": Sandwich,
+  museum: Landmark,
+  landmark: Castle,
+  viewpoint: Mountain,
+  "park-garden": Trees,
+  activity: Ticket,
+  theatre: Drama,
+  shopping: ShoppingBag,
 };
 
 const CUISINE_ICON: Record<string, LucideIcon> = {

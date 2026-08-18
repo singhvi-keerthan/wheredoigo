@@ -207,5 +207,6 @@ export const SEED_PLACES: Place[] = [
   },
 ];
 
-// Map starts centered on the cluster of seeds (central Bengaluru).
+// Fallback view for an EMPTY library only. Once you have places the map fits
+// their bounds instead (MapView), so this is no longer "the city the app is in".
 export const DEFAULT_VIEW = { longitude: 77.61, latitude: 12.972, zoom: 12.2 };

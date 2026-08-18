@@ -25,16 +25,25 @@ export interface Tag {
 }
 
 // Sub-rating dimensions captured on a visit. The overall rating (place.myRating)
-// is the ONLY one shown in the UI; these four are private signal the assistant
+// is the ONLY one shown in the UI; the rest are private signal the assistant
 // mines to answer quality-specific asks ("great ambiance", "good value").
-export type RatingDimension = "food" | "ambiance" | "service" | "value";
-export const RATING_DIMENSIONS: RatingDimension[] = ["food", "ambiance", "service", "value"];
+export type RatingDimension = "food" | "experience" | "ambiance" | "service" | "value";
+export const RATING_DIMENSIONS: RatingDimension[] = ["food", "experience", "ambiance", "service", "value"];
 export const RATING_LABELS: Record<RatingDimension, string> = {
   food: "Food",
+  experience: "Experience", // the non-food counterpart to `food` (see dimensionsFor)
   ambiance: "Ambiance",
   service: "Service",
   value: "Value", // value-for-money: 5 = great value, not "expensive"
 };
+
+// No place is asked every dimension. `food` only means something where you eat
+// or drink; `experience` is its counterpart everywhere else — a museum has no
+// food score, and inventing one would poison the assistant's "great food" ask.
+// Both live in the union permanently: a place rated before the split keeps its
+// `food` value untouched, so nothing migrates.
+export const FOOD_DIMENSIONS: RatingDimension[] = ["food", "ambiance", "service", "value"];
+export const NON_FOOD_DIMENSIONS: RatingDimension[] = ["experience", "ambiance", "service", "value"];
 
 export interface Visit {
   id: string;
@@ -68,6 +77,12 @@ export interface Place {
   name: string;
   address: string;
   area?: string; // neighbourhood / locality ("Jayanagar") — from Google, powers area search
+  // City ("Bengaluru", "Jaipur") — written only by the Google path (save +
+  // enrich), where addressComponents names it authoritatively. Absent on older
+  // records and on Swiggy/manual saves; read via cityOf() in lib/city.ts, which
+  // falls back to parsing `address`. Deliberately NOT backfilled by a migration:
+  // mass-stamping updatedAt would beat newer remote records in the sync merge.
+  city?: string;
   lat: number;
   lng: number;
   status: PlaceStatus;
@@ -108,15 +123,24 @@ export interface Place {
 
 // The subjective tag namespaces a user hand-picks (type/cuisine come from Google).
 export const TAG_OPTIONS: Record<TagNamespace, string[]> = {
+  // Where you can go — NOT only where you can eat. Ordered food-first, then the
+  // rest of a night/day out. Kept deliberately narrow: every value here becomes
+  // a Browse group and a Decide filter chip, so a long tail of near-synonyms
+  // makes both worse. (`outdoor` is intentionally absent — it already exists as
+  // a vibe, and the near-duplicate confused both the parser and the model.)
   type: [
     "restaurant",
     "café",
     "bar",
-    "museum",
-    "activity",
-    "viewpoint",
     "dessert",
     "street-food",
+    "museum",
+    "landmark",
+    "viewpoint",
+    "park-garden",
+    "activity",
+    "theatre",
+    "shopping",
   ],
   cuisine: [
     "italian",
@@ -178,6 +202,36 @@ export const NAMESPACE_LABELS: Record<TagNamespace, string> = {
   vibe: "Vibe",
   practical: "Practical",
 };
+
+// The types where you actually eat or drink. Drives which questions the visit
+// form asks and which tag namespaces it offers.
+export const FOOD_TYPES = new Set(["restaurant", "café", "bar", "dessert", "street-food"]);
+
+// Namespaces that only make sense somewhere you eat — a viewpoint has no
+// cuisine and no staple dish.
+export const FOOD_NAMESPACES = new Set<TagNamespace>(["cuisine", "staple"]);
+
+// Is this somewhere you eat or drink? `some` rather than "the first type" on
+// purpose: a museum with a café attached legitimately answers yes, and the
+// forgiving direction keeps the food questions on anything ambiguous. An
+// untyped place also answers yes — the library predates this vocabulary and was
+// overwhelmingly restaurants, so old places keep asking what they always asked.
+export function isFoodPlace(tags: Tag[]): boolean {
+  const types = tags.filter((t) => t.namespace === "type");
+  if (!types.length) return true;
+  return types.some((t) => FOOD_TYPES.has(t.value));
+}
+
+// The sub-rating dimensions this place should be asked about.
+export function dimensionsFor(tags: Tag[]): RatingDimension[] {
+  return isFoodPlace(tags) ? FOOD_DIMENSIONS : NON_FOOD_DIMENSIONS;
+}
+
+// The tag namespaces this place should be offered, in display order.
+export function namespacesFor(tags: Tag[]): TagNamespace[] {
+  const all = Object.keys(TAG_OPTIONS) as TagNamespace[];
+  return isFoodPlace(tags) ? all : all.filter((ns) => !FOOD_NAMESPACES.has(ns));
+}
 
 // Colors must mirror the --s-* CSS vars (these are used in non-CSS contexts).
 export const DISPLAY_STATE_META: Record<

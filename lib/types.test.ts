@@ -1,5 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { isOpenNow, openStatus, displayState, type OpeningPeriod } from "./types";
+import {
+  isOpenNow,
+  openStatus,
+  displayState,
+  isFoodPlace,
+  dimensionsFor,
+  namespacesFor,
+  type OpeningPeriod,
+  type Tag,
+} from "./types";
 
 // 2026-06-27 is a Saturday, 2026-06-28 a Sunday.
 const at = (iso: string) => new Date(iso);
@@ -82,5 +91,40 @@ describe("displayState", () => {
     expect(displayState({ status: "visited", favorite: true, neverAgain: false })).toBe("favorite");
     expect(displayState({ status: "visited", favorite: false, neverAgain: false })).toBe("visited");
     expect(displayState({ status: "watchlist", favorite: false, neverAgain: false })).toBe("watchlist");
+  });
+});
+
+
+// Which questions a place gets asked. The visit form reads all three of these,
+// so a regression here silently asks a museum how the food was.
+describe("food vs non-food places", () => {
+  const t = (namespace: Tag["namespace"], value: string): Tag => ({ namespace, value });
+
+  it("treats an untyped place as food — the library predates the wider vocabulary", () => {
+    expect(isFoodPlace([])).toBe(true);
+    expect(isFoodPlace([t("vibe", "cozy")])).toBe(true);
+  });
+
+  it("keeps every food question on a food place", () => {
+    const cafe = [t("type", "café")];
+    expect(isFoodPlace(cafe)).toBe(true);
+    expect(dimensionsFor(cafe)).toEqual(["food", "ambiance", "service", "value"]);
+    expect(namespacesFor(cafe)).toContain("cuisine");
+    expect(namespacesFor(cafe)).toContain("staple");
+  });
+
+  it("swaps food for experience and drops cuisine/staple elsewhere", () => {
+    const museum = [t("type", "museum")];
+    expect(isFoodPlace(museum)).toBe(false);
+    expect(dimensionsFor(museum)).toEqual(["experience", "ambiance", "service", "value"]);
+    expect(namespacesFor(museum)).not.toContain("cuisine");
+    expect(namespacesFor(museum)).not.toContain("staple");
+    expect(namespacesFor(museum)).toEqual(["type", "occasion", "vibe", "practical"]);
+  });
+
+  it("answers yes when a place is both — a museum with a café still has food", () => {
+    const both = [t("type", "museum"), t("type", "café")];
+    expect(isFoodPlace(both)).toBe(true);
+    expect(dimensionsFor(both)).toContain("food");
   });
 });

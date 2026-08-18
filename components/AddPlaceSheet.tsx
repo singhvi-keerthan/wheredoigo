@@ -22,8 +22,8 @@ import { parseLocation, isUrl } from "@/lib/capture";
 import { searchPlaces, nearbyPlaces, resolveMapsLink, enrichPlaceFromGoogle, type GooglePlace } from "@/lib/places";
 import { tagsFromGoogleTypes } from "@/lib/googleTags";
 import { priceSigns } from "@/lib/format";
-import type { CaptureSource } from "@/lib/types";
-import { DEFAULT_VIEW } from "@/lib/seed";
+import { TAG_OPTIONS, type CaptureSource, type Tag } from "@/lib/types";
+import { searchBias } from "@/lib/bias";
 import { useSheetDrag } from "./useSheetDrag";
 
 // The + surface = ADDING a place, not searching what's already logged (that's
@@ -34,16 +34,25 @@ import { useSheetDrag } from "./useSheetDrag";
 // you can drop an optional one-line note.
 type Mode = "menu" | "search" | "link" | "nearby" | "confirm";
 
-// A picked-but-not-yet-saved place. `commit(notes, reelUrl)` creates it and
-// returns its id; `backTo` is the route to return to if you back out of confirm.
-type Pending = { name: string; sub?: string; backTo: Mode; commit: (notes: string, reelUrl?: string) => string };
+// A picked-but-not-yet-saved place. `commit()` creates it and returns its id;
+// `backTo` is the route to return to if you back out of confirm. `baseTags` is
+// whatever Google implied MINUS the type — the type is picked on the confirm
+// screen, so it is passed back in separately rather than baked in here.
+type Pending = {
+  name: string;
+  sub?: string;
+  backTo: Mode;
+  baseTags: Tag[];
+  seedTypes: string[]; // Google's guess at the type, pre-selected but editable
+  commit: (notes: string, reelUrl: string | undefined, types: string[]) => string;
+};
 
 const TITLES: Record<Mode, string> = {
   menu: "Add a place",
   search: "Search by name",
   link: "Paste a link",
   nearby: "Pin where I am",
-  confirm: "Add a note",
+  confirm: "A few details",
 };
 
 export default function AddPlaceSheet({
@@ -76,6 +85,10 @@ export default function AddPlaceSheet({
   const [pending, setPending] = useState<Pending | null>(null);
   const [note, setNote] = useState("");
   const [reel, setReel] = useState(""); // optional Instagram reel link, taken on confirm
+  // What kind of place this is. Seeded from Google's types where it knows, but
+  // always editable and always offered — this app maps viewpoints and museums,
+  // not only somewhere to eat, and Google is silent on plenty of them.
+  const [types, setTypes] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const { sheetRef, handleProps } = useSheetDrag(onClose);
 
@@ -88,7 +101,7 @@ export default function AddPlaceSheet({
   const query = q.trim();
   const showResults = mode === "search" && query.length >= 2;
 
-  // Live Google text search (debounced), biased to the home city. Only "new"
+  // Live Google text search (debounced), biased to where you are. Only "new"
   // places here — no local list, so the + never re-surfaces what you've logged.
   // All state writes happen inside the deferred callback; the render gates on
   // `showResults` so stale results never show once the query drops below 2.
@@ -99,11 +112,7 @@ export default function AddPlaceSheet({
     const t = setTimeout(async () => {
       if (!active) return;
       setGLoading(true);
-      const { results } = await searchPlaces(
-        query,
-        { lat: DEFAULT_VIEW.latitude, lng: DEFAULT_VIEW.longitude },
-        ctrl.signal
-      );
+      const { results } = await searchPlaces(query, searchBias(), ctrl.signal);
       if (active && !ctrl.signal.aborted) {
         setGResults(results);
         setGLoading(false);
@@ -133,10 +142,8 @@ export default function AddPlaceSheet({
       const coords = r.lat != null && r.lng != null ? { lat: r.lat, lng: r.lng } : null;
       let results: GooglePlace[] = [];
       if (r.name) {
-        ({ results } = await searchPlaces(
-          r.name,
-          coords ?? { lat: DEFAULT_VIEW.latitude, lng: DEFAULT_VIEW.longitude }
-        ));
+        // The link's own coordinates beat everything when it carried any.
+        ({ results } = await searchPlaces(r.name, coords ?? searchBias()));
         if (!active) return;
       }
       setResolved({ q: linkTrimmed, results, coords });
@@ -160,18 +167,26 @@ export default function AddPlaceSheet({
     onClose();
   };
 
-  // Move to the confirm screen (optional note), unless it's already saved.
-  const toConfirm = (name: string, sub: string | undefined, backTo: Mode, commit: (notes: string, reelUrl?: string) => string) => {
+  // Move to the confirm screen (type + optional note), unless it's already saved.
+  const toConfirm = (
+    name: string,
+    sub: string | undefined,
+    backTo: Mode,
+    baseTags: Tag[],
+    seedTypes: string[],
+    commit: (notes: string, reelUrl: string | undefined, chosen: string[]) => string
+  ) => {
     setNote("");
     setReel("");
-    setPending({ name, sub, backTo, commit });
+    setTypes(seedTypes);
+    setPending({ name, sub, backTo, baseTags, seedTypes, commit });
     setMode("confirm");
   };
 
   const addAt = (lat: number, lng: number, name: string, source: CaptureSource, backTo: Mode) => {
     const dup = findDuplicate({ name, lat, lng });
     if (dup) return finish(dup.id, { duplicate: true });
-    toConfirm(name, undefined, backTo, (notes, reelUrl) =>
+    toConfirm(name, undefined, backTo, [], [], (notes, reelUrl, chosen) =>
       addPlace({
         googlePlaceId: null,
         name,
@@ -185,7 +200,7 @@ export default function AddPlaceSheet({
         googlePriceLevel: null,
         notes,
         reelUrl,
-        tags: [],
+        tags: chosen.map((value) => ({ namespace: "type" as const, value })),
         source,
         enrichedAt: null,
       }).id
@@ -197,12 +212,18 @@ export default function AddPlaceSheet({
   const addGoogle = (r: GooglePlace, backTo: Mode) => {
     const dup = findDuplicate({ googlePlaceId: r.placeId, name: r.name, lat: r.lat, lng: r.lng });
     if (dup) return finish(dup.id, { duplicate: true });
-    toConfirm(r.name, r.area || r.address || undefined, backTo, (notes, reelUrl) => {
+    // Google's guess splits two ways: the type seeds the chips (editable), and
+    // everything else it inferred (cuisine, staple…) rides along untouched.
+    const derived = tagsFromGoogleTypes(r.googleTypes);
+    const seedTypes = derived.filter((t) => t.namespace === "type").map((t) => t.value);
+    const baseTags = derived.filter((t) => t.namespace !== "type");
+    toConfirm(r.name, r.area || r.address || undefined, backTo, baseTags, seedTypes, (notes, reelUrl, chosen) => {
       const place = addPlace({
         googlePlaceId: r.placeId,
         name: r.name,
         address: r.address,
         area: r.area,
+        city: r.city,
         lat: r.lat,
         lng: r.lng,
         status: "watchlist",
@@ -212,8 +233,9 @@ export default function AddPlaceSheet({
         googlePriceLevel: r.googlePriceLevel,
         notes,
         reelUrl,
-        // Auto-derived from Google's types so it's searchable immediately.
-        tags: tagsFromGoogleTypes(r.googleTypes),
+        // What you picked on the confirm screen, plus the rest of what Google
+        // implied — searchable immediately either way.
+        tags: [...chosen.map((value) => ({ namespace: "type" as const, value })), ...baseTags],
         googleTypes: r.googleTypes,
         openingPeriods: r.openingPeriods,
         hoursText: r.hoursText,
@@ -228,7 +250,7 @@ export default function AddPlaceSheet({
   };
 
   const saveConfirm = (beenAlready = false) => {
-    if (pending) finish(pending.commit(note.trim(), reel.trim() || undefined), { beenAlready });
+    if (pending) finish(pending.commit(note.trim(), reel.trim() || undefined, types), { beenAlready });
   };
 
   // "Pin where I am": reverse-match the GPS fix to the real places around it.
@@ -353,7 +375,7 @@ export default function AddPlaceSheet({
                   ref={inputRef}
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
-                  placeholder="e.g. Blue Tokai, Koramangala"
+                  placeholder="e.g. Nandi Hills, or Blue Tokai"
                   className="min-w-0 flex-1 bg-transparent py-3.5 text-[14.5px] outline-none"
                   style={{ color: "var(--text-primary)" }}
                 />
@@ -493,12 +515,49 @@ export default function AddPlaceSheet({
                 )}
               </div>
 
-              {/* optional one-liner — the assistant reads this */}
+              {/* What kind of place. Asked every time rather than inferred and
+                  hidden: this map is for viewpoints and museums as much as for
+                  dinner, and Google has no type at all for plenty of them.
+                  Pre-selected where Google was confident, always editable. */}
+              <div className="mb-3">
+                <p
+                  className="mb-2 px-1 text-[11.5px] font-semibold uppercase tracking-[0.07em]"
+                  style={{ color: "var(--text-tertiary)" }}
+                >
+                  What kind of place?
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {TAG_OPTIONS.type.map((v) => {
+                    const on = types.includes(v);
+                    return (
+                      <button
+                        key={v}
+                        onClick={() =>
+                          setTypes((prev) => (on ? prev.filter((x) => x !== v) : [...prev, v]))
+                        }
+                        className="press inline-flex items-center gap-1 px-3 py-1.5 text-[13px] font-medium transition-colors"
+                        style={{
+                          borderRadius: "var(--radius-chip)",
+                          background: on ? "oklch(0.97 0 0)" : "var(--bg-elevated)",
+                          color: on ? "oklch(0.16 0.006 260)" : "var(--text-secondary)",
+                          border: `1px solid ${on ? "oklch(0.97 0 0)" : "var(--border)"}`,
+                        }}
+                      >
+                        {on && <Check size={11} strokeWidth={3} />}
+                        {v}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* optional one-liner — the assistant reads this. No autoFocus:
+                  the type chips sit above it, and a keyboard opening on arrival
+                  would cover the question you're meant to answer first. */}
               <textarea
-                autoFocus
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
-                placeholder="Optional note — “saw on insta, the pizza looked unreal”"
+                placeholder="Optional note — “saw on insta, the courtyard looked unreal”"
                 rows={3}
                 className="w-full resize-none px-3.5 py-3 text-[15px] leading-relaxed outline-none"
                 style={{
@@ -509,7 +568,7 @@ export default function AddPlaceSheet({
                 }}
               />
               <p className="mt-1.5 px-1 text-[11.5px]" style={{ color: "var(--text-tertiary)" }}>
-                Why you saved it — searchable later, so “pizza” finds this place.
+                Why you saved it — searchable later, so “rooftop” finds this place.
               </p>
 
               {/* optional reel link — most saves start on a reel; this is the

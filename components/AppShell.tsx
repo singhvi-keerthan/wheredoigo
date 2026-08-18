@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { Search, Plus, Menu, MapPin, TriangleAlert, X } from "lucide-react";
 import { usePlaces, usePersistError } from "@/lib/store";
 import { displayState, type DisplayState } from "@/lib/types";
+import { cityLabel } from "@/lib/city";
 import MapView from "./MapView";
 import PlaceCard from "./PlaceCard";
 import PlaceDetail from "./PlaceDetail";
@@ -57,6 +58,8 @@ const MASCOT_TIP_KEY = "wheredoigokeerthan.mascotTipSeen.v1";
 export default function AppShell() {
   const places = usePlaces();
   const persistError = usePersistError();
+  // "Bengaluru", "Bengaluru & Jaipur", or "4 cities" — see lib/city.ts.
+  const where = useMemo(() => cityLabel(places), [places]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterKey>("all");
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -182,11 +185,14 @@ export default function AppShell() {
             <Menu size={17} style={{ color: "oklch(0.9 0 0)" }} />
           </button>
         </div>
+        {/* Count + where those places actually are. The city was hard-coded to
+            Bengaluru, which quietly lied the moment a pin landed anywhere else;
+            it is derived now, and says nothing at all rather than guess. */}
         <p className="mt-1.5 text-[11px]" style={{ color: "#5b6470" }}>
           <span style={{ fontFamily: "var(--font-mono)", color: "#16181d", fontWeight: 500 }}>
             {places.length}
           </span>{" "}
-          places · Bengaluru
+          places{where && ` · ${where}`}
         </p>
       </header>
 
