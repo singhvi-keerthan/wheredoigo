@@ -14,11 +14,6 @@ import { coverPhoto, photosSorted, leadRating, leadPrice, stateMeta, hoursPill, 
 import type { DeckCard } from "@/lib/deck";
 import { PoweredBySwiggy } from "./PoweredBySwiggy";
 
-// Height of the coach bar SwipeMode deals in at the start of a run. The card
-// doesn't reserve it as padding any more — the bar is temporary now, so the
-// card's content flows to the bottom and the bar floats over it for its ~2.5s.
-export const FOOTER_SPACE = 124;
-
 // The card's own surface. The photo sits ON it rather than filling it, so this
 // is what you see above/below and between the sections.
 const BODY_BG = "#06070a";
@@ -28,11 +23,15 @@ const BODY_BG = "#06070a";
 // outside that is cropped a little; nothing is ever stretched into a slot.
 // Before this the photo was `height: 100%` of a near-full-screen card — a slot
 // around 1:2, which meant a 3:2 restaurant shot lost two-thirds of its frame
-// and read as blown-up. 4:5 is also the no-photo default, so a card with no
-// image has the same shape as one with.
+// and read as blown-up. 4:5 is what a card holds before its photo has loaded
+// and reported its real shape.
 const PHOTO_MIN = 0.8; // 4:5
 const PHOTO_MAX = 1.5; // 3:2
 const PHOTO_DEFAULT = 0.8;
+// A place with no picture at all gets the short band instead: a half-screen of
+// monogrammed gradient is a void, and the card is better off leading with what
+// it actually knows about the place.
+const PHOTO_NONE = 1.5;
 
 // Where the photo pager's tap zones start — below the floating chrome (the
 // lens chip and the mode switch) and the progress dots.
@@ -333,14 +332,20 @@ export default function SwipeCard({
   style,
   stamp,
   interactive = true,
+  entering = false,
   onOpenDetails,
   onBook,
   wasDrag,
 }: {
   card: DeckCard;
   style?: CSSProperties;
-  stamp?: { label: string; color: string; opacity: number } | null;
+  // `soft` = the stamp was put there by the coach demo, not by a finger, so it
+  // fades in instead of tracking a drag pixel-for-pixel.
+  stamp?: { label: string; color: string; opacity: number; soft?: boolean } | null;
   interactive?: boolean;
+  // This card is arriving with the deal — the photo lands with it (a hair of
+  // zoom coming to rest) instead of just being there.
+  entering?: boolean;
   onOpenDetails: () => void; // saved cards → the full place screen
   onBook: () => void; // new cards → the Swiggy booking flow
   // "the gesture that just ended was a drag" — the pager asks before paging so
@@ -348,8 +353,6 @@ export default function SwipeCard({
   wasDrag?: () => boolean;
 }) {
   const v = cardView(card);
-  // Flips once, not per-pixel: the cue has done its job the moment you move.
-  const [scrolled, setScrolled] = useState(false);
   // Photo pager. Tap-to-page rather than swipe-to-page on purpose: horizontal
   // drag is already spoken for by the card decision, and two horizontal
   // meanings on one surface is exactly the ambiguity the axis lock exists to
@@ -363,6 +366,11 @@ export default function SwipeCard({
   // the same photo instead of drifting apart.
   const at = Math.min(shot, Math.max(0, photos.length - 1));
   const cover = photos[at] ?? v.cover;
+  // The box takes the COVER photo's own aspect (clamped), measured on load.
+  // Deliberately locked to the first photo: paging is a look at the same place,
+  // not a new layout, and a box that resized under the thumb would bounce the
+  // whole card. Later photos cover into the shape the cover established.
+  const [ratio, setRatio] = useState<number | null>(null);
 
   return (
     <div
@@ -379,10 +387,6 @@ export default function SwipeCard({
     >
       <div
         className="scroll-quiet h-full overflow-y-auto"
-        onScroll={(e) => {
-          const past = e.currentTarget.scrollTop > 24;
-          if (past !== scrolled) setScrolled(past);
-        }}
         style={{
           // pan-y: the browser owns vertical scrolling and is guaranteed never
           // to pan horizontally, which is what lets the axis lock take a
@@ -394,9 +398,9 @@ export default function SwipeCard({
           overflowY: interactive ? "auto" : "hidden",
         }}
       >
-        {/* ---- hero: fills the card, so the first screen is the photo ---- */}
-        <div className="relative" style={{ height: "100%" }}>
-          {/* Typographic gradient always renders; the photo lays over it. Swiggy's
+        {/* ---- the photo, at its own size ---- */}
+        <div className="relative w-full" style={{ aspectRatio: String(ratio ?? (cover ? PHOTO_DEFAULT : PHOTO_NONE)) }}>
+          {/* Typographic fallback always renders; the photo lays over it. Swiggy's
               images are remote CDN URLs, so a 404 or a blocked request degrades to
               the initial instead of leaving a blank card. */}
           <div
@@ -413,37 +417,47 @@ export default function SwipeCard({
           {cover && (
             // A real <img>, not a CSS background: Swiggy's photos are remote CDN
             // URLs, and an element gives us an onError to fall back to the initial
-            // when one 404s. draggable=false keeps the native image drag from
-            // hijacking the swipe gesture.
+            // when one 404s — and an onLoad, which is where the box learns what
+            // shape the photo actually is. draggable=false keeps the native image
+            // drag from hijacking the swipe gesture.
             <img
               key={at}
               src={cover}
               alt=""
               aria-hidden
               draggable={false}
-              className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+              className={`pointer-events-none absolute inset-0 h-full w-full object-cover${entering ? " photo-settle" : ""}`}
+              onLoad={(e) => {
+                const img = e.currentTarget;
+                if (!img.naturalWidth || !img.naturalHeight) return;
+                if (at !== 0 && ratio != null) return; // the cover sets the shape
+                const r = img.naturalWidth / img.naturalHeight;
+                setRatio(Math.min(PHOTO_MAX, Math.max(PHOTO_MIN, r)));
+              }}
               onError={(e) => {
                 e.currentTarget.style.display = "none";
               }}
             />
           )}
 
-          {/* Scrim so the info reads over any photo. pointer-events-none is
-              load-bearing, not tidiness: it covers the bottom 60% of the hero,
-              so without it the photo pager underneath is dead everywhere the
-              gradient reaches — which is most of where a thumb lands. */}
+          {/* Top wash — the floating chrome (lens chip, mode switch) sits over
+              this corner of the photo and has to stay legible on a bright one. */}
           <div
-            className="pointer-events-none absolute inset-x-0 bottom-0 h-3/5"
-            style={{ background: "linear-gradient(0deg, rgba(6,7,10,0.92) 8%, rgba(6,7,10,0.55) 45%, transparent)" }}
+            className="pointer-events-none absolute inset-x-0 top-0 h-24"
+            style={{ background: "linear-gradient(180deg, rgba(6,7,10,0.5), rgba(6,7,10,0))" }}
+          />
+          {/* Bottom feather into the card surface, so the photo ends as an edge
+              of the card rather than a hard seam against the info block. */}
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-10"
+            style={{ background: `linear-gradient(0deg, ${BODY_BG}, rgba(6,7,10,0))` }}
           />
 
           {/* Tap zones + segment dots, only once there's more than one image.
-              They cover the upper part of the hero only, so a tap near the name
-              does nothing rather than surprising you. A scroll cancels the
-              click, so paging can't fire mid-flick. */}
+              A scroll cancels the click, so paging can't fire mid-flick. */}
           {interactive && photos.length > 1 && (
             <>
-              <div className="absolute inset-x-0 top-0 flex gap-1.5 px-4 pt-[max(6.75rem,calc(env(safe-area-inset-top)+6rem))]">
+              <div className="absolute inset-x-0 top-0 flex gap-1.5 px-4 pt-14">
                 {photos.map((_, i) => (
                   <span
                     key={i}
@@ -455,12 +469,8 @@ export default function SwipeCard({
                   />
                 ))}
               </div>
-              {/* Left and right HALVES, not thirds, and inset below the mode
-                  chrome. The old zones were a third wide and started at the very
-                  top: the close button sat inside the left one (so the top-left
-                  corner left the mode instead of paging back), the middle third
-                  did nothing at all, and the bottom 40% was inert. A pager you
-                  have to aim at isn't a pager. */}
+              {/* Left and right HALVES, not thirds, and inset below the chrome.
+                  A pager you have to aim at isn't a pager. */}
               <button
                 aria-label="Previous photo"
                 onClick={() => {
@@ -468,8 +478,8 @@ export default function SwipeCard({
                   setShot(Math.max(0, at - 1));
                 }}
                 disabled={at === 0}
-                className="absolute left-0 w-1/2 disabled:pointer-events-none"
-                style={{ top: PAGER_TOP, bottom: FOOTER_SPACE }}
+                className="absolute bottom-0 left-0 w-1/2 disabled:pointer-events-none"
+                style={{ top: PAGER_TOP }}
               />
               <button
                 aria-label="Next photo"
@@ -478,109 +488,89 @@ export default function SwipeCard({
                   setShot(Math.min(photos.length - 1, at + 1));
                 }}
                 disabled={at === photos.length - 1}
-                className="absolute right-0 w-1/2 disabled:pointer-events-none"
-                style={{ top: PAGER_TOP, bottom: FOOTER_SPACE }}
+                className="absolute bottom-0 right-0 w-1/2 disabled:pointer-events-none"
+                style={{ top: PAGER_TOP }}
               />
             </>
           )}
-
-          {/* info */}
-          <div
-            className="pointer-events-none absolute inset-x-0 bottom-0 p-5"
-            style={{ paddingBottom: FOOTER_SPACE }}
-          >
-            <div className="flex items-center gap-1.5">
-              <span className="h-[7px] w-[7px] rounded-[2px]" style={{ background: v.badge.color }} />
-              <span className="text-[11.5px] font-semibold" style={{ color: v.badge.color }}>
-                {v.badge.label}
-              </span>
-              {v.open === true && (
-                <span className="ml-1 text-[11px] font-medium" style={{ color: "var(--s-watchlist)" }}>
-                  · Open now
-                </span>
-              )}
-            </div>
-
-            <h2
-              className="mt-1 text-[34px] leading-[1.02] tracking-[-0.01em]"
-              style={{ fontFamily: "var(--font-serif)", color: "#fff" }}
-            >
-              {v.name}
-            </h2>
-
-            <div
-              className="mt-1.5 flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[12.5px]"
-              style={{ fontFamily: "var(--font-mono)" }}
-            >
-              {v.ratingValue != null && (
-                <span
-                  className="inline-flex items-center gap-1"
-                  style={{ color: v.ratingMine ? "var(--star)" : "rgba(255,255,255,0.85)" }}
-                >
-                  <Star size={11} strokeWidth={0} fill="currentColor" />
-                  {v.ratingValue.toFixed(1)}
-                </span>
-              )}
-              <span style={{ color: "rgba(255,255,255,0.8)" }}>{v.priceLabel}</span>
-              {v.area && (
-                <span className="inline-flex items-center gap-1" style={{ color: "rgba(255,255,255,0.7)" }}>
-                  <MapPin size={10} strokeWidth={2} />
-                  {v.area}
-                </span>
-              )}
-              {v.hours && (
-                <span className="inline-flex items-center gap-1" style={{ color: v.hours.color }}>
-                  <Clock size={10} strokeWidth={2} />
-                  {v.hours.label}
-                </span>
-              )}
-            </div>
-
-            {(v.reasons.length > 0 || v.chips.length > 0) && (
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {(v.reasons.length > 0 ? v.reasons : v.chips.slice(0, 3)).map((r) => (
-                  <span
-                    key={r}
-                    className="px-2 py-[3px] text-[11px] capitalize"
-                    style={{
-                      borderRadius: "var(--radius-chip)",
-                      background: "rgba(255,255,255,0.14)",
-                      color: "rgba(255,255,255,0.92)",
-                    }}
-                  >
-                    {r}
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {/* Cl. 3.4(ii): the notation travels with the Swiggy content, so it
-                is on-screen for every deck card sourced from the MCP — and never
-                on a saved card, which owes Swiggy nothing. */}
-            {card.kind === "new" && <PoweredBySwiggy tone="overlay" className="mt-3" />}
-
-            {/* the only thing that tells you there IS a below-the-fold */}
-            {interactive && (
-              <div
-                className="mt-4 flex items-center gap-1.5 text-[11.5px] font-semibold uppercase tracking-[0.08em]"
-                style={{
-                  color: "rgba(255,255,255,0.55)",
-                  opacity: scrolled ? 0 : 1,
-                  transition: "opacity 0.2s ease",
-                }}
-              >
-                <ChevronsDown size={13} strokeWidth={2.5} className="hint-y" />
-                Scroll for more
-              </div>
-            )}
-          </div>
         </div>
 
-        {/* ---- body: below the fold ---- */}
-        <div
-          className="px-5 pt-7"
-          style={{ paddingBottom: FOOTER_SPACE + 24, background: BODY_BG }}
-        >
+        {/* ---- who this is: on the card, not over the photo ---- */}
+        <div className="px-5 pt-3">
+          <div className="flex items-center gap-1.5">
+            <span className="h-[7px] w-[7px] rounded-[2px]" style={{ background: v.badge.color }} />
+            <span className="text-[11.5px] font-semibold" style={{ color: v.badge.color }}>
+              {v.badge.label}
+            </span>
+            {v.open === true && (
+              <span className="ml-1 text-[11px] font-medium" style={{ color: "var(--s-watchlist)" }}>
+                · Open now
+              </span>
+            )}
+          </div>
+
+          <h2
+            className="mt-1 text-[32px] leading-[1.04] tracking-[-0.01em]"
+            style={{ fontFamily: "var(--font-serif)", color: "#fff" }}
+          >
+            {v.name}
+          </h2>
+
+          <div
+            className="mt-1.5 flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[12.5px]"
+            style={{ fontFamily: "var(--font-mono)" }}
+          >
+            {v.ratingValue != null && (
+              <span
+                className="inline-flex items-center gap-1"
+                style={{ color: v.ratingMine ? "var(--star)" : "rgba(255,255,255,0.85)" }}
+              >
+                <Star size={11} strokeWidth={0} fill="currentColor" />
+                {v.ratingValue.toFixed(1)}
+              </span>
+            )}
+            <span style={{ color: "rgba(255,255,255,0.8)" }}>{v.priceLabel}</span>
+            {v.area && (
+              <span className="inline-flex items-center gap-1" style={{ color: "rgba(255,255,255,0.7)" }}>
+                <MapPin size={10} strokeWidth={2} />
+                {v.area}
+              </span>
+            )}
+            {v.hours && (
+              <span className="inline-flex items-center gap-1" style={{ color: v.hours.color }}>
+                <Clock size={10} strokeWidth={2} />
+                {v.hours.label}
+              </span>
+            )}
+          </div>
+
+          {(v.reasons.length > 0 || v.chips.length > 0) && (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {(v.reasons.length > 0 ? v.reasons : v.chips.slice(0, 3)).map((r) => (
+                <span
+                  key={r}
+                  className="px-2 py-[3px] text-[11px] capitalize"
+                  style={{
+                    borderRadius: "var(--radius-chip)",
+                    background: "rgba(255,255,255,0.14)",
+                    color: "rgba(255,255,255,0.92)",
+                  }}
+                >
+                  {r}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Cl. 3.4(ii): the notation travels with the Swiggy content, so it
+              is on-screen for every deck card sourced from the MCP — and never
+              on a saved card, which owes Swiggy nothing. Kept in the info block
+              (above the fold, clear of the coach bar), not in the body. */}
+          {card.kind === "new" && <PoweredBySwiggy tone="overlay" className="mt-3" />}
+        </div>
+
+        {/* ---- body: the rest of the story ---- */}
+        <div className="px-5 pt-6" style={{ paddingBottom: BODY_TAIL, background: BODY_BG }}>
           {card.kind === "saved" ? (
             <SavedBody place={card.place} onOpenDetails={onOpenDetails} />
           ) : (
@@ -593,10 +583,13 @@ export default function SwipeCard({
           Outside the scroller so it stays put while the card's content moves. */}
       {stamp && stamp.opacity > 0.02 && (
         <div
-          className="pointer-events-none absolute left-1/2 top-12 -translate-x-1/2"
+          className="pointer-events-none absolute left-1/2 top-16 -translate-x-1/2"
           style={{
             opacity: Math.min(1, stamp.opacity),
             transform: `translateX(-50%) rotate(-11deg)`,
+            // A finger-driven stamp must track the finger with no lag; the
+            // coach's demo stamp has no finger behind it, so it fades.
+            transition: stamp.soft ? "opacity 200ms ease" : undefined,
           }}
         >
           <span

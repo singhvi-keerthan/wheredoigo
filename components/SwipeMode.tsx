@@ -13,14 +13,10 @@ import {
 import { searchBias } from "@/lib/bias";
 import { buildDeck, type DeckCard } from "@/lib/deck";
 import { bumpSkip, resetSkip, decSkip, peekSkip, setSkip } from "@/lib/skips";
-import SwipeCard, { FOOTER_SPACE } from "./SwipeCard";
+import SwipeCard from "./SwipeCard";
 import NewCardDetail from "./NewCardDetail";
-import DeckHint from "./DeckHint";
 import { useCardSwipe, DY_DAMP } from "./useCardSwipe";
-import ModeSwitch from "./ModeSwitch";
 import LensPanel, { useLens } from "./LensPanel";
-
-const HINT_KEY = "wheredoigokeerthan.deckHintSeen.v1"; // first-run swipe coach, shown once
 
 const SWIPE_THRESHOLD = 92; // px past which a release commits (horizontal)
 const EXIT_MS = 240;
@@ -29,12 +25,57 @@ const EXIT_MS = 240;
 const FLICK_VELOCITY = 0.55; // px/ms
 const FLICK_MIN = 44; // px — ignore taps / jitter below this travel
 const CARD_INSET = 10; // px of surround, so the next card peeks and it still reads as a card
+const OUT_MS = 190; // the mode's own fade-out, before AppShell unmounts it
+
+// ---- the opening beat -----------------------------------------------------
+// Every run of the deck opens the same way: the cards are dealt, then the two
+// decisions introduce themselves by DOING them — the top card leans left under
+// a Nope stamp, comes back, leans right under the other one. Then the controls
+// retire and the deck is yours. They are a coach, not furniture: a permanent
+// pair of buttons under a gesture-first surface just tells you, every second of
+// every session, that the gesture wasn't obvious. Any touch or key skips the
+// whole thing instantly — the first person who already knows never sits
+// through it twice.
+const DEAL_MS = 700; // cards land (0.52s animation + 120ms of stagger)
+const FAN_MS = 790; // the reveal's beat 6 (0.66s animation + 110ms of stagger)
+const COACH_AT = 640;
+const DEMO_LEFT_IN = 900;
+const DEMO_LEFT_OUT = 1400;
+const DEMO_RIGHT_IN = 1650;
+const DEMO_RIGHT_OUT = 2150;
+const COACH_FADE = 2500;
+const COACH_GONE = 2860;
+// How far the demo leans the card. Kept small on purpose: the card is only
+// 10px narrower than the screen on each side, so a lean big enough to feel like
+// a swipe slices the place's own name off the edge — it reads as breakage when
+// the card is holding still rather than travelling. 24px plus a degree and a
+// half is a lean; the stamp and the lit button carry the rest of the meaning.
+// The coach bar's own height. It used to live on the card as reserved padding,
+// because the buttons were permanent and the card had to stay clear of them.
+// Nothing is reserved now — the bar floats over the card for its couple of
+// seconds and the card's content runs the full height either side of that.
+const COACH_BAR_H = 124;
+const DEMO_DX = 24;
+const DEMO_ROT = 0.07; // deg per px of lean
+type Phase = "deal" | "coach" | "done";
 
 // placeId → reverse a real add on undo; skipId → the place whose skip count the
 // undo has to put right; restoreSkip → the exact count to put back (a right
 // swipe RESETS the count, and neither decSkip nor a second reset can undo that),
 // absent when the swipe merely bumped it and a decrement is the reverse.
 type UndoEntry = { key: string; placeId: string | null; skipId?: string; restoreSkip?: number };
+
+function usePrefersReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const sync = () => setReduced(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+  return reduced;
+}
 
 // Maps a Swiggy result to the app's Place shape — same mapping the old Swiggy
 // panel used, so a swipe-saved find is consistent with places added any way.
@@ -60,17 +101,28 @@ function saveNew(r: SwiggyRestaurant): string {
 }
 
 // Swipe mode — one of the app's two ways of looking at your places, not a
-// feature of the other one. It used to be reached by opening a sheet and
-// pressing a button inside it, which made it read as that sheet's payoff; the
-// mode switch now sits at the top here and in the map's dock, the same control
-// in both. Because it is a mode and not a destination, it carries its own lens
-// (source + ask + filters) instead of being handed one on the way in.
+// feature of the other one. The switch between them is NOT in here (or in the
+// map's dock, where it used to sit as a third row of controls): AppShell renders
+// it once, above both modes, so it stays put while the world behind it changes.
+// That fixed control is what the entrance animates around. Because this is a
+// mode and not a destination, it carries its own lens (source + ask + filters)
+// instead of being handed one on the way in.
 export default function SwipeMode({
-  onExit,
+  entrance = "deal",
+  closing,
+  onRequestClose,
+  onClosed,
   onOpenSaved,
   onToast,
 }: {
-  onExit: () => void; // back to the map — the other half of the mode switch
+  // "fan" = we were opened by the reveal, so the cards are thrown out of its
+  // flare (beat 6, see ModeReveal). "deal" = the plain arrival, which is also
+  // what every LATER run of the deck uses — a lens change or a reshuffle isn't
+  // a reveal and shouldn't pretend to be one.
+  entrance?: "fan" | "deal";
+  closing: boolean; // AppShell has asked us to leave — play the outro
+  onRequestClose: () => void; // Escape, from in here
+  onClosed: () => void; // outro finished; safe to unmount
   onOpenSaved: (id: string) => void; // the escape hatch — full place screen
   onToast: (msg: string) => void;
 }) {
@@ -78,6 +130,7 @@ export default function SwipeMode({
   const { source, query, cuisine, keyword } = lens;
   const [lensOpen, setLensOpen] = useState(false);
   const places = usePlaces();
+  const reduced = usePrefersReducedMotion();
   // Latest-places snapshot read only at deck-build time — kept in a ref (updated
   // in an effect, never during render) so a mid-session add doesn't reshuffle
   // the stack under the user's thumb.
@@ -106,34 +159,50 @@ export default function SwipeMode({
   // 3rd-skip escalation: the saved card to offer a permanent hide for.
   const [confirmHide, setConfirmHide] = useState<Extract<DeckCard, { kind: "saved" }> | null>(null);
 
-  // First-run coach — shown once (persisted flag), retires on the first swipe/key
-  // or a timeout. Lazy-read here: this only ever mounts client-side (swipe mode
-  // is opened by a tap), so localStorage is available and there's no SSR of it.
-  const [hintMounted, setHintMounted] = useState(() => {
-    try {
-      return localStorage.getItem(HINT_KEY) !== "1";
-    } catch {
-      return false;
-    }
-  });
-  const [hintVisible, setHintVisible] = useState(hintMounted);
-  const hintDoneRef = useRef(!hintMounted);
-  const dismissHint = () => {
-    if (hintDoneRef.current) return;
-    hintDoneRef.current = true;
-    try {
-      localStorage.setItem(HINT_KEY, "1");
-    } catch {
-      /* private mode — worst case it shows again, harmless */
-    }
-    setHintVisible(false);
-    window.setTimeout(() => setHintMounted(false), 480); // fade out, then unmount
+  // ---- the opening beat's state -----------------------------------------
+  const [dealing, setDealing] = useState(true);
+  // The entrance we were MOUNTED with. Captured, not read live: AppShell drops
+  // the reveal layer at the end of the sequence, flipping the prop back to
+  // "deal", and a live read would re-arm mode-in and flash the screen a second
+  // after you arrived. `firstRun` is the other half — only the first run of the
+  // deck came out of the flash; a lens change or a reshuffle is just a rebuild.
+  const [entryKind] = useState(entrance);
+  const [firstRun, setFirstRun] = useState(true);
+  const [phase, setPhase] = useState<Phase>("deal");
+  const [coachOut, setCoachOut] = useState(false);
+  const [demo, setDemo] = useState<"left" | "right" | null>(null);
+  const coachTimers = useRef<number[]>([]);
+  const clearCoach = () => {
+    coachTimers.current.forEach(clearTimeout);
+    coachTimers.current = [];
   };
+  // Skip the rest of the coach. Called by the first touch, the first key, and
+  // by any decision — the moment you act, you've been taught.
+  const endCoach = () => {
+    if (phase === "done") return;
+    clearCoach();
+    setDemo(null);
+    setCoachOut(true);
+    coachTimers.current.push(
+      window.setTimeout(() => {
+        setPhase("done");
+        setCoachOut(false);
+      }, 320)
+    );
+  };
+
+  // Leaving: AppShell keeps us mounted for the outro, then drops us. onClosed
+  // is read through a ref because AppShell passes a fresh closure every render,
+  // and a re-armed timer would never fire.
+  const onClosedRef = useRef(onClosed);
   useEffect(() => {
-    if (hintDoneRef.current) return;
-    const auto = window.setTimeout(dismissHint, 6500); // retire on its own if untouched
-    return () => clearTimeout(auto);
-  }, []);
+    onClosedRef.current = onClosed;
+  });
+  useEffect(() => {
+    if (!closing) return;
+    const t = window.setTimeout(() => onClosedRef.current(), OUT_MS);
+    return () => clearTimeout(t);
+  }, [closing]);
 
   // Fetch Swiggy's catalog for New/Both whenever the source or cuisine changes.
   useEffect(() => {
@@ -224,7 +293,7 @@ export default function SwipeMode({
     flickVelocity: FLICK_VELOCITY,
     flickMin: FLICK_MIN,
     onCommit: (dir) => {
-      dismissHint();
+      endCoach();
       commit(dir);
     },
   });
@@ -303,7 +372,7 @@ export default function SwipeMode({
         return;
       }
       if (["ArrowLeft", "ArrowRight", "Backspace"].includes(e.key) || e.key.toLowerCase() === "u") {
-        dismissHint();
+        endCoach();
       }
       if (e.key === "ArrowLeft") {
         e.preventDefault();
@@ -317,13 +386,13 @@ export default function SwipeMode({
       } else if (e.key === "Escape") {
         e.preventDefault();
         if (lensOpen) setLensOpen(false);
-        else onExit();
+        else onRequestClose();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deck, pos, exiting, detailNew, confirmHide, lensOpen, undo.length]);
+  }, [deck, pos, exiting, detailNew, confirmHide, lensOpen, undo.length, phase]);
 
   // ---- render ------------------------------------------------------------
   // A right swipe does two different things, so it can't wear one label. On a
@@ -336,11 +405,71 @@ export default function SwipeMode({
   const rightStamp = isNewCard ? "Watchlist" : "Yes";
   const rightAction = isNewCard ? "Add to watchlist" : "Yes, I’d go";
 
+  const stack = deck.slice(pos, pos + 3);
+  const exhausted = deck.length > 0 && pos >= deck.length;
+  const empty = deck.length === 0;
+  // Busy the whole time a Swiggy fetch is in flight — not just on first load — so
+  // a cuisine/keyword change hides the previous pool's cards immediately instead
+  // of leaving them swipeable against a lens they no longer match.
+  const busy = source !== "saved" && loadingNew;
+  // A Swiggy failure has to read differently from "no matches" — the deck is
+  // empty either way, but only one of them is fixable by changing the filter.
+  const newFailed = source !== "saved" && newError !== null;
+  const showCards = !busy && !newFailed && !empty && !exhausted;
+
+  // The coach runs once per RUN of the deck — opening the mode, changing the
+  // lens, starting over — and only once there are actually cards to teach on.
+  const runKey = `${source}|${queryKey}|${seed}`;
+  useEffect(() => {
+    if (!showCards) return;
+    // The deal is not part of the coach and is never cancelled: it is the
+    // arrival itself, and cutting it mid-flight would snap the cards.
+    const deal = window.setTimeout(
+      () => setDealing(false),
+      entryKind === "fan" && firstRun ? FAN_MS : DEAL_MS
+    );
+
+    const at = (ms: number, fn: () => void) => coachTimers.current.push(window.setTimeout(fn, ms));
+    at(COACH_AT, () => setPhase("coach"));
+    if (!reduced) {
+      // Show, don't tell: the card leans the way each button sends it.
+      at(DEMO_LEFT_IN, () => setDemo("left"));
+      at(DEMO_LEFT_OUT, () => setDemo(null));
+      at(DEMO_RIGHT_IN, () => setDemo("right"));
+      at(DEMO_RIGHT_OUT, () => setDemo(null));
+    }
+    at(COACH_FADE, () => setCoachOut(true));
+    at(COACH_GONE, () => {
+      setPhase("done");
+      setCoachOut(false);
+    });
+
+    // Winding a run down is also what arms the next one: the state goes back to
+    // the top HERE rather than at the head of the effect, so a run never opens
+    // by setting four pieces of state during its own first commit.
+    return () => {
+      clearTimeout(deal);
+      clearCoach();
+      setFirstRun(false);
+      setDealing(true);
+      setPhase("deal");
+      setCoachOut(false);
+      setDemo(null);
+    };
+  }, [runKey, showCards, reduced]);
+
+  // What a release right now would commit to. During the coach's demo the same
+  // stamp appears with no finger behind it — soft, so it fades rather than
+  // snapping in.
   const stamp = (() => {
-    if (!drag) return null;
-    const { dx } = drag;
-    if (dx > 0) return { label: rightStamp, color: "var(--s-watchlist)", opacity: dx / SWIPE_THRESHOLD };
-    if (dx < 0) return { label: "Nope", color: "var(--s-favorite)", opacity: -dx / SWIPE_THRESHOLD };
+    if (drag) {
+      const { dx } = drag;
+      if (dx > 0) return { label: rightStamp, color: "var(--s-watchlist)", opacity: dx / SWIPE_THRESHOLD };
+      if (dx < 0) return { label: "Nope", color: "var(--s-favorite)", opacity: -dx / SWIPE_THRESHOLD };
+      return null;
+    }
+    if (demo === "right") return { label: rightStamp, color: "var(--s-watchlist)", opacity: 0.75, soft: true };
+    if (demo === "left") return { label: "Nope", color: "var(--s-favorite)", opacity: 0.75, soft: true };
     return null;
   })();
 
@@ -362,29 +491,26 @@ export default function SwipeMode({
         transition: "none",
       };
     }
+    if (demo) {
+      const dx = demo === "right" ? DEMO_DX : -DEMO_DX;
+      return {
+        transform: `translateX(${dx}px) rotate(${dx * DEMO_ROT}deg)`,
+        transition: "transform 0.42s var(--ease-spring)",
+      };
+    }
     // Snappy, slightly springy return — reads as "tight", not floaty.
     return { transform: "none", transition: "transform 0.34s var(--ease-spring)" };
   };
-
-  const stack = deck.slice(pos, pos + 3);
-  const exhausted = deck.length > 0 && pos >= deck.length;
-  const empty = deck.length === 0;
-  // Busy the whole time a Swiggy fetch is in flight — not just on first load — so
-  // a cuisine/keyword change hides the previous pool's cards immediately instead
-  // of leaving them swipeable against a lens they no longer match.
-  const busy = source !== "saved" && loadingNew;
-  // A Swiggy failure has to read differently from "no matches" — the deck is
-  // empty either way, but only one of them is fixable by changing the filter.
-  const newFailed = source !== "saved" && newError !== null;
-  const showCards = !busy && !newFailed && !empty && !exhausted;
 
   // What the collapsed trigger says. Never just "filters" — the mode should be
   // able to tell you what it is dealing you without being opened up.
   const sourceLabel = source === "saved" ? "Your map" : source === "new" ? "New · Swiggy" : "Everything";
 
-
   return (
-    <div className="fixed inset-0 z-[52]" style={{ background: "var(--bg-base)" }}>
+    <div
+      className={`fixed inset-0 z-[52] ${closing ? "mode-out" : entryKind === "fan" ? "" : "mode-in"}`}
+      style={{ background: "var(--bg-base)" }}
+    >
       {/* ---- card stage: the whole screen ---- */}
       <div className="absolute" style={{ inset: CARD_INSET }}>
         {busy ? (
@@ -431,33 +557,68 @@ export default function SwipeMode({
             </button>
           </Centered>
         ) : (
-          <>
-            {stack
-              .map((card, i) => {
-                const top = i === 0;
-                const peek: CSSProperties = top
-                  ? topTransform()
-                  : {
-                      transform: `scale(${1 - i * 0.03}) translateY(${i * 10}px)`,
-                      opacity: 1 - i * 0.14,
-                      transition: "transform 0.24s ease, opacity 0.24s ease",
-                    };
-                return (
-                  <div
-                    key={card.key}
-                    className="absolute inset-0"
-                    style={{ zIndex: stack.length - i, ...peek }}
-                    // The cards underneath are decoration until they're on top:
-                    // inert keeps their Directions/Full-details controls out of
-                    // the tab order and out of a screen reader, which otherwise
-                    // reads three stacked copies of every card.
-                    inert={!top}
-                    {...(top ? swipe.handlers : {})}
-                  >
+          stack
+            .map((card, i) => {
+              const top = i === 0;
+              const peek: CSSProperties = top
+                ? topTransform()
+                : {
+                    transform: `scale(${1 - i * 0.03}) translateY(${i * 10}px)`,
+                    opacity: 1 - i * 0.14,
+                    transition: "transform 0.24s ease, opacity 0.24s ease",
+                  };
+              // The deal animation and the stack transform can't share an
+              // element — a CSS animation owns `transform` outright and would
+              // drop the peek offset the moment it finished. Outer deals, inner
+              // stacks; the gesture stays on the outer, which is what
+              // useCardSwipe captures the pointer on.
+              const fanning = dealing && entryKind === "fan" && firstRun;
+              // Thrown out of the flare and fanned wide before squaring up. The
+              // top card lands dead centre; the two behind it are the ones that
+              // spread, so the card you actually decide on never does tricks.
+              const FAN = [
+                { x: "0px", y: "0px", rot: "-5deg" },
+                { x: "62px", y: "16px", rot: "24deg" },
+                { x: "-64px", y: "26px", rot: "-26deg" },
+              ][i] ?? { x: "0px", y: "0px", rot: "0deg" };
+              return (
+                <div
+                  key={card.key}
+                  className={`absolute inset-0${dealing ? (fanning ? " fan-in" : " deal-in") : ""}`}
+                  style={
+                    {
+                      zIndex: stack.length - i,
+                      // Back card first: the stack builds UNDER the one you
+                      // decide on, so the top card is the last thing to land.
+                      "--deal-delay": `${(stack.length - 1 - i) * 60}ms`,
+                      "--deal-rot": i % 2 === 0 ? "6deg" : "-7deg",
+                      "--fan-delay": `${(stack.length - 1 - i) * 55}ms`,
+                      "--fan-x": FAN.x,
+                      "--fan-y": FAN.y,
+                      "--fan-rot": FAN.rot,
+                    } as CSSProperties
+                  }
+                  // The cards underneath are decoration until they're on top:
+                  // inert keeps their Directions/Full-details controls out of
+                  // the tab order and out of a screen reader, which otherwise
+                  // reads three stacked copies of every card.
+                  inert={!top}
+                  {...(top
+                    ? {
+                        ...swipe.handlers,
+                        onPointerDown: (e: React.PointerEvent) => {
+                          endCoach(); // you touched it — the lesson is over
+                          swipe.handlers.onPointerDown(e);
+                        },
+                      }
+                    : {})}
+                >
+                  <div className="absolute inset-0" style={peek}>
                     <SwipeCard
                       card={card}
                       stamp={top ? stamp : null}
                       interactive={top}
+                      entering={top && dealing}
                       wasDrag={swipe.wasDrag}
                       onOpenDetails={() => {
                         if (card.kind === "saved") onOpenSaved(card.place.id);
@@ -467,48 +628,47 @@ export default function SwipeMode({
                       }}
                     />
                   </div>
-                );
-              })
-              // paint the top card LAST so it wins stacking + receives the pointer
-              .reverse()}
-            {hintMounted && current && <DeckHint visible={hintVisible} rightLabel={rightStamp} />}
-          </>
+                </div>
+              );
+            })
+            // paint the top card LAST so it wins stacking + receives the pointer
+            .reverse()
         )}
       </div>
 
-      {/* Scrim under the floating chrome. Without it the hero's title slides
-          under the controls mid-scroll and gets sliced in half. */}
+      {/* Scrim under the floating chrome, so the lens chip and the mode switch
+          stay legible over a bright photo. */}
       <div
         className="pointer-events-none absolute inset-x-0 top-0"
         style={{
           zIndex: 9,
-          height: 170,
-          background: "linear-gradient(180deg, rgba(6,7,10,0.8) 0%, rgba(6,7,10,0) 100%)",
+          height: 120,
+          background: "linear-gradient(180deg, rgba(6,7,10,0.72) 0%, rgba(6,7,10,0) 100%)",
         }}
       />
 
-      {/* ---- chrome: the mode switch, then what this mode is showing ---- */}
+      {/* ---- what this mode is showing. Top LEFT, where the map puts its own
+          name and count — the switch out of here is top right in both modes,
+          and AppShell owns it. Left says what you're looking at, right says
+          where you can go: the frame is constant, the world inside changes. */}
       <div
-        className="absolute inset-x-0 top-0 flex flex-col items-center gap-2 px-4 pt-[max(0.75rem,env(safe-area-inset-top))]"
-        style={{ zIndex: 10 }}
+        className="absolute left-4 top-[max(0.9rem,env(safe-area-inset-top))] flex"
+        style={{ zIndex: 10, maxWidth: "calc(100% - 130px)" }}
       >
-        <div className="w-full max-w-[260px]">
-          <ModeSwitch mode="swipe" onChange={(m) => m === "map" && onExit()} />
-        </div>
-
         <button
           onClick={() => setLensOpen(true)}
-          className="press flex max-w-full items-center gap-1.5 rounded-full px-3 py-1.5"
+          className="press flex h-9 max-w-full items-center gap-1.5 rounded-full px-3"
           style={{
             background: "var(--glass)",
-            backdropFilter: "blur(22px)",
-            WebkitBackdropFilter: "blur(22px)",
-            border: "1px solid var(--border-strong)",
+            backdropFilter: "blur(22px) saturate(1.3)",
+            WebkitBackdropFilter: "blur(22px) saturate(1.3)",
+            border: "1px solid rgba(255,255,255,0.1)",
+            boxShadow: "inset 0 1px 0 rgba(255,255,255,0.08), 0 10px 28px -12px rgba(0,0,0,0.5)",
             color: "oklch(0.9 0 0)",
           }}
         >
           <SlidersHorizontal size={12} strokeWidth={2.5} />
-          <span className="truncate text-[12px] font-semibold">
+          <span className="truncate text-[12.5px] font-semibold">
             {sourceLabel}
             {lens.summary.length > 0 && (
               <span className="capitalize"> · {lens.summary.join(" · ")}</span>
@@ -517,59 +677,90 @@ export default function SwipeMode({
         </button>
       </div>
 
-      {/* ---- action bar: pinned, so it never scrolls away with the card ---- */}
-      {/* Undo has to outlive the cards. Gating the whole bar on showCards meant
-          mis-swiping the LAST card unmounted the only touch affordance for
-          taking it back — "That's everyone" would render over a deck you never
-          meant to finish, with recovery available on desktop keys alone. The
-          bar now also renders whenever there is something to undo; skip/like
-          simply go inert with no card under them. */}
-      {(showCards || undo.length > 0) && (
+      {/* ---- the coach: which way is which, shown once per run ---- */}
+      {phase === "coach" && current && (
         <div
-          className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]"
-          style={{ zIndex: 10, height: FOOTER_SPACE }}
+          className="pointer-events-none absolute inset-x-0 bottom-0"
+          style={{
+            zIndex: 12,
+            height: COACH_BAR_H,
+            opacity: coachOut ? 0 : 1,
+            transition: "opacity 0.32s ease",
+          }}
         >
-          <ActionCircle
-            onClick={() => {
-              dismissHint();
-              commit("left");
-            }}
-            label="Skip"
-            color="var(--s-favorite)"
-            size={60}
-            disabled={!current || !!exiting}
-          >
-            <X size={26} strokeWidth={2.75} />
-          </ActionCircle>
+          <div
+            className="absolute inset-0"
+            style={{ background: "linear-gradient(0deg, rgba(6,7,10,0.9) 20%, rgba(6,7,10,0))" }}
+          />
+          <div className="relative flex h-full items-start justify-center gap-16">
+            <CoachAction
+              arrow="←"
+              way="Left"
+              means="Nope"
+              color="var(--s-favorite)"
+              label="Skip"
+              delay={0}
+              lit={demo === "left"}
+              disabled={!!exiting}
+              onClick={() => {
+                endCoach();
+                commit("left");
+              }}
+            >
+              <X size={26} strokeWidth={2.75} />
+            </CoachAction>
 
-          <ActionCircle
+            <CoachAction
+              arrow="→"
+              way="Right"
+              means={rightStamp}
+              color="var(--s-watchlist)"
+              label={rightAction}
+              delay={70}
+              lit={demo === "right"}
+              disabled={!!exiting}
+              onClick={() => {
+                endCoach();
+                commit("right");
+              }}
+            >
+              {isNewCard ? (
+                <Heart size={24} strokeWidth={2.5} fill="currentColor" />
+              ) : (
+                // A heart over a place you already saved reads as "save it" too —
+                // same false promise as the label, so the glyph branches with it.
+                <Check size={26} strokeWidth={3} />
+              )}
+            </CoachAction>
+          </div>
+        </div>
+      )}
+
+      {/* Undo is not one of the two decisions and doesn't retire with them: it
+          only exists once there IS something to take back, and it has to
+          outlive the cards — mis-swiping the LAST card would otherwise leave a
+          touch user with no way back at all. */}
+      {undo.length > 0 && phase !== "coach" && (
+        <div
+          className="absolute inset-x-0 bottom-0 flex justify-end pr-4 pb-[max(1.25rem,env(safe-area-inset-bottom))]"
+          style={{ zIndex: 11 }}
+        >
+          <button
             onClick={doUndo}
-            label="Undo last swipe"
-            color="var(--text-tertiary)"
-            size={46}
-            disabled={!undo.length || !!exiting}
-          >
-            <RotateCcw size={18} strokeWidth={2.5} />
-          </ActionCircle>
-
-          <ActionCircle
-            onClick={() => {
-              dismissHint();
-              commit("right");
+            disabled={!!exiting}
+            aria-label="Undo last swipe"
+            className="press animate-rise flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[12.5px] font-semibold disabled:opacity-40"
+            style={{
+              background: "var(--glass)",
+              backdropFilter: "blur(22px) saturate(1.3)",
+              WebkitBackdropFilter: "blur(22px) saturate(1.3)",
+              border: "1px solid rgba(255,255,255,0.1)",
+              boxShadow: "0 10px 28px -12px rgba(0,0,0,0.5)",
+              color: "oklch(0.86 0 0)",
             }}
-            label={rightAction}
-            color="var(--s-watchlist)"
-            size={60}
-            disabled={!current || !!exiting}
           >
-            {isNewCard ? (
-              <Heart size={24} strokeWidth={2.5} fill="currentColor" />
-            ) : (
-              // A heart over a place you already saved reads as "save it" too —
-              // same false promise as the label, so the glyph branches with it.
-              <Check size={26} strokeWidth={3} />
-            )}
-          </ActionCircle>
+            <RotateCcw size={14} strokeWidth={2.5} /> Undo
+          </button>
         </div>
       )}
 
@@ -619,43 +810,70 @@ export default function SwipeMode({
   );
 }
 
-// Dark-glass circle over the card — the state colour rides the glyph, never a
-// fill, so the deck's existing stamp vocabulary (amber = watchlist, red = nope)
-// carries through to the buttons without turning them into coloured actions.
-function ActionCircle({
-  onClick,
-  label,
+// One side of the coach: the button, the direction it stands for, and what that
+// direction does to THIS card. Dark-glass circle, state colour on the glyph
+// only — the deck's stamp vocabulary (amber = watchlist/yes, red = nope) reads
+// the same on the stamp, the button and the caption. `lit` is the demo passing
+// through: the button the card is leaning towards brightens with it, so the
+// lean and the control are visibly the same thing.
+function CoachAction({
+  arrow,
+  way,
+  means,
   color,
-  size,
+  label,
+  delay,
+  lit,
   disabled,
+  onClick,
   children,
 }: {
-  onClick: () => void;
-  label: string;
+  arrow: string;
+  way: string;
+  means: string;
   color: string;
-  size: number;
+  label: string; // the real accessible name — "Skip" / "Add to watchlist"
+  delay: number;
+  lit: boolean;
   disabled?: boolean;
+  onClick: () => void;
   children: React.ReactNode;
 }) {
   return (
-    <button
-      onClick={onClick}
-      aria-label={label}
-      disabled={disabled}
-      className="press grid place-items-center rounded-full disabled:opacity-35"
-      style={{
-        height: size,
-        width: size,
-        color,
-        background: "var(--glass)",
-        backdropFilter: "blur(22px)",
-        WebkitBackdropFilter: "blur(22px)",
-        border: "1px solid var(--border-strong)",
-        boxShadow: "var(--shadow-pop)",
-      }}
+    <div
+      className="coach-in flex flex-col items-center"
+      style={{ "--coach-delay": `${delay}ms` } as CSSProperties}
     >
-      {children}
-    </button>
+      <button
+        onClick={onClick}
+        aria-label={label}
+        disabled={disabled}
+        className="press pointer-events-auto grid place-items-center rounded-full disabled:opacity-35"
+        style={{
+          height: 60,
+          width: 60,
+          color,
+          background: "var(--glass)",
+          backdropFilter: "blur(22px)",
+          WebkitBackdropFilter: "blur(22px)",
+          border: `1px solid ${lit ? color : "var(--border-strong)"}`,
+          boxShadow: lit ? `0 0 0 4px color-mix(in oklch, ${color} 22%, transparent)` : "var(--shadow-pop)",
+          transform: lit ? "scale(1.08)" : "none",
+          transition: "transform 0.3s var(--ease-spring), box-shadow 0.3s ease, border-color 0.3s ease",
+        }}
+      >
+        {children}
+      </button>
+      <span
+        className="mt-2 text-[11.5px] font-bold"
+        style={{ color, opacity: lit ? 1 : 0.9, transition: "opacity 0.3s ease" }}
+      >
+        {arrow === "←" ? `${arrow} ${way}` : `${way} ${arrow}`}
+      </span>
+      <span className="text-[11px] font-medium" style={{ color: "rgba(255,255,255,0.6)" }}>
+        {means}
+      </span>
+    </div>
   );
 }
 

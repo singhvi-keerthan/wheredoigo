@@ -15,6 +15,7 @@ import ModeSwitch, { type AppMode } from "./ModeSwitch";
 import PlaceWizard from "./PlaceWizard";
 import MenuSheet from "./MenuSheet";
 import BrowseSheet, { type BrowseMode } from "./BrowseSheet";
+import ModeReveal, { BEATS, type RevealSpec } from "./ModeReveal";
 
 type FilterKey = "all" | DisplayState;
 
@@ -30,6 +31,15 @@ const FILTERS: { key: FilterKey; label: string }[] = [
 // guessed hues). "all" is neutral white.
 const UNDERLINE: Record<FilterKey, string> = {
   all: "rgba(255,255,255,0.85)",
+  watchlist: "var(--s-watchlist)",
+  visited: "var(--s-visited)",
+  favorite: "var(--s-favorite)",
+  never_again: "var(--s-never)",
+};
+
+// The pin hue per state — the same tokens MapView gives its markers, so a place
+// keeps its colour when the reveal picks it up off the map.
+const STATE_COLOR: Record<DisplayState, string> = {
   watchlist: "var(--s-watchlist)",
   visited: "var(--s-visited)",
   favorite: "var(--s-favorite)",
@@ -62,9 +72,95 @@ export default function AppShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [addQuery, setAddQuery] = useState<string | null>(null); // palette → + sheet carry-over
-  // Map or Swipe. Two ways of looking at the same places, switched by one
-  // control that lives in both — not a sheet you open on top of the map.
+  // Map or Swipe. Two ways of looking at the same places, switched by ONE
+  // control that this shell owns and renders above both of them — not a row in
+  // the map's dock, and not a copy at the top of each mode. `swipeClosing` is
+  // the leaving half: swipe mode stays mounted while it plays its outro, and
+  // tells us when it's safe to drop.
   const [mode, setMode] = useState<AppMode>("map");
+  const [swipeClosing, setSwipeClosing] = useState(false);
+  // Going TO the deck is a reveal, not a mode flip: ModeReveal takes the screen
+  // for ~1.9s and the deck mounts inside it. Coming back is a plain 190ms fade —
+  // an exit should never make you wait.
+  const [reveal, setReveal] = useState<RevealSpec | null>(null);
+  const headerRef = useRef<HTMLElement>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const flick = useRef<{ x: number; t: number } | null>(null);
+
+  // Where each place sits on screen right now, read straight off the map's
+  // markers. Deliberately DOM-side: MapView owns the map instance, and the pins
+  // it renders already carry their own position and state colour, so nothing
+  // has to be plumbed through for the reveal to know what to pick up.
+  const capturePins = (): RevealSpec["pins"] => {
+    if (typeof document === "undefined") return [];
+    const byName = new Map(places.map((p) => [p.name, p]));
+    return [...document.querySelectorAll<HTMLElement>(".maplibregl-marker > button[aria-label]")]
+      .map((node) => {
+        const r = node.getBoundingClientRect();
+        const place = byName.get(node.getAttribute("aria-label") ?? "");
+        return {
+          x: r.left + r.width / 2,
+          y: r.top + r.height / 2,
+          size: Math.max(11, Math.min(16, Math.min(r.width, r.height))),
+          color: place ? STATE_COLOR[displayState(place)] : "var(--accent)",
+        };
+      })
+      .filter((p) => p.x > -40 && p.y > -40 && p.x < window.innerWidth + 40 && p.y < window.innerHeight + 40);
+  };
+
+  // Beat 1 and 2, on the real chrome: the title compresses under your thumb,
+  // then the masthead lifts off the top and the dock drops through the floor.
+  // The mode switch is NOT in here — it holds its position through the whole
+  // sequence, which is what says "same app" rather than "new screen".
+  const clearTheStage = () => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const ease = "cubic-bezier(0.5,0,0.75,0)";
+    titleRef.current?.animate(
+      [
+        { transform: "scale(1)", letterSpacing: "-0.015em" },
+        { transform: "scale(0.955)", letterSpacing: "-0.045em", offset: 0.5 },
+        { transform: "scale(1.015)", letterSpacing: "-0.015em" },
+      ],
+      { duration: 200, easing: "cubic-bezier(0.34,1.56,0.64,1)" }
+    );
+    headerRef.current?.animate(
+      [
+        { transform: "translateY(0)", opacity: 1 },
+        { transform: "translateY(-46px)", opacity: 0 },
+      ],
+      { duration: 300, delay: BEATS.wash + 20, easing: ease, fill: "both" }
+    );
+    dockRef.current?.animate(
+      [
+        { transform: "translateY(0)", opacity: 1 },
+        { transform: "translateY(78px)", opacity: 0 },
+      ],
+      { duration: 340, delay: BEATS.wash + 40, easing: ease, fill: "both" }
+    );
+  };
+
+  const openSwipe = (ox: number, oy: number) => {
+    if (mode === "swipe" || reveal) return;
+    clearTheStage();
+    setReveal({ ox, oy, pins: capturePins() });
+  };
+
+  const changeMode = (m: AppMode) => {
+    if (m === "swipe") {
+      // The reveal starts under the control you actually pressed.
+      const el = document.querySelector<HTMLElement>('[role="group"][aria-label="View"]');
+      const r = el?.getBoundingClientRect();
+      openSwipe(r ? r.left + r.width / 2 : window.innerWidth - 55, r ? r.top + r.height / 2 : 30);
+    } else if (mode === "swipe") {
+      setSwipeClosing(true); // SwipeMode fades out, then calls onClosed
+    }
+  };
+  const leaveSwipe = () => {
+    setMode("map");
+    setSwipeClosing(false);
+    setReveal(null);
+  };
   const [detailId, setDetailId] = useState<string | null>(null);
   // Visit-logging form. A fresh watchlist add opens NO form — its details come
   // from Google and the one-line note is taken on the add sheet. This only opens
@@ -104,7 +200,7 @@ export default function AppShell() {
 
   return (
     <main
-      className="relative w-full overflow-hidden"
+      className={`relative w-full overflow-hidden${reveal ? " reveal-on" : ""}`}
       style={{ height: "100dvh", background: "var(--bg-base)" }}
     >
       <MapView places={visible} selectedId={selectedId} onSelect={setSelectedId} />
@@ -119,17 +215,45 @@ export default function AppShell() {
       {/* Title row and menu share one line (menu centred on the name), with the
           count line tucked underneath — so the masthead reads as one unit, not
           a name floating above a lower-sitting button. */}
-      <header className="fixed inset-x-0 top-0 z-10 px-5 pt-[max(0.9rem,env(safe-area-inset-top))]">
+      {/* The right padding is the mode switch's berth: it is rendered outside
+          this header (it has to outrank swipe mode), so the header leaves it a
+          hole rather than overlapping it. */}
+      <header ref={headerRef} className="fixed inset-x-0 top-0 z-10 pl-5 pr-[98px] pt-[max(0.9rem,env(safe-area-inset-top))]">
         <div className="flex items-center justify-between">
+          {/* The hidden way in. Double-tap the app's own name, or flick across
+              it, and the deck opens — the same reveal as the switch, started
+              from wherever your thumb was. The switch is how you're meant to
+              FIND the mode; this is how it's meant to feel once you know. */}
           <h1
+            ref={titleRef}
+            onDoubleClick={(e) => openSwipe(e.clientX, e.clientY)}
+            onPointerDown={(e) => {
+              flick.current = { x: e.clientX, t: e.timeStamp };
+            }}
+            onPointerUp={(e) => {
+              const f = flick.current;
+              flick.current = null;
+              if (f && Math.abs(e.clientX - f.x) > 30 && e.timeStamp - f.t < 600) {
+                openSwipe(e.clientX, e.clientY);
+              }
+            }}
+            onPointerCancel={() => {
+              flick.current = null;
+            }}
             className="font-medium leading-none tracking-[-0.015em]"
             style={{
+              touchAction: "pan-y",
+              WebkitUserSelect: "none",
+              userSelect: "none",
               fontFamily: "var(--font-display)",
               color: "#16181d",
-              // 26px everywhere ≥ ~313px wide; below that, scale so the full
-              // 18-char name (≈8.8em in Zodiak) never clips against the menu
-              // button (84px = side padding + button + gap).
-              fontSize: "min(26px, calc((100vw - 84px) / 8.81))",
+              // Scales so the full 18-char name never clips against the
+              // controls. The 18 characters measure 10.15em wide in Zodiak
+              // (measured, not guessed — the 8.81 that used to be here was too
+              // low and only survived because the reserve was smaller); 164px
+              // is everything to the right of the name: gap, menu button, gap,
+              // mode switch, and the page's own side padding.
+              fontSize: "min(26px, calc((100vw - 164px) / 10.2))",
             }}
           >
             wheredoigokeerthan
@@ -137,7 +261,7 @@ export default function AppShell() {
           <button
             onClick={() => setMenuOpen(true)}
             aria-label="Menu"
-            className="press grid h-9 w-9 place-items-center rounded-full"
+            className="press grid h-9 w-9 shrink-0 place-items-center rounded-full"
             style={GLASS}
           >
             <Menu size={17} style={{ color: "oklch(0.9 0 0)" }} />
@@ -154,6 +278,18 @@ export default function AppShell() {
           {where && ` · ${where}`}
         </p>
       </header>
+
+      {/* The one piece of chrome that belongs to the APP rather than to either
+          mode. Rendered here, above swipe mode (z-52) and below any sheet it
+          opens (z-54+), so it never unmounts and never moves: the map dissolves
+          into the deck behind a control that stays exactly where your thumb
+          left it. Its `mode` flips the instant you ask, not when the old mode
+          finishes leaving — the thumb slides while the deck recedes. */}
+      <div
+        className="fixed right-5 top-[max(0.9rem,env(safe-area-inset-top))] z-[53]"
+      >
+        <ModeSwitch mode={swipeClosing ? "map" : mode} onChange={changeMode} />
+      </div>
 
       {/* storage failure — silent persist loss is the one unforgivable state */}
       {persistError && (
@@ -211,21 +347,16 @@ export default function AppShell() {
           <PlaceCard place={selected} onClose={() => setSelectedId(null)} onOpen={() => setDetailId(selected.id)} />
         </div>
       ) : (
-        <div className="fixed inset-x-0 bottom-0 z-10">
+        <div ref={dockRef} className="fixed inset-x-0 bottom-0 z-10">
           {/* filter rail — Decide (white action) + a dark-glass underline tray.
               Same horizontal padding, gap, corner radius and 36px row height
               as the search dock below it, so the two rows read as one dock
               instead of two differently-sized ones stacked up. Sized to fit
               one line on a narrow phone with no horizontal swipe. */}
-          {/* Mode — Map or Swipe. Its own row, full width, above the map's own
-              filters: swipe used to hide behind a 36px mascot that opened a
-              sheet with a button in it, which made a whole mode read as one of
-              the map's accessories. The same control sits at the top of swipe
-              mode, so neither side is a detour from the other. */}
-          <div className="px-[18px] pb-2">
-            <ModeSwitch mode={mode} onChange={setMode} />
-          </div>
-
+          {/* The dock is the MAP's controls and nothing else. Mode used to take
+              a third row up here, which made app-level navigation read as one
+              more filter and left the busiest corner of the screen with three
+              stacked bars in it. */}
           <div className="relative flex items-center gap-2.5 px-[18px] pb-2">
             {/* Filter tray — one dark-glass control, underline-select chips */}
             <div
@@ -386,13 +517,30 @@ export default function AppShell() {
         />
       )}
 
+      {reveal && (
+        <ModeReveal
+          spec={reveal}
+          // the flash — the deck is dealt out of it
+          onDeal={() => {
+            setSwipeClosing(false);
+            setMode("swipe");
+          }}
+          onDone={() => setReveal(null)}
+        />
+      )}
+
       {mode === "swipe" && (
         <SwipeMode
-          onExit={() => setMode("map")}
+          entrance={reveal ? "fan" : "deal"}
+          closing={swipeClosing}
+          onRequestClose={() => setSwipeClosing(true)}
+          onClosed={leaveSwipe}
           // The escape hatch at the bottom of a card: returns to the map and
           // opens the place, because PlaceDetail sits below the mode (z-40).
+          // No outro here — a full-screen sheet is taking the screen anyway,
+          // and animating out behind it would only delay it.
           onOpenSaved={(id) => {
-            setMode("map");
+            leaveSwipe();
             setSelectedId(id);
             setDetailId(id);
           }}

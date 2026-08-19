@@ -276,21 +276,182 @@ body {
   }
 }
 
-/* First-run swipe coach — faint directional nudges that imply the gesture,
-   then the whole layer retires once you swipe. Deliberately low-contrast. */
-@keyframes hint-x {
-  0%, 100% { transform: translateX(0); opacity: 0.4; }
-  50% { transform: translateX(var(--hint-dx)); opacity: 0.9; }
+/* ---- changing mode: the deck is dealt ----
+   Swapping map ⇄ swipe is the one navigation the app has, and it happens a
+   handful of times a session — rare enough to be worth a real moment. The mode
+   switch itself never moves (AppShell owns it, above both modes); everything
+   behind it does. Entering: the world steps forward and the deck is dealt onto
+   it. Leaving: the deck recedes, fast — an exit should never make you wait. */
+@keyframes mode-in {
+  from { opacity: 0; transform: scale(1.035); }
+  to { opacity: 1; transform: none; }
 }
-@keyframes hint-y {
-  0%, 100% { transform: translateY(0); opacity: 0.4; }
-  50% { transform: translateY(-9px); opacity: 0.9; }
+.mode-in {
+  animation: mode-in 0.26s var(--ease-out) both;
 }
-.hint-x {
-  animation: hint-x 1.7s var(--ease-out) infinite;
+@keyframes mode-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: scale(1.025); }
 }
-.hint-y {
-  animation: hint-y 1.7s var(--ease-out) infinite;
+.mode-out {
+  animation: mode-out 0.19s var(--ease-out) both;
+  pointer-events: none;
+}
+
+/* ---- the reveal (map -> swipe) ----
+   The deck isn't a screen that replaces the map; it's made out of the places on
+   it, and this is where that happens. Beats 1-5 are drawn by ModeReveal over
+   everything; beat 6 is the deck's own `fan-in` below. --wash has to be a
+   registered property or the mask can't interpolate and the night arrives as a
+   hard cut. */
+@property --wash {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 0%;
+}
+
+/* Night spreads FROM the point you touched, with a soft outer stop — a clean
+   circle edge is what would read as a slide transition. */
+.reveal-night {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(120% 80% at 50% 45%, rgba(24, 19, 30, 0.86) 0%, rgba(8, 6, 10, 0.97) 100%);
+  --wash: 0%;
+  -webkit-mask-image: radial-gradient(circle at var(--ox, 50%) var(--oy, 5%), #000 calc(var(--wash) - 26%), transparent var(--wash));
+  mask-image: radial-gradient(circle at var(--ox, 50%) var(--oy, 5%), #000 calc(var(--wash) - 26%), transparent var(--wash));
+  will-change: --wash, opacity;
+}
+
+/* A place, once the map behind it has gone dark. */
+.reveal-light {
+  position: absolute;
+  border-radius: 999px;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  will-change: transform, filter;
+}
+
+.reveal-ring {
+  position: absolute;
+  width: 64px;
+  height: 64px;
+  margin: 0;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 198, 130, 0.9);
+  transform: translate(-50%, -50%) scale(0.1);
+  opacity: 0;
+}
+
+.reveal-flash {
+  position: absolute;
+  width: 150vmax;
+  height: 150vmax;
+  border-radius: 999px;
+  background: radial-gradient(closest-side, #fff, rgba(255, 214, 170, 0.55) 42%, transparent 72%);
+  transform: translate(-50%, -50%) scale(0.35);
+  opacity: 0;
+}
+
+.reveal-ember {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(255, 200, 140, 0.9);
+  opacity: 0;
+}
+
+/* The map's own markers hand over to the drawn lights the moment the wash
+   starts — otherwise you'd watch two sets of pins, one of them flying. */
+/* !important is load-bearing, not laziness: maplibre writes `opacity` as an
+   INLINE style on every marker (it owns that property for occlusion fading), so
+   a class rule loses to it and you end up watching two sets of pins — the real
+   ones sitting still and the drawn ones flying off. */
+.reveal-on .maplibregl-marker {
+  opacity: 0 !important;
+  transition: opacity 0.18s ease 0.16s;
+}
+
+/* Beat 6: the cards are thrown out of the flare, fanned wide, and square up
+   into the stack. --fan-* are set per card by SwipeMode. */
+@keyframes fan-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.06) rotate(0deg);
+  }
+  18% {
+    opacity: 1;
+  }
+  55% {
+    opacity: 1;
+    transform: translate(var(--fan-x, 0px), var(--fan-y, 0px)) scale(0.82) rotate(var(--fan-rot, 0deg));
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+.fan-in {
+  animation: fan-in 0.66s var(--ease-spring) both;
+  animation-delay: var(--fan-delay, 0ms);
+}
+
+/* Each card arrives from below, slightly turned, and squares up into the
+   stack — the tell that this is a deck and not a page. Back card first
+   (--deal-delay), so the stack builds under the one you'll actually decide. */
+/* The opacity ramp is deliberately over almost before it starts. A card that
+   fades across its whole travel is see-through while the next one is already
+   moving, and three translucent full-screen cards on top of each other read as
+   a smear, not a deck. Each card goes solid early and then simply arrives. */
+@keyframes deal-in {
+  0% {
+    opacity: 0;
+    transform: translateY(26%) rotate(var(--deal-rot, 4deg)) scale(0.95);
+  }
+  22% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+.deal-in {
+  animation: deal-in 0.52s var(--ease-spring) both;
+  animation-delay: var(--deal-delay, 0ms);
+}
+
+/* The top card's photo lands: a hair of zoom coming to rest, over a beat long
+   enough to still be settling while you read the name. */
+@keyframes photo-settle {
+  from { transform: scale(1.05); }
+  to { transform: none; }
+}
+.photo-settle {
+  animation: photo-settle 1.1s var(--ease-out) both;
+}
+
+/* The coach's controls, dealt in after the cards. Never from scale(0) —
+   they grow from something that was already there. */
+@keyframes coach-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.9); }
+  to { opacity: 1; transform: none; }
+}
+.coach-in {
+  animation: coach-in 0.34s var(--ease-spring) both;
+  animation-delay: var(--coach-delay, 0ms);
+}
+
+/* Reduced motion still gets the change — it just doesn't travel. Everything
+   above keeps its fade (which is what tells you the screen changed at all) and
+   loses its movement. */
+@keyframes quiet-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes quiet-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -299,10 +460,32 @@ body {
   .animate-pop {
     animation: none;
   }
-  .hint-x,
-  .hint-y {
+  .mode-in {
+    animation: quiet-in 0.2s ease both;
+  }
+  .mode-out {
+    animation: quiet-out 0.16s ease both;
+  }
+  .deal-in {
+    animation: quiet-in 0.24s ease both;
+    animation-delay: var(--deal-delay, 0ms);
+  }
+  .coach-in {
+    animation: quiet-in 0.24s ease both;
+    animation-delay: var(--coach-delay, 0ms);
+  }
+  .photo-settle {
     animation: none;
-    opacity: 0.6;
+  }
+  .fan-in {
+    animation: quiet-in 0.24s ease both;
+    animation-delay: var(--fan-delay, 0ms);
+  }
+  .reveal-light,
+  .reveal-ember,
+  .reveal-ring,
+  .reveal-flash {
+    display: none;
   }
   .me-pulse {
     animation: none;
