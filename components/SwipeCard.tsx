@@ -5,7 +5,6 @@ import {
   Star,
   MapPin,
   Clock,
-  ChevronsDown,
   Navigation,
   CalendarClock,
   SquarePen,
@@ -13,18 +12,35 @@ import {
 import { isOpenNow, type Place, type Visit } from "@/lib/types";
 import { coverPhoto, photosSorted, leadRating, leadPrice, stateMeta, hoursPill, directionsUrl } from "@/lib/format";
 import type { DeckCard } from "@/lib/deck";
+import { PoweredBySwiggy } from "./PoweredBySwiggy";
 
-// Room the pinned action bar (owned by SwipeMode) takes out of the card, so
-// neither the hero's info block nor the end of the scroll hides behind it.
-export const FOOTER_SPACE = 104;
+// Height of the coach bar SwipeMode deals in at the start of a run. The card
+// doesn't reserve it as padding any more — the bar is temporary now, so the
+// card's content flows to the bottom and the bar floats over it for its ~2.5s.
+export const FOOTER_SPACE = 124;
 
-// The colour the hero's scrim lands on. The body picks it up so the two meet as
-// one surface instead of a visible seam mid-scroll.
+// The card's own surface. The photo sits ON it rather than filling it, so this
+// is what you see above/below and between the sections.
 const BODY_BG = "#06070a";
 
-// Where the photo pager's tap zones start — clear of the mode switch, the lens
-// chip and the progress dots stacked above them.
-const PAGER_TOP = 148;
+// The photo keeps its OWN aspect, clamped to the standard photographic range:
+// 4:5 (portrait) at the tall end, 3:2 (landscape) at the wide end. Anything
+// outside that is cropped a little; nothing is ever stretched into a slot.
+// Before this the photo was `height: 100%` of a near-full-screen card — a slot
+// around 1:2, which meant a 3:2 restaurant shot lost two-thirds of its frame
+// and read as blown-up. 4:5 is also the no-photo default, so a card with no
+// image has the same shape as one with.
+const PHOTO_MIN = 0.8; // 4:5
+const PHOTO_MAX = 1.5; // 3:2
+const PHOTO_DEFAULT = 0.8;
+
+// Where the photo pager's tap zones start — below the floating chrome (the
+// lens chip and the mode switch) and the progress dots.
+const PAGER_TOP = 92;
+
+// Tail room under the last section, so the final control clears the home
+// indicator instead of sitting on it.
+const BODY_TAIL = "calc(2.5rem + env(safe-area-inset-bottom))";
 
 // Normalised display fields, so the card renders the same shape whether it's a
 // saved Place or a raw Swiggy result (which has no photos, tags or hours).
@@ -537,6 +553,11 @@ export default function SwipeCard({
                 ))}
               </div>
             )}
+
+            {/* Cl. 3.4(ii): the notation travels with the Swiggy content, so it
+                is on-screen for every deck card sourced from the MCP — and never
+                on a saved card, which owes Swiggy nothing. */}
+            {card.kind === "new" && <PoweredBySwiggy tone="overlay" className="mt-3" />}
 
             {/* the only thing that tells you there IS a below-the-fold */}
             {interactive && (

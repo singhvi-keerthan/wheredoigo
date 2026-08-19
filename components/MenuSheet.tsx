@@ -7,6 +7,7 @@ import type { TagNamespace } from "@/lib/types";
 import type { BrowseMode } from "./BrowseSheet";
 import { useSheetDrag } from "./useSheetDrag";
 import SyncSection from "./SyncSection";
+import { PoweredBySwiggy } from "./PoweredBySwiggy";
 
 // The menu — one hub over the map. Top half is Browse (five lenses on the same
 // library the map can't give you at a glance); bottom is the v1 backup story.
@@ -160,6 +161,16 @@ export default function MenuSheet({
             </span>
             <ChevronRight size={17} style={{ color: "var(--text-tertiary)" }} />
           </button>
+        </div>
+
+        {/* Dining attribution — same reason as the map one below: Cl. 3.4(ii) of
+            the Swiggy agreement. This is the standing app-level notation; the
+            per-surface ones live on the cards and sheets that show MCP data. */}
+        <div className="mt-4 flex flex-wrap items-baseline gap-x-1.5 px-1">
+          <span className="text-[11px]" style={{ color: "var(--text-tertiary)" }}>
+            Dining discovery and table booking —
+          </span>
+          <PoweredBySwiggy />
         </div>
 
         {/* Map attribution is legally required to stay visible. */}

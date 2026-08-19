@@ -15,6 +15,7 @@ import { resizeImage } from "@/lib/image";
 import PlaceWizard from "./PlaceWizard";
 import PhotoViewer from "./PhotoViewer";
 import { useSheetDrag } from "./useSheetDrag";
+import { PoweredBySwiggy } from "./PoweredBySwiggy";
 
 const STALE_MS = 30 * 24 * 60 * 60 * 1000; // re-enrich after ~30 days
 
@@ -348,6 +349,8 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
                 {place.googleRating != null ? `★ ${place.googleRating.toFixed(1)}` : "—"} · {priceSigns(place.googlePriceLevel)}
               </span>
             </div>
+            {/* Cl. 3.4(ii) — saved, but the reference data is still Swiggy's. */}
+            {place.source === "swiggy" && <PoweredBySwiggy className="mt-1.5" />}
           </Section>
 
           {/* tags — compact chips + Edit reveals the full editor */}

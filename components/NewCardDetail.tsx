@@ -10,6 +10,7 @@ import {
   type SwiggyError,
   type UserCoords,
 } from "@/lib/swiggyClient";
+import { PoweredBySwiggy } from "./PoweredBySwiggy";
 
 const GUESTS = 2; // this sheet books a table for two; book_table accepts 1–20
 
@@ -263,6 +264,10 @@ export default function NewCardDetail({
           >
             <Navigation size={14} strokeWidth={2.5} fill="currentColor" /> Directions
           </a>
+
+          {/* Cl. 3.4(ii) — this sheet is the deepest MCP surface (search, slots,
+              book), so the credit closes it out. */}
+          <PoweredBySwiggy className="mt-3 text-center" />
         </div>
       </div>
     </div>
