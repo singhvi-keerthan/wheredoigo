@@ -647,17 +647,17 @@ export default function SwipeMode({
         }}
       />
 
-      {/* ---- what this mode is showing. Top LEFT, where the map puts its own
-          name and count — the switch out of here is top right in both modes,
-          and AppShell owns it. Left says what you're looking at, right says
-          where you can go: the frame is constant, the world inside changes. */}
+      {/* ---- what this mode is showing. The top-left belongs to the wordmark
+          (AppShell renders it over us, in both modes, and it's the way out of
+          here) — so the lens sits opposite it, on the second line, across from
+          the gesture cue. */}
       <div
-        className="absolute left-4 top-[max(0.9rem,env(safe-area-inset-top))] flex"
-        style={{ zIndex: 10, maxWidth: "calc(100% - 130px)" }}
+        className="absolute right-4 top-[max(2.6rem,calc(env(safe-area-inset-top)+1.75rem))] flex"
+        style={{ zIndex: 10, maxWidth: "calc(100% - 200px)" }}
       >
         <button
           onClick={() => setLensOpen(true)}
-          className="press flex h-9 max-w-full items-center gap-1.5 rounded-full px-3"
+          className="press flex h-7 max-w-full items-center gap-1.5 rounded-full px-2.5"
           style={{
             background: "var(--glass)",
             backdropFilter: "blur(22px) saturate(1.3)",
@@ -667,8 +667,8 @@ export default function SwipeMode({
             color: "oklch(0.9 0 0)",
           }}
         >
-          <SlidersHorizontal size={12} strokeWidth={2.5} />
-          <span className="truncate text-[12.5px] font-semibold">
+          <SlidersHorizontal size={11} strokeWidth={2.5} />
+          <span className="truncate text-[11.5px] font-semibold">
             {sourceLabel}
             {lens.summary.length > 0 && (
               <span className="capitalize"> · {lens.summary.join(" · ")}</span>

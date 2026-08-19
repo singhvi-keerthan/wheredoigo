@@ -8,10 +8,13 @@ import { useEffect, useRef } from "react";
 //   1 · the tell        the title compresses, every pin flinches. Nothing has
 //                       moved yet — anticipation is what separates a reveal
 //                       from a cut, and it costs 200ms.
-//   2 · the stage clears night washes out from the point you touched; the
-//                       masthead lifts off, the dock drops through the floor.
-//                       The mode switch does NOT move (AppShell owns it, above
-//                       everything) — it's the anchor that says same app.
+//   2 · the stage clears night washes out from the point you touched; the count
+//                       line, the mode switch and the dock all leave. The
+//                       WORDMARK does not: it holds its position through the
+//                       whole sequence, turning from dark ink to light as the
+//                       night arrives behind it. It's the anchor that says same
+//                       app — and on the far side it's the deck's own header,
+//                       and the way back out.
 //   3 · lights on       your pins are the only lit thing left, and hairlines
 //                       briefly wire them together: they're a set.
 //   4 · the gathering   they arc inward on curves, stretching into comets.
@@ -33,7 +36,7 @@ export const BEATS = {
   ignite: 460,
   gather: 660,
   flash: 1000,
-  deal: 1060, // AppShell mounts SwipeMode here; the switch's thumb crosses now
+  deal: 1060, // AppShell mounts SwipeMode here — the cards come out of the flare
   end: 1900,
 };
 

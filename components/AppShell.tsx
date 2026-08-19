@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Search, Plus, Menu, MapPin, TriangleAlert } from "lucide-react";
+import { Search, Plus, Menu, MapPin, TriangleAlert, MousePointerClick } from "lucide-react";
 import { usePlaces, usePersistError } from "@/lib/store";
 import { displayState, type DisplayState } from "@/lib/types";
 import { cityLabel } from "@/lib/city";
@@ -86,6 +86,8 @@ export default function AppShell() {
   const headerRef = useRef<HTMLElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
+  const countRef = useRef<HTMLParagraphElement>(null);
+  const switchRef = useRef<HTMLDivElement>(null);
   const flick = useRef<{ x: number; t: number } | null>(null);
 
   // Where each place sits on screen right now, read straight off the map's
@@ -124,12 +126,24 @@ export default function AppShell() {
       ],
       { duration: 200, easing: "cubic-bezier(0.34,1.56,0.64,1)" }
     );
-    headerRef.current?.animate(
+    // Everything AROUND the name leaves; the name itself holds its position
+    // through the whole sequence. It's the anchor — the thing that says this is
+    // still the same app — and on the far side of the flash it's the header the
+    // deck keeps. (React unmounts the count and the switch when the mode flips;
+    // these animations carry them out before that happens.)
+    countRef.current?.animate(
       [
         { transform: "translateY(0)", opacity: 1 },
-        { transform: "translateY(-46px)", opacity: 0 },
+        { transform: "translateY(-22px)", opacity: 0 },
       ],
-      { duration: 300, delay: BEATS.wash + 20, easing: ease, fill: "both" }
+      { duration: 260, delay: BEATS.wash + 20, easing: ease, fill: "both" }
+    );
+    switchRef.current?.animate(
+      [
+        { transform: "scale(1)", opacity: 1 },
+        { transform: "scale(0.86)", opacity: 0 },
+      ],
+      { duration: 240, delay: BEATS.wash + 40, easing: ease, fill: "both" }
     );
     dockRef.current?.animate(
       [
@@ -156,6 +170,19 @@ export default function AppShell() {
       setSwipeClosing(true); // SwipeMode fades out, then calls onClosed
     }
   };
+  // The wordmark is the toggle now, so it needs to know which way it points.
+  // `inDeck` is true from the first frame of the reveal, not from the flash —
+  // the header has to outrank the reveal layer and turn to light with it.
+  const inDeck = mode === "swipe" || !!reveal;
+  const onMap = !inDeck;
+  const toggleByTitle = (x: number, y: number) => {
+    if (inDeck) {
+      if (!swipeClosing) setSwipeClosing(true);
+    } else {
+      openSwipe(x, y);
+    }
+  };
+
   const leaveSwipe = () => {
     setMode("map");
     setSwipeClosing(false);
@@ -211,22 +238,34 @@ export default function AppShell() {
         style={{ background: "linear-gradient(180deg, rgba(243,243,240,0.95), rgba(243,243,240,0))" }}
       />
 
-      {/* ===================== MASTHEAD — dark ink on the light map ===================== */}
-      {/* Title row and menu share one line (menu centred on the name), with the
-          count line tucked underneath — so the masthead reads as one unit, not
-          a name floating above a lower-sitting button. */}
-      {/* The right padding is the mode switch's berth: it is rendered outside
-          this header (it has to outrank swipe mode), so the header leaves it a
-          hole rather than overlapping it. */}
-      <header ref={headerRef} className="fixed inset-x-0 top-0 z-10 pl-5 pr-[98px] pt-[max(0.9rem,env(safe-area-inset-top))]">
+      {/* ===================== MASTHEAD — the app's name, and its mode toggle =====================
+          The wordmark is the one thing on screen in BOTH modes, at the same
+          coordinates, in the same size — so it is what the mode change happens
+          around, and it is what you act on to change it. Double-tap it (or
+          flick across it) to open the deck; do the same to come back. On the
+          map it sits in dark ink over the paper; in the deck it turns to light
+          as the night washes in behind it.
+
+          It outranks the reveal (58) and swipe mode (52) while either is up,
+          and drops back to 10 on the map so the sheets can cover it. */}
+      <header
+        ref={headerRef}
+        className={`fixed inset-x-0 top-0 ${inDeck ? "z-[59]" : "z-10"} pl-5 ${onMap ? "pr-[98px]" : "pr-5"} pt-[max(0.9rem,env(safe-area-inset-top))]`}
+      >
         <div className="flex items-center justify-between">
-          {/* The hidden way in. Double-tap the app's own name, or flick across
-              it, and the deck opens — the same reveal as the switch, started
-              from wherever your thumb was. The switch is how you're meant to
-              FIND the mode; this is how it's meant to feel once you know. */}
           <h1
             ref={titleRef}
-            onDoubleClick={(e) => openSwipe(e.clientX, e.clientY)}
+            role="button"
+            tabIndex={0}
+            aria-label={inDeck ? "Back to the map" : "Open the deck"}
+            onDoubleClick={(e) => toggleByTitle(e.clientX, e.clientY)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                const r = e.currentTarget.getBoundingClientRect();
+                toggleByTitle(r.left + r.width / 2, r.top + r.height / 2);
+              }
+            }}
             onPointerDown={(e) => {
               flick.current = { x: e.clientX, t: e.timeStamp };
             }}
@@ -234,19 +273,24 @@ export default function AppShell() {
               const f = flick.current;
               flick.current = null;
               if (f && Math.abs(e.clientX - f.x) > 30 && e.timeStamp - f.t < 600) {
-                openSwipe(e.clientX, e.clientY);
+                toggleByTitle(e.clientX, e.clientY);
               }
             }}
             onPointerCancel={() => {
               flick.current = null;
             }}
-            className="font-medium leading-none tracking-[-0.015em]"
+            className="press font-medium leading-none tracking-[-0.015em]"
             style={{
               touchAction: "pan-y",
               WebkitUserSelect: "none",
               userSelect: "none",
+              cursor: "pointer",
               fontFamily: "var(--font-display)",
-              color: "#16181d",
+              // Dark ink on the paper map, light once the night is behind it.
+              // The delay lets the wash get going first, so the letters change
+              // with the world rather than ahead of it.
+              color: inDeck ? "#f4f0ee" : "#16181d",
+              transition: "color 0.42s ease 0.12s",
               // Scales so the full 18-char name never clips against the
               // controls. The 18 characters measure 10.15em wide in Zodiak
               // (measured, not guessed — the 8.81 that used to be here was too
@@ -258,38 +302,57 @@ export default function AppShell() {
           >
             wheredoigokeerthan
           </h1>
-          <button
-            onClick={() => setMenuOpen(true)}
-            aria-label="Menu"
-            className="press grid h-9 w-9 shrink-0 place-items-center rounded-full"
-            style={GLASS}
-          >
-            <Menu size={17} style={{ color: "oklch(0.9 0 0)" }} />
-          </button>
+          {onMap && (
+            <button
+              onClick={() => setMenuOpen(true)}
+              aria-label="Menu"
+              className="press grid h-9 w-9 shrink-0 place-items-center rounded-full"
+              style={GLASS}
+            >
+              <Menu size={17} style={{ color: "oklch(0.9 0 0)" }} />
+            </button>
+          )}
         </div>
+
         {/* Count + where those places actually are. The city was hard-coded to
             Bengaluru, which quietly lied the moment a pin landed anywhere else;
-            it is derived now, and says nothing at all rather than guess. */}
-        <p className="mt-1.5 text-[11px]" style={{ color: "#5b6470" }}>
-          <span style={{ fontFamily: "var(--font-mono)", color: "#16181d", fontWeight: 500 }}>
-            {places.length}
-          </span>{" "}
-          {places.length === 1 ? "place" : "places"}
-          {where && ` · ${where}`}
+            it is derived now, and says nothing at all rather than guess. It
+            describes the MAP, so it leaves with the map. */}
+        {onMap && (
+          <p ref={countRef} className="mt-1.5 text-[11px]" style={{ color: "#5b6470" }}>
+            <span style={{ fontFamily: "var(--font-mono)", color: "#16181d", fontWeight: 500 }}>
+              {places.length}
+            </span>{" "}
+            {places.length === 1 ? "place" : "places"}
+            {where && ` · ${where}`}
+          </p>
+        )}
+
+        {/* The gesture, said out loud. It has to be permanent rather than a
+            first-run coach: in the deck this IS the way out, and a control
+            whose only instruction has already faded is a trap. */}
+        <p
+          className="mt-1.5 flex items-center gap-1.5 text-[10.5px]"
+          style={{
+            fontFamily: "var(--font-mono)",
+            letterSpacing: "0.04em",
+            color: inDeck ? "rgba(244,240,238,0.5)" : "#8a93a0",
+            transition: "color 0.42s ease 0.12s",
+          }}
+        >
+          <MousePointerClick size={11} strokeWidth={2.25} className="tap-cue" />
+          {inDeck ? "double-tap the name for the map" : "double-tap the name for the deck"}
         </p>
       </header>
 
-      {/* The one piece of chrome that belongs to the APP rather than to either
-          mode. Rendered here, above swipe mode (z-52) and below any sheet it
-          opens (z-54+), so it never unmounts and never moves: the map dissolves
-          into the deck behind a control that stays exactly where your thumb
-          left it. Its `mode` flips the instant you ask, not when the old mode
-          finishes leaving — the thumb slides while the deck recedes. */}
-      <div
-        className="fixed right-5 top-[max(0.9rem,env(safe-area-inset-top))] z-[53]"
-      >
-        <ModeSwitch mode={swipeClosing ? "map" : mode} onChange={changeMode} />
-      </div>
+      {/* The map's own mode control. It does NOT follow you into the deck —
+          in there the wordmark above is the toggle, and a second control saying
+          the same thing would just be furniture over the card. */}
+      {onMap && (
+        <div ref={switchRef} className="fixed right-5 top-[max(0.9rem,env(safe-area-inset-top))] z-[53]">
+          <ModeSwitch mode={swipeClosing ? "map" : mode} onChange={changeMode} />
+        </div>
+      )}
 
       {/* storage failure — silent persist loss is the one unforgivable state */}
       {persistError && (

@@ -298,6 +298,19 @@ body {
   pointer-events: none;
 }
 
+/* The gesture cue under the wordmark. A double blink, because the gesture is a
+   double tap — the shape of the animation is the instruction. Slow and low
+   contrast: it has to be permanent (in the deck it's the only way out), and a
+   permanent hint that pulses hard becomes something you resent. */
+@keyframes tap-cue {
+  0%, 62%, 100% { opacity: 0.5; transform: scale(1); }
+  8%, 24% { opacity: 1; transform: scale(1.22); }
+  16%, 32% { opacity: 0.5; transform: scale(1); }
+}
+.tap-cue {
+  animation: tap-cue 4.2s var(--ease-out) infinite;
+}
+
 /* ---- the reveal (map -> swipe) ----
    The deck isn't a screen that replaces the map; it's made out of the places on
    it, and this is where that happens. Beats 1-5 are drawn by ModeReveal over
@@ -476,6 +489,10 @@ body {
   }
   .photo-settle {
     animation: none;
+  }
+  .tap-cue {
+    animation: none;
+    opacity: 0.8;
   }
   .fan-in {
     animation: quiet-in 0.24s ease both;
