@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Place } from "@/lib/types";
 import { displayState } from "@/lib/types";
 import { DEFAULT_VIEW } from "@/lib/seed";
+import { cityOf } from "@/lib/city";
 import { noteGpsFix, noteMapCenter, onGeoGranted } from "@/lib/bias";
 import Pin, { type PinVariant } from "./Pin";
 import PlaceGlyph from "./PlaceGlyph";
@@ -24,6 +25,21 @@ const STATE_VAR: Record<string, string> = {
 function cssVar(name: string): string {
   if (typeof window === "undefined") return "#ffffff";
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#fff";
+}
+
+// The places in whichever city has the most of them — the shared view's
+// opening frame. Ties keep the first city seen, which is stable because the
+// records arrive in a fixed order.
+function largestCity(places: Place[]): Place[] {
+  // A plain record, not a Map — `Map` is react-map-gl's component in this file.
+  const byCity: Record<string, Place[]> = {};
+  for (const p of places) {
+    const key = cityOf(p) || "?";
+    (byCity[key] ??= []).push(p);
+  }
+  let best: Place[] = [];
+  for (const group of Object.values(byCity)) if (group.length > best.length) best = group;
+  return best.length ? best : places;
 }
 
 // Zoom → pin detail. The 40px label-sticker pins collide into soup on a
@@ -46,10 +62,17 @@ export default function MapView({
   places,
   selectedId,
   onSelect,
+  shared = false,
 }: {
   places: Place[];
   selectedId: string | null;
   onSelect: (id: string | null) => void;
+  // The /go share view renders this same map for someone who is not Keerthan.
+  // Two things have to change for them and nothing else: the map opens on the
+  // PLACES rather than on the viewer (a friend across town would otherwise get
+  // their own empty neighbourhood and never see a pin), and the "you are here"
+  // marker drops the avatar, because that face is his.
+  shared?: boolean;
 }) {
   const mapRef = useRef<MapRef | null>(null);
   const [band, setBand] = useState<PinVariant>(() => bandFor(DEFAULT_VIEW.zoom));
@@ -159,15 +182,16 @@ export default function MapView({
   // resolves first wins, and only once.
   const viewSet = useRef(false);
 
-  // 1. Your location, the moment there is a fix.
+  // 1. Your location, the moment there is a fix. Never on the shared view —
+  //    there, the places ARE the subject and the viewer is incidental.
   useEffect(() => {
-    if (viewSet.current || !ready || !me) return;
+    if (shared || viewSet.current || !ready || !me) return;
     const map = mapRef.current?.getMap();
     if (!map) return;
     viewSet.current = true;
     map.jumpTo({ center: [me.lng, me.lat], zoom: ME_ZOOM });
     setBand(bandFor(ME_ZOOM));
-  }, [ready, me]);
+  }, [ready, me, shared]);
 
   // 2. Fallback: fit the saved places — but give the fix a moment to land
   //    first. Records hydrate from localStorage instantly while a GPS fix takes
@@ -189,8 +213,14 @@ export default function MapView({
       );
       if (!locatable.length) return;
       viewSet.current = true;
-      const lngs = locatable.map((p) => p.lng);
-      const lats = locatable.map((p) => p.lat);
+      // Fit the biggest CITY, not every pin. Fitting all of them is right for
+      // one city and useless across several: a library spanning Bengaluru,
+      // Mumbai and Jaipur frames the whole subcontinent, and the share link
+      // opens on four grey dots and an ocean. The city with the most places is
+      // the one the map is about; the rest are a pan away.
+      const fit = shared ? largestCity(locatable) : locatable;
+      const lngs = fit.map((p) => p.lng);
+      const lats = fit.map((p) => p.lat);
       map.fitBounds(
         [
           [Math.min(...lngs), Math.min(...lats)],
@@ -201,9 +231,9 @@ export default function MapView({
         { padding: { top: 96, bottom: 240, left: 48, right: 48 }, maxZoom: 14, duration: 0 }
       );
       setBand(bandFor(map.getZoom()));
-    }, LOCATION_GRACE_MS);
+    }, shared ? 0 : LOCATION_GRACE_MS);
     return () => window.clearTimeout(t);
-  }, [ready, places]);
+  }, [ready, places, shared]);
 
   // Fly to a place when it becomes selected (pin tap or search pick). Bottom
   // padding keeps the pin above the docked sheet.
@@ -332,7 +362,14 @@ export default function MapView({
           <div className="me-marker light-on" aria-label="You are here">
             <span className="me-pulse" />
             <span className="me-shadow" />
-            <img src="/me.png" alt="" className="me-avatar" draggable={false} />
+            {shared ? (
+              <span
+                className="block rounded-full"
+                style={{ width: 16, height: 16, background: "#2b6df6", border: "2.5px solid #fff", boxShadow: "0 2px 8px rgba(0,0,0,0.35)" }}
+              />
+            ) : (
+              <img src="/me.png" alt="" className="me-avatar" draggable={false} />
+            )}
           </div>
         </Marker>
       )}

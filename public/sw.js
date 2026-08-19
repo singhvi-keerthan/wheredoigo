@@ -2,7 +2,7 @@
 // offline. Network-first for navigations (always get the latest build),
 // cache-first for static assets. Never touches /api or cross-origin (map tiles,
 // Google) — those always hit the network.
-const CACHE = "wheredoigokeerthan-v2";
+const CACHE = "wheredoigokeerthan-v3";
 const SHELL = ["/", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (e) => {
@@ -31,14 +31,18 @@ self.addEventListener("fetch", (e) => {
   if (url.pathname.startsWith("/api/")) return;
 
   if (request.mode === "navigate") {
+    // Cache each navigation under its OWN url. This used to store every
+    // navigation under "/", which was harmless with one page and wrong the
+    // moment a second one existed: opening /go would overwrite the cached app
+    // shell with the share view (and vice versa).
     e.respondWith(
       fetch(request)
         .then((r) => {
           const copy = r.clone();
-          caches.open(CACHE).then((c) => c.put("/", copy));
+          caches.open(CACHE).then((c) => c.put(request, copy));
           return r;
         })
-        .catch(() => caches.match("/"))
+        .catch(() => caches.match(request).then((cached) => cached || caches.match("/")))
     );
     return;
   }

@@ -121,3 +121,17 @@ export async function pushTags(owner: string, rows: TagRow[]): Promise<void> {
     )
   );
 }
+
+// Every LIVE record for an owner (tombstones excluded), newest write first.
+// The share view's read (lib/public.ts) — it wants the current library, not a
+// sync delta, so it takes no cursor and never sees a deleted place.
+export async function pullLive(owner: string): Promise<PlaceRow[]> {
+  const s = db();
+  const rows = await s`select id, data,
+              to_char(updated_at at time zone 'UTC', ${ISO}) as updated_at,
+              null as deleted_at
+            from places
+            where owner = ${owner} and deleted_at is null
+            order by updated_at desc`;
+  return rows as PlaceRow[];
+}

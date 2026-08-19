@@ -18,7 +18,9 @@ export default function PhotoViewer({
   photos: Photo[];
   startIndex: number;
   onClose: () => void;
-  onDelete: (photoId: string) => void;
+  // Optional: the share view (/go) shows the same carousel with no way to
+  // delete, so the button is absent rather than inert.
+  onDelete?: (photoId: string) => void;
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const [index, setIndex] = useState(() => Math.min(startIndex, Math.max(0, photos.length - 1)));
@@ -102,14 +104,19 @@ export default function PhotoViewer({
             {index + 1}/{photos.length}
           </span>
         )}
-        <button
-          onClick={() => onDelete(current.id)}
-          aria-label="Delete photo"
-          className="press pointer-events-auto grid h-9 w-9 place-items-center rounded-full"
-          style={{ background: "rgba(255,255,255,0.14)", color: "#fff" }}
-        >
-          <Trash2 size={16} strokeWidth={2.25} />
-        </button>
+        {onDelete ? (
+          <button
+            onClick={() => onDelete(current.id)}
+            aria-label="Delete photo"
+            className="press pointer-events-auto grid h-9 w-9 place-items-center rounded-full"
+            style={{ background: "rgba(255,255,255,0.14)", color: "#fff" }}
+          >
+            <Trash2 size={16} strokeWidth={2.25} />
+          </button>
+        ) : (
+          // keeps the counter centred between close and this slot
+          <span className="h-9 w-9" />
+        )}
       </div>
     </div>,
     document.body
