@@ -34,7 +34,7 @@ const PHOTO_DEFAULT = 0.8;
 const PHOTO_NONE = 1.5;
 
 // Where the photo pager's tap zones start — below the floating chrome (the
-// lens chip and the mode switch) and the progress dots.
+// wordmark and the lens chip) and the progress dots.
 const PAGER_TOP = 92;
 
 // Tail room under the last section, so the final control clears the home
@@ -440,7 +440,7 @@ export default function SwipeCard({
             />
           )}
 
-          {/* Top wash — the floating chrome (lens chip, mode switch) sits over
+          {/* Top wash — the floating chrome (wordmark, lens chip) sits over
               this corner of the photo and has to stay legible on a bright one. */}
           <div
             className="pointer-events-none absolute inset-x-0 top-0 h-24"

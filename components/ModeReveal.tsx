@@ -9,7 +9,7 @@ import { useEffect, useRef } from "react";
 //                       moved yet — anticipation is what separates a reveal
 //                       from a cut, and it costs 200ms.
 //   2 · the stage clears night washes out from the point you touched; the count
-//                       line, the mode switch and the dock all leave. The
+//                       line and the dock leave. The
 //                       WORDMARK does not: it holds its position through the
 //                       whole sequence, turning from dark ink to light as the
 //                       night arrives behind it. It's the anchor that says same

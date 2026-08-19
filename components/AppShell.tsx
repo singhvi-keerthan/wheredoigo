@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Search, Plus, Menu, MapPin, TriangleAlert, MousePointerClick } from "lucide-react";
+import { Search, Plus, Menu, MapPin, TriangleAlert, ChevronLeft, ChevronRight } from "lucide-react";
 import { usePlaces, usePersistError } from "@/lib/store";
 import { displayState, type DisplayState } from "@/lib/types";
 import { cityLabel } from "@/lib/city";
@@ -11,11 +11,16 @@ import PlaceDetail from "./PlaceDetail";
 import CommandPalette from "./CommandPalette";
 import AddPlaceSheet from "./AddPlaceSheet";
 import SwipeMode from "./SwipeMode";
-import ModeSwitch, { type AppMode } from "./ModeSwitch";
 import PlaceWizard from "./PlaceWizard";
 import MenuSheet from "./MenuSheet";
 import BrowseSheet, { type BrowseMode } from "./BrowseSheet";
 import ModeReveal, { BEATS, type RevealSpec } from "./ModeReveal";
+
+// The app's two ways of looking at the same places. There is no control for
+// this any more: the wordmark IS the toggle, in both modes. Double-tap it or
+// swipe across it. A segmented pill said the same thing in a second voice, and
+// on the map it was a third row of chrome in the busiest corner of the screen.
+type AppMode = "map" | "swipe";
 
 type FilterKey = "all" | DisplayState;
 
@@ -87,8 +92,11 @@ export default function AppShell() {
   const dockRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const countRef = useRef<HTMLParagraphElement>(null);
-  const switchRef = useRef<HTMLDivElement>(null);
   const flick = useRef<{ x: number; t: number } | null>(null);
+  // The arrow's label: says where you're going for a few seconds after you
+  // arrive in a mode, and any time you touch the arrow. Not permanent — an
+  // instruction that never leaves stops being read.
+  const [tell, setTell] = useState(true);
 
   // Where each place sits on screen right now, read straight off the map's
   // markers. Deliberately DOM-side: MapView owns the map instance, and the pins
@@ -113,7 +121,7 @@ export default function AppShell() {
 
   // Beat 1 and 2, on the real chrome: the title compresses under your thumb,
   // then the masthead lifts off the top and the dock drops through the floor.
-  // The mode switch is NOT in here — it holds its position through the whole
+  // The wordmark is NOT in here — it holds its position through the whole
   // sequence, which is what says "same app" rather than "new screen".
   const clearTheStage = () => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
@@ -129,21 +137,14 @@ export default function AppShell() {
     // Everything AROUND the name leaves; the name itself holds its position
     // through the whole sequence. It's the anchor — the thing that says this is
     // still the same app — and on the far side of the flash it's the header the
-    // deck keeps. (React unmounts the count and the switch when the mode flips;
-    // these animations carry them out before that happens.)
+    // deck keeps. (React unmounts the count line when the mode flips; this
+    // carries it out before that happens.)
     countRef.current?.animate(
       [
         { transform: "translateY(0)", opacity: 1 },
         { transform: "translateY(-22px)", opacity: 0 },
       ],
       { duration: 260, delay: BEATS.wash + 20, easing: ease, fill: "both" }
-    );
-    switchRef.current?.animate(
-      [
-        { transform: "scale(1)", opacity: 1 },
-        { transform: "scale(0.86)", opacity: 0 },
-      ],
-      { duration: 240, delay: BEATS.wash + 40, easing: ease, fill: "both" }
     );
     dockRef.current?.animate(
       [
@@ -160,16 +161,6 @@ export default function AppShell() {
     setReveal({ ox, oy, pins: capturePins() });
   };
 
-  const changeMode = (m: AppMode) => {
-    if (m === "swipe") {
-      // The reveal starts under the control you actually pressed.
-      const el = document.querySelector<HTMLElement>('[role="group"][aria-label="View"]');
-      const r = el?.getBoundingClientRect();
-      openSwipe(r ? r.left + r.width / 2 : window.innerWidth - 55, r ? r.top + r.height / 2 : 30);
-    } else if (mode === "swipe") {
-      setSwipeClosing(true); // SwipeMode fades out, then calls onClosed
-    }
-  };
   // The wordmark is the toggle now, so it needs to know which way it points.
   // `inDeck` is true from the first frame of the reveal, not from the flash —
   // the header has to outrank the reveal layer and turn to light with it.
@@ -182,6 +173,17 @@ export default function AppShell() {
       openSwipe(x, y);
     }
   };
+
+  // Re-armed on every mode change: the cleanup puts the label back up, the
+  // timer takes it down again. Deliberately not set at the head of the effect —
+  // a run shouldn't open by setting state during its own first commit.
+  useEffect(() => {
+    const t = window.setTimeout(() => setTell(false), 3200);
+    return () => {
+      clearTimeout(t);
+      setTell(true);
+    };
+  }, [inDeck]);
 
   const leaveSwipe = () => {
     setMode("map");
@@ -250,9 +252,10 @@ export default function AppShell() {
           and drops back to 10 on the map so the sheets can cover it. */}
       <header
         ref={headerRef}
-        className={`fixed inset-x-0 top-0 ${inDeck ? "z-[59]" : "z-10"} pl-5 ${onMap ? "pr-[98px]" : "pr-5"} pt-[max(0.9rem,env(safe-area-inset-top))]`}
+        className={`fixed inset-x-0 top-0 ${inDeck ? "z-[59]" : "z-10"} px-5 pt-[max(0.9rem,env(safe-area-inset-top))]`}
       >
         <div className="flex items-center justify-between">
+          <div className="flex min-w-0 items-center">
           <h1
             ref={titleRef}
             role="button"
@@ -291,17 +294,53 @@ export default function AppShell() {
               // with the world rather than ahead of it.
               color: inDeck ? "#f4f0ee" : "#16181d",
               transition: "color 0.42s ease 0.12s",
-              // Scales so the full 18-char name never clips against the
-              // controls. The 18 characters measure 10.15em wide in Zodiak
-              // (measured, not guessed — the 8.81 that used to be here was too
-              // low and only survived because the reserve was smaller); 164px
-              // is everything to the right of the name: gap, menu button, gap,
-              // mode switch, and the page's own side padding.
-              fontSize: "min(26px, calc((100vw - 164px) / 10.2))",
+              // Scales so the full 18-char name never clips against the menu
+              // button. The 18 characters measure 10.15em wide in Zodiak
+              // (measured, not guessed). 86px is everything else on the row:
+              // both side paddings, the gap, and the button. Dropping the mode
+              // pill gave the name back its full 26px on any normal phone.
+              fontSize: "min(26px, calc((100vw - 86px) / 10.2))",
             }}
           >
             wheredoigokeerthan
           </h1>
+
+          {/* The affordance. A line of standing instructions under the name was
+              a wall of text you'd read once and then never see again; an arrow
+              is a thing you press. It points where it takes you — right, out of
+              the map into the deck; left, back — and nudges on its own so it
+              also reads as "you can swipe this". Pressing it does exactly what
+              the gesture does, so nobody has to know the gesture to get in.
+
+              The label beside it is what tells you where you're going. It is
+              on the line below (see it there) so it has room in both modes —
+              beside the arrow it landed underneath the menu button. It shows
+              for a few seconds on arriving in each mode, then again whenever
+              you touch the arrow. */}
+          <span className="relative ml-1.5 flex shrink-0 items-center">
+            <button
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                toggleByTitle(r.left + r.width / 2, r.top + r.height / 2);
+              }}
+              onPointerEnter={() => setTell(true)}
+              onPointerLeave={() => setTell(false)}
+              onPointerDown={() => setTell(true)}
+              aria-label={inDeck ? "Back to the map" : "Open the swipe deck"}
+              className="press grid h-7 w-7 place-items-center rounded-full"
+              style={{
+                color: inDeck ? "rgba(244,240,238,0.9)" : "#3f4652",
+                transition: "color 0.42s ease 0.12s",
+              }}
+            >
+              {inDeck ? (
+                <ChevronLeft size={20} strokeWidth={2.5} className="arrow-nudge" style={{ "--nudge": "-3px" } as CSSProperties} />
+              ) : (
+                <ChevronRight size={20} strokeWidth={2.5} className="arrow-nudge" style={{ "--nudge": "3px" } as CSSProperties} />
+              )}
+            </button>
+          </span>
+          </div>
           {onMap && (
             <button
               onClick={() => setMenuOpen(true)}
@@ -318,41 +357,34 @@ export default function AppShell() {
             Bengaluru, which quietly lied the moment a pin landed anywhere else;
             it is derived now, and says nothing at all rather than guess. It
             describes the MAP, so it leaves with the map. */}
-        {onMap && (
-          <p ref={countRef} className="mt-1.5 text-[11px]" style={{ color: "#5b6470" }}>
-            <span style={{ fontFamily: "var(--font-mono)", color: "#16181d", fontWeight: 500 }}>
-              {places.length}
-            </span>{" "}
-            {places.length === 1 ? "place" : "places"}
-            {where && ` · ${where}`}
-          </p>
-        )}
-
-        {/* The gesture, said out loud. It has to be permanent rather than a
-            first-run coach: in the deck this IS the way out, and a control
-            whose only instruction has already faded is a trap. */}
-        <p
-          className="mt-1.5 flex items-center gap-1.5 text-[10.5px]"
-          style={{
-            fontFamily: "var(--font-mono)",
-            letterSpacing: "0.04em",
-            color: inDeck ? "rgba(244,240,238,0.5)" : "#8a93a0",
-            transition: "color 0.42s ease 0.12s",
-          }}
-        >
-          <MousePointerClick size={11} strokeWidth={2.25} className="tap-cue" />
-          {inDeck ? "double-tap the name for the map" : "double-tap the name for the deck"}
-        </p>
-      </header>
-
-      {/* The map's own mode control. It does NOT follow you into the deck —
-          in there the wordmark above is the toggle, and a second control saying
-          the same thing would just be furniture over the card. */}
-      {onMap && (
-        <div ref={switchRef} className="fixed right-5 top-[max(0.9rem,env(safe-area-inset-top))] z-[53]">
-          <ModeSwitch mode={swipeClosing ? "map" : mode} onChange={changeMode} />
+        <div className="mt-1.5 flex items-center gap-3">
+          {onMap && (
+            <p ref={countRef} className="text-[11px]" style={{ color: "#5b6470" }}>
+              <span style={{ fontFamily: "var(--font-mono)", color: "#16181d", fontWeight: 500 }}>
+                {places.length}
+              </span>{" "}
+              {places.length === 1 ? "place" : "places"}
+              {where && ` · ${where}`}
+            </p>
+          )}
+          {/* Fades rather than unmounts, so nothing on this line ever moves. */}
+          <span
+            aria-hidden
+            className="pointer-events-none ml-auto whitespace-nowrap text-[10.5px]"
+            style={{
+              fontFamily: "var(--font-mono)",
+              letterSpacing: "0.04em",
+              color: inDeck ? "rgba(244,240,238,0.62)" : "#8a93a0",
+              opacity: tell ? 1 : 0,
+              transform: tell ? "none" : "translateX(4px)",
+              transition: "opacity 0.32s ease, transform 0.32s ease, color 0.42s ease 0.12s",
+            }}
+          >
+            {inDeck ? "back to the map" : "the swipe deck"}
+          </span>
         </div>
-      )}
+
+      </header>
 
       {/* storage failure — silent persist loss is the one unforgivable state */}
       {persistError && (

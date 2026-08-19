@@ -101,12 +101,11 @@ function saveNew(r: SwiggyRestaurant): string {
 }
 
 // Swipe mode — one of the app's two ways of looking at your places, not a
-// feature of the other one. The switch between them is NOT in here (or in the
-// map's dock, where it used to sit as a third row of controls): AppShell renders
-// it once, above both modes, so it stays put while the world behind it changes.
-// That fixed control is what the entrance animates around. Because this is a
-// mode and not a destination, it carries its own lens (source + ask + filters)
-// instead of being handed one on the way in.
+// feature of the other one. There is no mode control in here, or anywhere: the
+// wordmark AppShell renders above both modes is the toggle, and it holds its
+// position while the world behind it changes. That's what the entrance animates
+// around. Because this is a mode and not a destination, it carries its own lens
+// (source + ask + filters) instead of being handed one on the way in.
 export default function SwipeMode({
   entrance = "deal",
   closing,
@@ -636,7 +635,7 @@ export default function SwipeMode({
         )}
       </div>
 
-      {/* Scrim under the floating chrome, so the lens chip and the mode switch
+      {/* Scrim under the floating chrome, so the wordmark and the lens chip
           stay legible over a bright photo. */}
       <div
         className="pointer-events-none absolute inset-x-0 top-0"
@@ -648,12 +647,12 @@ export default function SwipeMode({
       />
 
       {/* ---- what this mode is showing. The top-left belongs to the wordmark
-          (AppShell renders it over us, in both modes, and it's the way out of
-          here) — so the lens sits opposite it, on the second line, across from
-          the gesture cue. */}
+          (AppShell renders it over us, in both modes, along with the arrow
+          that is the way out of here) — so the lens drops to the second line,
+          opposite the arrow's label. */}
       <div
-        className="absolute right-4 top-[max(2.6rem,calc(env(safe-area-inset-top)+1.75rem))] flex"
-        style={{ zIndex: 10, maxWidth: "calc(100% - 200px)" }}
+        className="absolute left-4 top-[max(2.5rem,calc(env(safe-area-inset-top)+1.65rem))] flex"
+        style={{ zIndex: 10, maxWidth: "calc(100% - 150px)" }}
       >
         <button
           onClick={() => setLensOpen(true)}

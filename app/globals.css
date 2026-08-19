@@ -298,17 +298,15 @@ body {
   pointer-events: none;
 }
 
-/* The gesture cue under the wordmark. A double blink, because the gesture is a
-   double tap — the shape of the animation is the instruction. Slow and low
-   contrast: it has to be permanent (in the deck it's the only way out), and a
-   permanent hint that pulses hard becomes something you resent. */
-@keyframes tap-cue {
-  0%, 62%, 100% { opacity: 0.5; transform: scale(1); }
-  8%, 24% { opacity: 1; transform: scale(1.22); }
-  16%, 32% { opacity: 0.5; transform: scale(1); }
+/* The mode arrow beside the wordmark. It leans the way it takes you, on a long
+   slow cycle — enough to catch the eye as something live and to suggest that
+   the name can be swiped, quiet enough to sit there all day. */
+@keyframes arrow-nudge {
+  0%, 70%, 100% { transform: translateX(0); }
+  82% { transform: translateX(var(--nudge, 3px)); }
 }
-.tap-cue {
-  animation: tap-cue 4.2s var(--ease-out) infinite;
+.arrow-nudge {
+  animation: arrow-nudge 3.6s var(--ease-out) infinite;
 }
 
 /* ---- the reveal (map -> swipe) ----
@@ -490,9 +488,8 @@ body {
   .photo-settle {
     animation: none;
   }
-  .tap-cue {
+  .arrow-nudge {
     animation: none;
-    opacity: 0.8;
   }
   .fan-in {
     animation: quiet-in 0.24s ease both;
