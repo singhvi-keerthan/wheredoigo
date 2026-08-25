@@ -38,7 +38,7 @@ const UNDERLINE: Record<FilterKey, string> = {
 };
 
 const GLASS: CSSProperties = {
-  background: "rgba(22,24,30,0.66)",
+  background: "var(--glass)", // the token, not a copy of it — see --glass
   backdropFilter: "blur(22px) saturate(1.3)",
   WebkitBackdropFilter: "blur(22px) saturate(1.3)",
   border: "1px solid rgba(255,255,255,0.1)",

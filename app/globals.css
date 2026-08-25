@@ -123,8 +123,20 @@ body {
 .input-dark::placeholder {
   color: var(--text-tertiary);
 }
-.input-dark:focus {
-  border-color: var(--border-strong);
+.input-dark:focus-visible {
+  border-color: var(--accent);
+}
+
+/* ---- the focus ring ----
+   An outset ring in the app's own amber, offset off the control so it reads on
+   a dark sheet, on light paper, and over a photo alike — the three grounds this
+   app actually has. :focus-visible rather than :focus, so it answers the
+   keyboard and stays out of the way of a thumb; .press already confirms a tap
+   by scaling. Applied at :where() specificity so any component can override it
+   without an !important. */
+:where(a, button, input, textarea, select, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* Quiet scrollbars */
@@ -452,6 +464,24 @@ body {
 @keyframes quiet-out {
   from { opacity: 1; }
   to { opacity: 0; }
+}
+
+/* ---- Reduce Transparency ----
+   iOS and macOS both ship this switch beside Reduce Motion, and the app was
+   answering one and ignoring the other: every floating control is glass at
+   blur(22), and for someone who has asked the OS to stop that, all five of them
+   kept frosting. Blur off, and the tint goes opaque enough to hold its own
+   contrast without anything behind it doing the work. The glass recipe lives in
+   --glass, so this is one rule rather than a hunt through three components. */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --glass: oklch(0.22 0.006 265);
+  }
+  [style*="backdrop-filter"],
+  [style*="backdropFilter"] {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

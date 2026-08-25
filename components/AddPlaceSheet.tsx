@@ -83,6 +83,21 @@ export default function AddPlaceSheet({
   const [locating, setLocating] = useState(false);
   const [geoError, setGeoError] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
+
+  // Escape mirrors the Back button rather than closing outright: this sheet is
+  // several screens deep (menu → search/link/nearby → confirm) and a blunt
+  // dismiss halfway through would throw away a place you'd already picked.
+  // Step back one level; from the menu, leave. Same target the ArrowLeft uses.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (mode === "menu") onClose();
+      else setMode(mode === "confirm" && pending ? pending.backTo : "menu");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, mode, pending, onClose]);
   const [note, setNote] = useState("");
   const [reel, setReel] = useState(""); // optional Instagram reel link, taken on confirm
   // What kind of place this is. Seeded from Google's types where it knows, but

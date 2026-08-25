@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { X, Images, Store, UtensilsCrossed, MapPinned, Pizza, Download, Upload, ChevronRight } from "lucide-react";
 import { usePlaces, downloadBackup, importData } from "@/lib/store";
 import type { TagNamespace } from "@/lib/types";
@@ -23,6 +23,16 @@ export default function MenuSheet({
   const places = usePlaces();
   const fileRef = useRef<HTMLInputElement>(null);
   const { sheetRef, handleProps } = useSheetDrag(onClose);
+  // Escape closes, like every other sheet in the app. It was reachable only by
+  // tapping the scrim — which is a mouse/thumb affordance, not a keyboard one,
+  // and a scrim is not a control. Same shape PhotoViewer and BrowseSheet use.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   const photoCount = places.reduce((n, p) => n + p.photos.filter((ph) => ph.dataUrl).length, 0);
   const distinct = (ns: TagNamespace) =>
