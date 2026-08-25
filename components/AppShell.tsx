@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Search, Plus, Menu, MapPin, TriangleAlert, ChevronLeft, ChevronRight } from "lucide-react";
+import { Search, Plus, Menu, MapPin, TriangleAlert } from "lucide-react";
 import { usePlaces, usePersistError } from "@/lib/store";
 import { displayState, type DisplayState } from "@/lib/types";
 import { cityLabel } from "@/lib/city";
@@ -93,9 +93,10 @@ export default function AppShell() {
   const titleRef = useRef<HTMLHeadingElement>(null);
   const countRef = useRef<HTMLParagraphElement>(null);
   const flick = useRef<{ x: number; t: number } | null>(null);
-  // The arrow's label: says where you're going for a few seconds after you
-  // arrive in a mode, and any time you touch the arrow. Not permanent — an
-  // instruction that never leaves stops being read.
+  // The gesture's label: names the way through for a few seconds after you
+  // arrive in a mode, and then goes. Not permanent — an instruction that never
+  // leaves stops being read, and this is the only thing left that says the
+  // name is pressable, so it has to stay worth reading.
   const [tell, setTell] = useState(true);
 
   // Where each place sits on screen right now, read straight off the map's
@@ -249,13 +250,19 @@ export default function AppShell() {
           as the night washes in behind it.
 
           It outranks the reveal (58) and swipe mode (52) while either is up,
-          and drops back to 10 on the map so the sheets can cover it. */}
+          and drops back to 10 on the map so the sheets can cover it.
+
+          Because it outranks them it must not also CATCH for them: it's a
+          full-width transparent box two rows tall, and every tap that landed in
+          its empty space died there — including all of them aimed at swipe
+          mode's lens chip, which sits on the second line by design and was
+          therefore impossible to press. The header takes no pointer events; the
+          two things in it that are actually pressable take their own back. */}
       <header
         ref={headerRef}
-        className={`fixed inset-x-0 top-0 ${inDeck ? "z-[59]" : "z-10"} px-5 pt-[max(0.9rem,env(safe-area-inset-top))]`}
+        className={`pointer-events-none fixed inset-x-0 top-0 ${inDeck ? "z-[59]" : "z-10"} px-5 pt-[max(0.9rem,env(safe-area-inset-top))]`}
       >
         <div className="flex items-center justify-between">
-          <div className="flex min-w-0 items-center">
           <h1
             ref={titleRef}
             role="button"
@@ -282,7 +289,7 @@ export default function AppShell() {
             onPointerCancel={() => {
               flick.current = null;
             }}
-            className="press font-medium leading-none tracking-[-0.015em]"
+            className="press pointer-events-auto font-medium leading-none tracking-[-0.015em]"
             style={{
               touchAction: "pan-y",
               WebkitUserSelect: "none",
@@ -304,48 +311,11 @@ export default function AppShell() {
           >
             wheredoigokeerthan
           </h1>
-
-          {/* The affordance. A line of standing instructions under the name was
-              a wall of text you'd read once and then never see again; an arrow
-              is a thing you press. It points where it takes you — right, out of
-              the map into the deck; left, back — and nudges on its own so it
-              also reads as "you can swipe this". Pressing it does exactly what
-              the gesture does, so nobody has to know the gesture to get in.
-
-              The label beside it is what tells you where you're going. It is
-              on the line below (see it there) so it has room in both modes —
-              beside the arrow it landed underneath the menu button. It shows
-              for a few seconds on arriving in each mode, then again whenever
-              you touch the arrow. */}
-          <span className="relative ml-1.5 flex shrink-0 items-center">
-            <button
-              onClick={(e) => {
-                const r = e.currentTarget.getBoundingClientRect();
-                toggleByTitle(r.left + r.width / 2, r.top + r.height / 2);
-              }}
-              onPointerEnter={() => setTell(true)}
-              onPointerLeave={() => setTell(false)}
-              onPointerDown={() => setTell(true)}
-              aria-label={inDeck ? "Back to the map" : "Open the swipe deck"}
-              className="press grid h-7 w-7 place-items-center rounded-full"
-              style={{
-                color: inDeck ? "rgba(244,240,238,0.9)" : "#3f4652",
-                transition: "color 0.42s ease 0.12s",
-              }}
-            >
-              {inDeck ? (
-                <ChevronLeft size={20} strokeWidth={2.5} className="arrow-nudge" style={{ "--nudge": "-3px" } as CSSProperties} />
-              ) : (
-                <ChevronRight size={20} strokeWidth={2.5} className="arrow-nudge" style={{ "--nudge": "3px" } as CSSProperties} />
-              )}
-            </button>
-          </span>
-          </div>
           {onMap && (
             <button
               onClick={() => setMenuOpen(true)}
               aria-label="Menu"
-              className="press grid h-9 w-9 shrink-0 place-items-center rounded-full"
+              className="press pointer-events-auto grid h-9 w-9 shrink-0 place-items-center rounded-full"
               style={GLASS}
             >
               <Menu size={17} style={{ color: "oklch(0.9 0 0)" }} />
@@ -367,7 +337,11 @@ export default function AppShell() {
               {where && ` · ${where}`}
             </p>
           )}
-          {/* Fades rather than unmounts, so nothing on this line ever moves. */}
+          {/* The only teaching left. The arrow that used to sit beside the name
+              was a button that switched modes, which is the one thing this
+              masthead is not allowed to have — so what it was explaining now
+              has to explain itself: the line names the gesture, not a control.
+              Fades rather than unmounts, so nothing on this line ever moves. */}
           <span
             aria-hidden
             className="pointer-events-none ml-auto whitespace-nowrap text-[10.5px]"
@@ -380,7 +354,7 @@ export default function AppShell() {
               transition: "opacity 0.32s ease, transform 0.32s ease, color 0.42s ease 0.12s",
             }}
           >
-            {inDeck ? "back to the map" : "the swipe deck"}
+            {inDeck ? "double-tap for the map" : "double-tap for the deck"}
           </span>
         </div>
 

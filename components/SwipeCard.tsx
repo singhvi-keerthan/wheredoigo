@@ -33,9 +33,11 @@ const PHOTO_DEFAULT = 0.8;
 // it actually knows about the place.
 const PHOTO_NONE = 1.5;
 
-// Where the photo pager's tap zones start — below the floating chrome (the
-// wordmark and the lens chip) and the progress dots.
-const PAGER_TOP = 92;
+// Where the photo pager's tap zones start — below the progress dots, which is
+// all that sits on the photo now. It was 92px when the wordmark and the lens
+// chip floated over this corner; they sit above the card since, so the pager
+// gets that inch of photo back.
+const PAGER_TOP = 30;
 
 // Tail room under the last section, so the final control clears the home
 // indicator instead of sitting on it.
@@ -440,12 +442,9 @@ export default function SwipeCard({
             />
           )}
 
-          {/* Top wash — the floating chrome (wordmark, lens chip) sits over
-              this corner of the photo and has to stay legible on a bright one. */}
-          <div
-            className="pointer-events-none absolute inset-x-0 top-0 h-24"
-            style={{ background: "linear-gradient(180deg, rgba(6,7,10,0.5), rgba(6,7,10,0))" }}
-          />
+          {/* No top wash. Nothing floats over the photo any more — the card
+              starts below the masthead — so the picture opens at full strength
+              on a clean edge instead of under half a stop of darkening. */}
           {/* Bottom feather into the card surface, so the photo ends as an edge
               of the card rather than a hard seam against the info block. */}
           <div
@@ -457,7 +456,7 @@ export default function SwipeCard({
               A scroll cancels the click, so paging can't fire mid-flick. */}
           {interactive && photos.length > 1 && (
             <>
-              <div className="absolute inset-x-0 top-0 flex gap-1.5 px-4 pt-14">
+              <div className="absolute inset-x-0 top-0 flex gap-1.5 px-4 pt-3">
                 {photos.map((_, i) => (
                   <span
                     key={i}

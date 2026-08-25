@@ -298,17 +298,6 @@ body {
   pointer-events: none;
 }
 
-/* The mode arrow beside the wordmark. It leans the way it takes you, on a long
-   slow cycle — enough to catch the eye as something live and to suggest that
-   the name can be swiped, quiet enough to sit there all day. */
-@keyframes arrow-nudge {
-  0%, 70%, 100% { transform: translateX(0); }
-  82% { transform: translateX(var(--nudge, 3px)); }
-}
-.arrow-nudge {
-  animation: arrow-nudge 3.6s var(--ease-out) infinite;
-}
-
 /* ---- the reveal (map -> swipe) ----
    The deck isn't a screen that replaces the map; it's made out of the places on
    it, and this is where that happens. Beats 1-5 are drawn by ModeReveal over
@@ -486,9 +475,6 @@ body {
     animation-delay: var(--coach-delay, 0ms);
   }
   .photo-settle {
-    animation: none;
-  }
-  .arrow-nudge {
     animation: none;
   }
   .fan-in {

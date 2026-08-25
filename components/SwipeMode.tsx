@@ -25,6 +25,24 @@ const EXIT_MS = 240;
 const FLICK_VELOCITY = 0.55; // px/ms
 const FLICK_MIN = 44; // px — ignore taps / jitter below this travel
 const CARD_INSET = 10; // px of surround, so the next card peeks and it still reads as a card
+// The masthead's berth — where the card's top edge actually starts.
+//
+// It used to be CARD_INSET on all four sides, which on a phone meant the first
+// inch of every photo was posted behind the status bar and behind the app's own
+// name. iOS puts its own dark treatment over that strip, and we were adding a
+// 120px scrim of our own on top of it to keep the chrome legible, so the part of
+// the picture that got the most screen was the part nobody could see — and the
+// photo read as starting off the top of the phone rather than beginning
+// anywhere. The deck is framed now: the name and the lens sit on the deck's own
+// surface, the card starts under them, and the photo begins at a clean edge with
+// nothing washed over it.
+//
+// safe-area-inset-top (the status bar / island) + the two masthead rows: the
+// wordmark at 26px, the lens chip at 28, and the air between them.
+const STAGE_TOP = "calc(max(0.9rem, env(safe-area-inset-top)) + 4.25rem)";
+// The other end. The home indicator gets its own clearance rather than the flat
+// 10px, so the card ends above it instead of underneath it.
+const STAGE_BOTTOM = `max(${CARD_INSET}px, env(safe-area-inset-bottom))`;
 const OUT_MS = 190; // the mode's own fade-out, before AppShell unmounts it
 
 // ---- the opening beat -----------------------------------------------------
@@ -510,8 +528,11 @@ export default function SwipeMode({
       className={`fixed inset-0 z-[52] ${closing ? "mode-out" : entryKind === "fan" ? "" : "mode-in"}`}
       style={{ background: "var(--bg-base)" }}
     >
-      {/* ---- card stage: the whole screen ---- */}
-      <div className="absolute" style={{ inset: CARD_INSET }}>
+      {/* ---- card stage: the screen, minus the masthead and both safe areas ---- */}
+      <div
+        className="absolute"
+        style={{ top: STAGE_TOP, left: CARD_INSET, right: CARD_INSET, bottom: STAGE_BOTTOM }}
+      >
         {busy ? (
           <Centered>
             <Sparkles size={20} className="animate-pulse" style={{ color: "var(--accent)" }} />
@@ -635,23 +656,16 @@ export default function SwipeMode({
         )}
       </div>
 
-      {/* Scrim under the floating chrome, so the wordmark and the lens chip
-          stay legible over a bright photo. */}
-      <div
-        className="pointer-events-none absolute inset-x-0 top-0"
-        style={{
-          zIndex: 9,
-          height: 120,
-          background: "linear-gradient(180deg, rgba(6,7,10,0.72) 0%, rgba(6,7,10,0) 100%)",
-        }}
-      />
+      {/* The 120px scrim that used to live here is gone with the reason for it:
+          the wordmark and the lens chip no longer sit over the photo, they sit
+          above the card on the deck's own surface, which is already dark. */}
 
       {/* ---- what this mode is showing. The top-left belongs to the wordmark
-          (AppShell renders it over us, in both modes, along with the arrow
-          that is the way out of here) — so the lens drops to the second line,
-          opposite the arrow's label. */}
+          (AppShell renders it over us, in both modes — it is the way out of
+          here, double-tapped) so the lens drops to the second line, opposite
+          the line that says so. Both sit in the band above the card. */}
       <div
-        className="absolute left-4 top-[max(2.5rem,calc(env(safe-area-inset-top)+1.65rem))] flex"
+        className="absolute left-5 top-[calc(max(0.9rem,env(safe-area-inset-top))+2rem)] flex"
         style={{ zIndex: 10, maxWidth: "calc(100% - 150px)" }}
       >
         <button
