@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { RotateCcw, Sparkles, X, Heart, Check, SlidersHorizontal } from "lucide-react";
-import { usePlaces, addPlace, removePlace, toggleNeverAgain } from "@/lib/store";
+import { usePlaces, addPlace, removePlace, updatePlace, getPlace, toggleNeverAgain } from "@/lib/store";
 import {
   searchDineout,
   FALLBACK_COORDS,
@@ -11,6 +11,7 @@ import {
   type UserCoords,
 } from "@/lib/swiggyClient";
 import { searchBias } from "@/lib/bias";
+import { searchPlaces, geocodeArea } from "@/lib/places";
 import { buildDeck, type DeckCard } from "@/lib/deck";
 import { bumpSkip, resetSkip, decSkip, peekSkip, setSkip } from "@/lib/skips";
 import SwipeCard from "./SwipeCard";
@@ -24,25 +25,25 @@ const EXIT_MS = 240;
 // flick sends the card without dragging it all the way across.
 const FLICK_VELOCITY = 0.55; // px/ms
 const FLICK_MIN = 44; // px — ignore taps / jitter below this travel
-const CARD_INSET = 10; // px of surround, so the next card peeks and it still reads as a card
-// The masthead's berth — where the card's top edge actually starts.
+// The deck is the screen, not a card on it.
 //
-// It used to be CARD_INSET on all four sides, which on a phone meant the first
-// inch of every photo was posted behind the status bar and behind the app's own
-// name. iOS puts its own dark treatment over that strip, and we were adding a
-// 120px scrim of our own on top of it to keep the chrome legible, so the part of
-// the picture that got the most screen was the part nobody could see — and the
-// photo read as starting off the top of the phone rather than beginning
-// anywhere. The deck is framed now: the name and the lens sit on the deck's own
-// surface, the card starts under them, and the photo begins at a clean edge with
-// nothing washed over it.
+// It was inset 10px on every side — a rounded, bordered, shadowed rectangle
+// sitting on a near-black field — and read as a card floating on the phone
+// rather than as the app. Framing it under the masthead (which fixed a photo
+// that used to start above the status bar) only made that worse: more gutter,
+// more float. So the gutters are gone. The photo runs to both edges and to the
+// bottom of the glass, and the only inset left is the top — where the app's own
+// name sits, on the app's own surface, which reads as chrome instead of as a
+// gap.
 //
-// safe-area-inset-top (the status bar / island) + the two masthead rows: the
-// wordmark at 26px, the lens chip at 28, and the air between them.
-const STAGE_TOP = "calc(max(0.9rem, env(safe-area-inset-top)) + 4.25rem)";
-// The other end. The home indicator gets its own clearance rather than the flat
-// 10px, so the card ends above it instead of underneath it.
-const STAGE_BOTTOM = `max(${CARD_INSET}px, env(safe-area-inset-bottom))`;
+// What that costs: the next card no longer peeks out from behind the top one.
+// The deck says "deck" through motion instead — the deal on arrival, and the
+// card that scales up behind the one you just sent away.
+//
+// The top inset is the masthead: the status bar, the wordmark at its full 26px,
+// and the line under it that says what you're being dealt. That second line is
+// 11px of quiet type, not a control — see the lens below.
+const STAGE_TOP = "calc(max(0.9rem, env(safe-area-inset-top)) + 3.1rem)";
 const OUT_MS = 190; // the mode's own fade-out, before AppShell unmounts it
 
 // ---- the opening beat -----------------------------------------------------
@@ -95,16 +96,74 @@ function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
+const normName = (v: string) => v.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+// Either name containing the other whole. Prefix rules break on the honorifics
+// and branch suffixes these two catalogues disagree about.
+const nameCarries = (a: string, b: string) => {
+  const x = normName(a);
+  const y = normName(b);
+  return x !== "" && y !== "" && (x.includes(y) || y.includes(x));
+};
+
+// Swiggy publishes no restaurant coordinates (see the note on SwiggyRestaurant),
+// so a saved Swiggy find has no position of its own. Google does know it: one
+// Text Search on "<name>, <area>" returns coordinates AND a placeId — which
+// also upgrades the record off the null googlePlaceId the Swiggy path used to
+// store, so it enriches and re-photos like any place added any other way.
+//
+// Deliberately fire-and-forget and AFTER the place exists: a swipe must never
+// wait on a network call. The place is stored at your own position and the pin
+// moves to the real one a moment later.
+async function fixSwiggyPosition(placeId: string, r: SwiggyRestaurant) {
+  const query = [r.name, r.area].filter(Boolean).join(", ");
+  const { results, error } = await searchPlaces(query, searchBias());
+  if (error) {
+    // A failed request is not "no such restaurant" — don't let it fall through
+    // to the centroid as though Google had answered.
+    console.warn("[swiggy] position lookup failed", error);
+    return;
+  }
+  const hit = results[0];
+  // Text Search returns a plausible neighbour when it can't find the exact
+  // place, and a confidently wrong pin is worse than a vague one — so the names
+  // must contain one another whole, in either direction. A leading-prefix rule
+  // failed real cases: Google answers "Bengaluru Brewery" for "The Bengaluru
+  // Brewery", and "Toit" for "Toit - Indiranagar".
+  if (hit && nameCarries(hit.name, r.name)) {
+    if (!getPlace(placeId)) return; // undone while we were away
+    updatePlace(placeId, { lat: hit.lat, lng: hit.lng, googlePlaceId: hit.placeId });
+    return;
+  }
+
+  // Google has never heard of it, or what it found isn't it. Leaving the seed
+  // in place would pin the restaurant at YOUR position — and with no
+  // googlePlaceId the enrichment path never runs, so it would sit at your house
+  // forever, indistinguishable from a real pin. The locality centroid is still
+  // approximate, but it's approximate in the neighbourhood the card already
+  // names, which is the honest version of "we don't know exactly where".
+  if (!r.area) return;
+  const centroid = await geocodeArea(r.area);
+  // removePlace is a soft delete, and updatePlace patches by id regardless — so
+  // a right-swipe you immediately undid would otherwise get these coordinates
+  // written into its tombstone, bumping updatedAt and making the deleted row
+  // the newer record on the next sync push.
+  if (centroid && getPlace(placeId)) updatePlace(placeId, { lat: centroid.lat, lng: centroid.lng });
+}
+
 // Maps a Swiggy result to the app's Place shape — same mapping the old Swiggy
 // panel used, so a swipe-saved find is consistent with places added any way.
-function saveNew(r: SwiggyRestaurant): string {
+function saveNew(r: SwiggyRestaurant, seed: UserCoords): string {
   const created = addPlace({
     googlePlaceId: null,
     name: r.name,
     address: r.address,
     area: r.area,
-    lat: r.lat,
-    lng: r.lng,
+    // A Place must have a position, and holding the save until Google answers
+    // would put a round-trip inside the swipe — so seed with where you are and
+    // let fixSwiggyPosition correct it.
+    lat: r.lat ?? seed.lat,
+    lng: r.lng ?? seed.lng,
     status: "watchlist",
     myRating: null,
     googleRating: r.rating,
@@ -115,6 +174,13 @@ function saveNew(r: SwiggyRestaurant): string {
     source: "swiggy",
     enrichedAt: null,
   });
+  // Fire-and-forget, but never unhandled: updatePlace writes to localStorage,
+  // which throws on a full or read-only store.
+  if (r.lat == null || r.lng == null) {
+    void fixSwiggyPosition(created.id, r).catch((e) =>
+      console.warn("[swiggy] position lookup failed", e)
+    );
+  }
   return created.id;
 }
 
@@ -276,7 +342,7 @@ export default function SwipeMode({
     let prompt = false; // 3rd skip on a saved card → offer a permanent hide
     if (dir === "right") {
       if (card.kind === "new") {
-        entry = { key: card.key, placeId: saveNew(card.r) };
+        entry = { key: card.key, placeId: saveNew(card.r, coords) };
         onToast("Added to watchlist");
       } else {
         // Changed your mind — drop the skip ramp, but remember where it was so
@@ -343,7 +409,7 @@ export default function SwipeMode({
       return;
     }
     const card = current;
-    const placeId = saveNew(card.r); // side effect kept out of the state updater
+    const placeId = saveNew(card.r, coords); // side effect kept out of the state updater
     setUndo((u) => [...u, { key: card.key, placeId }]);
     onToast("Added to watchlist");
     seenRef.current.add(card.key);
@@ -526,13 +592,13 @@ export default function SwipeMode({
   return (
     <div
       className={`fixed inset-0 z-[52] ${closing ? "mode-out" : entryKind === "fan" ? "" : "mode-in"}`}
-      style={{ background: "var(--bg-base)" }}
+      // The deck's own ground, not the map's. It matches the card body exactly,
+      // which is what makes the strip iOS leaves below a standalone PWA's
+      // viewport read as more screen instead of as a gap under a card.
+      style={{ background: "var(--deck-bg)" }}
     >
-      {/* ---- card stage: the screen, minus the masthead and both safe areas ---- */}
-      <div
-        className="absolute"
-        style={{ top: STAGE_TOP, left: CARD_INSET, right: CARD_INSET, bottom: STAGE_BOTTOM }}
-      >
+      {/* ---- card stage: everything below the masthead, edge to edge ---- */}
+      <div className="absolute" style={{ top: STAGE_TOP, left: 0, right: 0, bottom: 0 }}>
         {busy ? (
           <Centered>
             <Sparkles size={20} className="animate-pulse" style={{ color: "var(--accent)" }} />
@@ -660,28 +726,27 @@ export default function SwipeMode({
           the wordmark and the lens chip no longer sit over the photo, they sit
           above the card on the deck's own surface, which is already dark. */}
 
-      {/* ---- what this mode is showing. The top-left belongs to the wordmark
-          (AppShell renders it over us, in both modes — it is the way out of
-          here, double-tapped) so the lens drops to the second line, opposite
-          the line that says so. Both sit in the band above the card. */}
+      {/* ---- what this mode is showing.
+          It was a glass pill hung under the wordmark, and it looked it: a
+          chunky UI capsule stranded under a delicate serif, two design
+          languages colliding in the same corner. It is the same KIND of thing
+          the map already puts on that line — "3 places · Bengaluru", the line
+          that says what you're looking at — so it's written in that voice now:
+          11px, quiet, no capsule, sitting on the wordmark's own left margin.
+          Line one is the name, line two is what you're being dealt, in both
+          modes. Still the way into the filters; the whole line is the target,
+          and the glyph is what says so. */}
       <div
         className="absolute left-5 top-[calc(max(0.9rem,env(safe-area-inset-top))+2rem)] flex"
-        style={{ zIndex: 10, maxWidth: "calc(100% - 150px)" }}
+        style={{ zIndex: 10, maxWidth: "calc(100% - 160px)" }}
       >
         <button
           onClick={() => setLensOpen(true)}
-          className="press flex h-7 max-w-full items-center gap-1.5 rounded-full px-2.5"
-          style={{
-            background: "var(--glass)",
-            backdropFilter: "blur(22px) saturate(1.3)",
-            WebkitBackdropFilter: "blur(22px) saturate(1.3)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            boxShadow: "inset 0 1px 0 rgba(255,255,255,0.08), 0 10px 28px -12px rgba(0,0,0,0.5)",
-            color: "oklch(0.9 0 0)",
-          }}
+          className="press flex max-w-full items-center gap-1.5"
+          style={{ color: "rgba(244,240,238,0.66)" }}
         >
-          <SlidersHorizontal size={11} strokeWidth={2.5} />
-          <span className="truncate text-[11.5px] font-semibold">
+          <SlidersHorizontal size={10.5} strokeWidth={2.5} className="shrink-0" />
+          <span className="truncate text-[11px]" style={{ fontFamily: "var(--font-mono)", letterSpacing: "0.01em" }}>
             {sourceLabel}
             {lens.summary.length > 0 && (
               <span className="capitalize"> · {lens.summary.join(" · ")}</span>

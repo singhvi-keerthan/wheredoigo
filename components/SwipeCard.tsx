@@ -15,8 +15,9 @@ import type { DeckCard } from "@/lib/deck";
 import { PoweredBySwiggy } from "./PoweredBySwiggy";
 
 // The card's own surface. The photo sits ON it rather than filling it, so this
-// is what you see above/below and between the sections.
-const BODY_BG = "#06070a";
+// is what you see above/below and between the sections. Same value SwipeMode
+// paints its ground with — they are one surface now, not a card on a field.
+const BODY_BG = "var(--deck-bg)";
 
 // The photo keeps its OWN aspect, clamped to the standard photographic range:
 // 4:5 (portrait) at the tall end, 3:2 (landscape) at the wide end. Anything
@@ -378,10 +379,10 @@ export default function SwipeCard({
     <div
       className="absolute inset-0 overflow-hidden"
       style={{
-        borderRadius: "var(--radius-lg)",
+        // No radius, no border, no drop shadow. Those three are what made this
+        // read as a card floating on the phone; the deck is the screen now, and
+        // a screen has no edges to draw. The photo runs to the glass.
         background: BODY_BG,
-        border: "1px solid var(--border-strong)",
-        boxShadow: "0 18px 40px -20px rgba(0,0,0,0.55)",
         userSelect: "none",
         WebkitUserSelect: "none",
         ...style,

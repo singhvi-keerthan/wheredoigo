@@ -38,6 +38,8 @@
   /* Floating / surface roles from the color system. */
   --glass: rgba(22, 24, 30, 0.66); /* every floating control (blur 22) */
   --sheet: oklch(0.175 0.006 265); /* solid ink — the detail sheet (never frost) */
+  --deck-bg: #06070a; /* the deck: card body AND the ground it sits on, so the
+                         two never read as an object on a field */
   --star: oklch(0.78 0.12 75); /* rating star (amber, NOT watchlist state) */
   --star-empty: oklch(0.38 0.01 265);
 
@@ -81,10 +83,23 @@
   color-scheme: dark;
 }
 
+/* iOS gives an installed PWA a viewport ~59pt shorter than the screen and
+   paints the leftover strip along the bottom with the CANVAS background, which
+   propagates from <html> — not from anything a fixed layer can reach. Pointing
+   it at the deck's ground makes that strip continuous with the deck instead of
+   a lighter band under it. Inside the viewport nothing changes: body paints its
+   own box, and the map screen sets its background explicitly. */
+html {
+  background: var(--deck-bg);
+}
+
+body {
+  background: var(--bg-base); /* the app's own ground, inside the viewport */
+}
+
 html,
 body {
   height: 100%;
-  background: var(--bg-base);
   color: var(--text-primary);
   font-family: "General Sans", ui-sans-serif, system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;

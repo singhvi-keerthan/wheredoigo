@@ -301,11 +301,12 @@ export default function AppShell() {
               // with the world rather than ahead of it.
               color: inDeck ? "#f4f0ee" : "#16181d",
               transition: "color 0.42s ease 0.12s",
-              // Scales so the full 18-char name never clips against the menu
-              // button. The 18 characters measure 10.15em wide in Zodiak
-              // (measured, not guessed). 86px is everything else on the row:
-              // both side paddings, the gap, and the button. Dropping the mode
-              // pill gave the name back its full 26px on any normal phone.
+              // Scales so the full 18-char name never clips against whatever
+              // shares its row. The 18 characters measure 10.15em wide in
+              // Zodiak (measured, not guessed). The reserve is everything else
+              // on the row: both side paddings, the gap, and the control — the
+              // 36px menu button on the map, the wider lens chip in the deck,
+              // which is capped at 128px and truncates inside that.
               fontSize: "min(26px, calc((100vw - 86px) / 10.2))",
             }}
           >
