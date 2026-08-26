@@ -108,7 +108,14 @@ html[data-ground="deck"] {
 }
 
 body {
-  background: var(--bg-base); /* the app's own ground, inside the viewport */
+  /* The same ground as the canvas, and this is the line that actually decides
+     what you see below a standalone PWA's card. Setting it on <html> alone did
+     nothing: body's height:100% resolves against the LARGE viewport while
+     position:fixed uses the SMALL one, so body's box reaches 59pt further down
+     than the deck does and paints over the canvas in exactly the strip we were
+     trying to fix. It was --bg-base there — a different dark from the card,
+     which is what made it read as a block rather than as more screen. */
+  background: var(--canvas);
 }
 
 html,
