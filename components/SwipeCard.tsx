@@ -44,7 +44,21 @@ const PAGER_TOP = 30;
 
 // Tail room under the last section, so the final control clears the home
 // indicator instead of sitting on it.
-const BODY_TAIL = "calc(2.5rem + env(safe-area-inset-bottom))";
+//
+// Two things were wrong with the old `calc(2.5rem + env(safe-area-inset-bottom))`.
+//
+// It ADDED the two. Every other bottom inset in this app — fifteen of them —
+// writes max(<floor>, env(...)), because the inset is not extra room you need
+// on top of your own padding, it IS the room the hardware already reserved. On
+// a phone with a home indicator this stacked 40px of tail on 34px of inset:
+// ~74px of nothing under the last line, sitting at the bottom of the deck as a
+// block with no content in it.
+//
+// And it was the wrong KIND of value. A fixed rem makes one particular phone
+// the spec. The tail is a share of the screen it sits at the bottom of, so it
+// breathes on a tall device and doesn't eat a short one — floored by whatever
+// the hardware actually reserves, which is what env() is for.
+const BODY_TAIL = "max(2.5vh, env(safe-area-inset-bottom))";
 
 // Normalised display fields, so the card renders the same shape whether it's a
 // saved Place or a raw Swiggy result (which has no photos, tags or hours).
