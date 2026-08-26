@@ -187,6 +187,37 @@ const EXCLUDES: { ns: TagNamespace; key: keyof DecideQuery }[] = [
 ];
 
 // A place is excluded when it carries any tag value the query said to avoid.
+// The positive mirror of isExcluded, and deliberately NOT inside rankPlaces.
+//
+// rankPlaces gates on lifecycle, budget, rating, area and hard negatives, and
+// treats cuisine/type/staple/occasion/vibe as SCORE. That is right for a deck:
+// a weak match still deals, just later, and you can keep swiping. It is useless
+// on a map, where order is invisible — asking for "italian" there and getting
+// every pin back, silently reordered, reads as a broken control.
+//
+// So the map gates on the facets it asked for and the deck goes on ranking
+// them. Same tag semantics as isExcluded (same namespaces, same tagValues), so
+// "italian" cannot come to mean one thing on one surface and another elsewhere.
+// Only namespaces the ask actually named are gated; keywords stay soft, because
+// a hard gate on a free-text term would empty the map on any unusual word.
+const POSITIVES: { ns: TagNamespace; key: keyof DecideQuery }[] = [
+  { ns: "type", key: "types" },
+  { ns: "cuisine", key: "cuisines" },
+  { ns: "staple", key: "staples" },
+  { ns: "occasion", key: "occasions" },
+  { ns: "vibe", key: "vibes" },
+  { ns: "practical", key: "practical" },
+];
+
+export function matchesAskedFacets(p: Place, query: DecideQuery): boolean {
+  for (const { ns, key } of POSITIVES) {
+    const want = query[key] as string[] | undefined;
+    if (!want || !want.length) continue; // not asked for → not a constraint
+    if (!tagValues(p, ns).some((v) => want.includes(v))) return false;
+  }
+  return true;
+}
+
 function isExcluded(p: Place, query: DecideQuery): boolean {
   for (const { ns, key } of EXCLUDES) {
     const avoid = query[key] as string[] | undefined;

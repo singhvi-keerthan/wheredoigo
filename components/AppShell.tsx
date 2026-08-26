@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Search, Plus, Menu, MapPin, TriangleAlert } from "lucide-react";
+import { Search, Plus, Menu, MapPin, TriangleAlert, Sparkles, X } from "lucide-react";
 import { usePlaces, usePersistError } from "@/lib/store";
 import { displayState, type DisplayState } from "@/lib/types";
 import { cityLabel } from "@/lib/city";
@@ -13,6 +13,8 @@ import AddPlaceSheet from "./AddPlaceSheet";
 import SwipeMode from "./SwipeMode";
 import PlaceWizard from "./PlaceWizard";
 import MenuSheet from "./MenuSheet";
+import AskSheet from "./AskSheet";
+import { rankPlaces, matchesAskedFacets, type DecideQuery } from "@/lib/decide";
 import BrowseSheet, { type BrowseMode } from "./BrowseSheet";
 import ModeReveal, { BEATS, type RevealSpec } from "./ModeReveal";
 
@@ -238,6 +240,12 @@ export default function AppShell() {
   // for "I've already been here", which logs a retroactive visit in one go.
   const [visitPlaceId, setVisitPlaceId] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false); // the menu hub (browse + backup)
+  // Ask, on the map. `askQuery` is the parsed sentence; `askSaid` is the
+  // sentence itself, kept so the map can say out loud what it is showing you
+  // rather than silently hiding two thirds of your pins.
+  const [askOpen, setAskOpen] = useState(false);
+  const [askQuery, setAskQuery] = useState<DecideQuery | null>(null);
+  const [askSaid, setAskSaid] = useState("");
   const [browseMode, setBrowseMode] = useState<BrowseMode | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -260,10 +268,17 @@ export default function AppShell() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const visible = useMemo(
-    () => (filter === "all" ? places : places.filter((p) => displayState(p) === filter)),
-    [places, filter]
-  );
+  // The rail narrows by state; an ask narrows by meaning. Both, in that order,
+  // and through the SAME ranker the deck uses — so "cheap italian" picks the
+  // same places whichever surface you said it on. Seeded constant: the order
+  // rankPlaces returns is irrelevant to pins, only its membership is.
+  const visible = useMemo(() => {
+    const byRail = filter === "all" ? places : places.filter((p) => displayState(p) === filter);
+    if (!askQuery) return byRail;
+    return rankPlaces(byRail, askQuery, 1)
+      .map((r) => r.place)
+      .filter((pl) => matchesAskedFacets(pl, askQuery));
+  }, [places, filter, askQuery]);
   const selected = useMemo(
     () => visible.find((p) => p.id === selectedId) ?? null,
     [visible, selectedId]
@@ -385,10 +400,27 @@ export default function AppShell() {
           {onMap && (
             <p ref={countRef} className="text-[11px]" style={{ color: "#5b6470" }}>
               <span style={{ fontFamily: "var(--font-mono)", color: "#16181d", fontWeight: 500 }}>
-                {places.length}
+                {askQuery ? visible.length : places.length}
               </span>{" "}
-              {places.length === 1 ? "place" : "places"}
-              {where && ` · ${where}`}
+              {(askQuery ? visible.length : places.length) === 1 ? "place" : "places"}
+              {askQuery ? (
+                /* An ask is hiding pins, so the line that says what you are
+                   looking at has to admit it — and be the way back. No new
+                   chrome: this is already the "what am I looking at" line. */
+                <button
+                  onClick={() => {
+                    setAskQuery(null);
+                    setAskSaid("");
+                  }}
+                  className="press pointer-events-auto ml-1 inline-flex max-w-[52vw] items-center gap-1 align-middle"
+                  style={{ color: "#16181d" }}
+                >
+                  <span className="truncate">· “{askSaid}”</span>
+                  <X size={10} strokeWidth={3} className="shrink-0" />
+                </button>
+              ) : (
+                where && ` · ${where}`
+              )}
             </p>
           )}
           {/* The only teaching left. The arrow that used to sit beside the name
@@ -541,6 +573,26 @@ export default function AppShell() {
                 );
               })}
             </div>
+            {/* Ask. It sat in this row until 2026-08-19, when swipe became a
+                mode and Ask went with it into the deck's filter panel. This is
+                not a way into the deck — it narrows the map you are already on,
+                which is the thing the mascot used to do. Mirrors the + below
+                it: flex-1 control, then one round action, so the two rows read
+                as one dock. */}
+            <button
+              onClick={() => setAskOpen(true)}
+              aria-label="Ask"
+              className="press grid shrink-0 place-items-center"
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: "50%",
+                background: askQuery ? "var(--accent)" : "oklch(0.97 0 0)",
+                color: askQuery ? "var(--accent-ink)" : "oklch(0.16 0.006 260)",
+              }}
+            >
+              <Sparkles size={17} strokeWidth={2.25} />
+            </button>
           </div>
 
           {/* search dock — glass search + white add */}
@@ -621,6 +673,16 @@ export default function AppShell() {
       {visitPlaceId && (
         <PlaceWizard placeId={visitPlaceId} onClose={() => setVisitPlaceId(null)} />
       )}
+
+      <AskSheet
+        open={askOpen}
+        onClose={() => setAskOpen(false)}
+        onApply={(q, said) => {
+          setAskQuery(q);
+          setAskSaid(said);
+          setSelectedId(null);
+        }}
+      />
 
       {menuOpen && (
         <MenuSheet
