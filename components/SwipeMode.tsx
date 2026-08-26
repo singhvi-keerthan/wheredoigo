@@ -599,6 +599,14 @@ export default function SwipeMode({
   // able to tell you what it is dealing you without being opened up.
   const sourceLabel = source === "saved" ? "Your map" : source === "new" ? "New · Swiggy" : "Everything";
 
+  // Said aloud. Every other aria-label in this app is on an icon-only control —
+  // Close, Back, Remove photo — where there is no text to read. This button HAS
+  // text, and it is the text that matters: a flat aria-label="Change filters"
+  // replaces the accessible name outright, so a screen reader announced the verb
+  // and swallowed the one thing the line exists to say. The name carries the
+  // visible string verbatim and prefixes what pressing it does.
+  const lensLabel = `Filters: ${sourceLabel}${lens.summary.length > 0 ? ` · ${lens.summary.join(" · ")}` : ""}`;
+
   return (
     <div
       className={`fixed inset-0 z-[52] ${closing ? "mode-out" : entryKind === "fan" ? "" : "mode-in"}`}
@@ -756,7 +764,7 @@ export default function SwipeMode({
       >
         <button
           onClick={() => setLensOpen(true)}
-          aria-label="Change filters"
+          aria-label={lensLabel}
           className="press flex max-w-full items-center gap-1.5"
           style={{ color: "rgba(244,240,238,0.9)" }}
         >
