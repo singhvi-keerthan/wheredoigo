@@ -40,9 +40,9 @@
   --sheet: oklch(0.175 0.006 265); /* solid ink — the detail sheet (never frost) */
   --deck-bg: #06070a; /* the deck: card body AND the ground it sits on, so the
                          two never read as an object on a field */
-  --map-land: #f3f3f0; /* the map's paper. MapView repaints the basemap's land
-                          with this exact value, so the two cannot drift */
-  --canvas: var(--map-land); /* what shows below the viewport; see html above */
+  --canvas: var(--bg-base); /* what shows below the viewport — see html/body.
+                               Defaults to the ground the app has always had, so
+                               the map is untouched; only the deck overrides it */
   --star: oklch(0.78 0.12 75); /* rating star (amber, NOT watchlist state) */
   --star-empty: oklch(0.38 0.01 265);
 
@@ -92,30 +92,22 @@
    it at the deck's ground makes that strip continuous with the deck instead of
    a lighter band under it. Inside the viewport nothing changes: body paints its
    own box, and the map screen sets its background explicitly. */
-/* The canvas. iOS leaves a strip below a standalone PWA's viewport and paints
-   it from here — the canvas background propagates off <html> — so this is the
-   only thing that decides what that strip looks like. It was pinned to the
-   deck's ink, which is right for the deck and wrong for the map: near-black
-   under a sheet of light paper, a dead band either way. It follows the mode
-   now, on the same curve and delay the wordmark uses to change colour, so the
-   strip turns with the world instead of snapping. */
-html {
+/* The strip iOS leaves below a standalone PWA's viewport. Proven off a
+   screenshot from the device: body's box reaches ~59pt further down than
+   position:fixed does, so BODY is what paints there — which is why setting this
+   on <html> alone (63f6224) changed nothing. Both carry it now.
+
+   --canvas defaults to --bg-base, exactly what html and body were before any of
+   this, so the map's strip is untouched. Only the deck overrides it, to the
+   card body's own ink, so the strip reads as more card instead of a band under
+   one. The transition matches the wordmark's, so it turns with the world. */
+html,
+body {
   background: var(--canvas);
   transition: background 0.42s ease 0.12s;
 }
 html[data-ground="deck"] {
   --canvas: var(--deck-bg);
-}
-
-body {
-  /* The same ground as the canvas, and this is the line that actually decides
-     what you see below a standalone PWA's card. Setting it on <html> alone did
-     nothing: body's height:100% resolves against the LARGE viewport while
-     position:fixed uses the SMALL one, so body's box reaches 59pt further down
-     than the deck does and paints over the canvas in exactly the strip we were
-     trying to fix. It was --bg-base there — a different dark from the card,
-     which is what made it read as a block rather than as more screen. */
-  background: var(--canvas);
 }
 
 html,

@@ -618,14 +618,7 @@ export default function SwipeMode({
       // The deck's own ground, not the map's. It matches the card body exactly,
       // which is what makes the strip iOS leaves below a standalone PWA's
       // viewport read as more screen instead of as a gap under a card.
-      // minHeight in lvh, not vh: with statusBarStyle black-translucent iOS gives
-      // a standalone PWA a viewport one status bar SHORT of the screen, so
-      // inset-0 stops 59pt above the bottom and the card's last line is sliced
-      // mid-glyph. lvh is the large viewport — the whole screen — so the deck
-      // reaches the bottom edge where it can. Everywhere the two are equal
-      // (every browser, desktop, the map) this resolves to the same box it
-      // already had, which is why it is safe to try somewhere I cannot test.
-      style={{ background: "var(--deck-bg)", minHeight: "100lvh" }}
+      style={{ background: "var(--deck-bg)" }}
     >
       {/* The masthead's shadow. AppShell's wordmark is position:fixed and so is
           outside this tree; this reserves exactly the room it occupies ON THIS
