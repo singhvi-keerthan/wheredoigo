@@ -67,6 +67,36 @@ describe("rankPlaces", () => {
     expect(ids(out)).toEqual([inArea.id]);
   });
 
+  it("gates the area by NAME when no centroid was geocoded", () => {
+    const here = mk({ area: "Jayanagar 4th Block" }); // nests inside the ask
+    const there = mk({ area: "Whitefield" });
+    const unknown = mk({}); // no area on it at all → not known to be in one
+    const out = rankPlaces([here, there, unknown], { area: "Jayanagar" }, 1);
+    expect(ids(out)).toEqual([here.id]);
+  });
+
+  it("lets a geocoded centroid override the name gate", () => {
+    // The place's own locality string says something else entirely; the
+    // centroid is the stronger signal and is what should decide.
+    const p = mk({ area: "Domlur", lat: 12.9716, lng: 77.6411 });
+    const out = rankPlaces([p], { area: "indiranagar", areaCenter: { lat: 12.9719, lng: 77.6412 } }, 1);
+    expect(ids(out)).toEqual([p.id]);
+  });
+
+  it("applies the rating floor off your rating once visited", () => {
+    // Google says 3.2, you went and scored it 4.6 → clears a 4.0+ ask.
+    const yours = mk({ status: "visited", googleRating: 3.2, myRating: 4.6 });
+    const theirs = mk({ googleRating: 3.9 });
+    const out = rankPlaces([yours, theirs], { minRating: 4 }, 1);
+    expect(ids(out)).toEqual([yours.id]);
+  });
+
+  it("drops unrated places under a rating floor", () => {
+    // Not known to clear the bar is not the same as clearing it.
+    const out = rankPlaces([mk({ googleRating: null })], { minRating: 4 }, 1);
+    expect(out).toHaveLength(0);
+  });
+
   it("gates lifecycle (watchlist only)", () => {
     const seen = mk({ status: "visited" });
     const fresh = mk({ status: "watchlist" });

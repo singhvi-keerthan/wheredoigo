@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { RotateCcw, Sparkles, X, Heart, Check, SlidersHorizontal } from "lucide-react";
 import { usePlaces, addPlace, removePlace, updatePlace, getPlace, toggleNeverAgain } from "@/lib/store";
 import {
@@ -342,6 +342,17 @@ export default function SwipeMode({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, queryKey, swiggy, seed]);
 
+  // The localities the Area filter can offer: whatever is actually in the pool
+  // this source draws from. Built off the UNFILTERED pool on purpose — narrowing
+  // the list as you narrow the deck would leave you one area to choose from and
+  // no way to see the others.
+  const areas = useMemo(() => {
+    const set = new Set<string>();
+    if (source !== "new") for (const p of places) if (p.area) set.add(p.area);
+    if (source !== "saved") for (const r of swiggy) if (r.area) set.add(r.area);
+    return [...set];
+  }, [source, places, swiggy]);
+
   const current = deck[pos] ?? null;
 
   // ---- actions -----------------------------------------------------------
@@ -641,8 +652,17 @@ export default function SwipeMode({
               Nothing matches this filter
             </p>
             <p className="mt-1 text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>
-              Close and pick another lens.
+              {lens.dirty ? "Loosen one and the deck comes back." : "Nothing here to swipe yet."}
             </p>
+            {lens.dirty && (
+              <button
+                onClick={() => setLensOpen(true)}
+                className="press mt-4 flex items-center gap-2 px-4 py-2.5 text-[13.5px] font-semibold"
+                style={{ borderRadius: "var(--radius-chip)", border: "1px solid var(--border-strong)", color: "var(--text-primary)" }}
+              >
+                <SlidersHorizontal size={14} /> Change filters
+              </button>
+            )}
           </Centered>
         ) : exhausted ? (
           <Centered>
@@ -871,7 +891,7 @@ export default function SwipeMode({
         </div>
       )}
 
-      {lensOpen && <LensPanel lens={lens} onClose={() => setLensOpen(false)} />}
+      {lensOpen && <LensPanel lens={lens} areas={areas} onClose={() => setLensOpen(false)} />}
 
       {detailNew && (
         <NewCardDetail

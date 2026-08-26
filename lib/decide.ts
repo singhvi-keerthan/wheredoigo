@@ -31,10 +31,17 @@ export interface DecideQuery {
   excludeVibes?: string[];
   excludePractical?: string[];
   maxBudget?: number | null; // per person (₹)
+  // The standard "rated 4.0+" floor. Hard, and it reads your rating first —
+  // same lead-rating rule the cards use. A place with no rating at all is not
+  // KNOWN to clear the bar, so it's out; that's what the chip promises.
+  minRating?: number | null;
   openNow?: boolean;
-  // "near jayanagar" — the neighbourhood name as parsed (display + geocoding),
-  // and the geocoded centroid the client attaches before ranking. Places beyond
-  // ~4km of the centroid are dropped; closer ones get a proximity boost.
+  // "near jayanagar" — the neighbourhood name, and the geocoded centroid the
+  // client attaches before ranking. Two ways in, one field: Ask geocodes, so it
+  // arrives with a centroid and gates by distance (beyond ~4km is a different
+  // plan; closer floats higher). The area chip picks a locality that is already
+  // in your places, so it arrives WITHOUT a centroid and gates by that name —
+  // no round trip, and every option it offers is guaranteed to match something.
   area?: string;
   areaCenter?: { lat: number; lng: number };
   // Quality asks ("great ambiance", "good value") → rank places rated high on
@@ -61,6 +68,18 @@ export const EMPTY_QUERY: DecideQuery = { lifecycle: "any" };
 const PRICE_LEVEL_EST: Record<number, number> = { 0: 0, 1: 300, 2: 800, 3: 1500, 4: 2500 };
 
 const AREA_MAX_KM = 4;
+
+// Name-matched area. Localities nest ("Jayanagar" / "Jayanagar 4th Block"), so
+// containment either way is a match; exact equality would make half the chips
+// return nothing. Exported because the Swiggy half of the deck filters on the
+// same rule (lib/deck.ts) and the two must not drift.
+export function areaMatches(placeArea: string | undefined, asked: string): boolean {
+  if (!placeArea) return false;
+  const a = placeArea.trim().toLowerCase();
+  const b = asked.trim().toLowerCase();
+  if (!a || !b) return false;
+  return a.includes(b) || b.includes(a);
+}
 
 // Seeded RNG (mulberry32) so "Another" is reproducible per seed but varies
 // across presses — the variety is intentional, not random per render.
@@ -145,12 +164,23 @@ export function rankPlaces(
       if (spend != null && spend > query.maxBudget) continue;
     }
 
-    // Area constraint — outside ~4km of the asked neighbourhood is a different
-    // plan; inside, closer floats higher.
+    // Rating floor. Your rating leads once visited, exactly as it does on the
+    // card — asking for 4.0+ shouldn't be answered with Google's opinion of a
+    // place you've been to and scored yourself.
+    if (query.minRating != null) {
+      const lead = leadRating(p);
+      if (lead.value == null || lead.value < query.minRating) continue;
+    }
+
+    // Area constraint. A geocoded centroid is the stronger signal and wins when
+    // it's there: outside ~4km of the asked neighbourhood is a different plan,
+    // inside, closer floats higher. A bare name falls back to the locality.
     let areaDist: number | null = null;
     if (query.areaCenter) {
       areaDist = distanceKm(query.areaCenter, p);
       if (areaDist > AREA_MAX_KM) continue;
+    } else if (query.area) {
+      if (!areaMatches(p.area, query.area)) continue;
     }
 
     // Open-now: exclude only when we KNOW the hours and it's shut.

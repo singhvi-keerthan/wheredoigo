@@ -1,13 +1,45 @@
 import type { Place } from "./types";
 import type { SwiggyRestaurant } from "./swiggy";
-import { rankPlaces, type DecideQuery } from "./decide";
+import { areaMatches, rankPlaces, type DecideQuery } from "./decide";
 
 // The swipe deck's source is the FIRST filter the user picks — before any
 // cuisine lens. "saved" ranks your own map (the full DecideQuery vocabulary);
-// "new" is Swiggy Dineout's catalog (cuisine-only — Swiggy records carry no
-// type/staple/vibe/hours signal, so the richer lens can't bite there); "both"
+// "new" is Swiggy Dineout's catalog (cuisine + the standard area/budget/rating
+// filters — see newMatches; Swiggy records carry no type/staple/vibe/hours
+// signal, so only the tag half of the lens can't bite there); "both"
 // is your matches first, then new discovery.
 export type DeckSource = "saved" | "new" | "both";
+
+// Half the standard filters DO bite on a Swiggy record. It carries no type,
+// staple, vibe or opening hours — that's why the tag lens is saved-only — but
+// it carries a locality, a rating and a cost for two, which is exactly what
+// "area / budget / rated 4+" ask about. Applied here so those three chips mean
+// the same thing on both halves of a Both deck instead of quietly filtering
+// your own map and letting Swiggy's through untouched.
+//
+// Cuisine is deliberately absent: it's the Swiggy SEARCH term (entityType
+// CUISINE), so the pool is already narrowed upstream, and re-filtering here on
+// Swiggy's own much larger cuisine vocabulary would empty decks on a spelling
+// mismatch rather than tighten them.
+const PER_PERSON = 2; // Swiggy quotes cost for two; the app's budget is per head
+
+function newMatches(r: SwiggyRestaurant, q: DecideQuery): boolean {
+  // Ask's geocoded centroid has no counterpart here (Swiggy hands back a
+  // locality, and a radius gate on the deck would disagree with rankPlaces on
+  // the same query), so the name is what both sides use.
+  if (q.area && !areaMatches(r.area, q.area)) return false;
+
+  // Unknown cost stays in, matching the saved side: a place with no price on it
+  // is not KNOWN to be over your cap.
+  if (q.maxBudget != null && r.priceForTwo != null && r.priceForTwo / PER_PERSON > q.maxBudget) {
+    return false;
+  }
+
+  // Unrated is out, also matching the saved side: not known to clear the bar.
+  if (q.minRating != null && (r.rating == null || r.rating < q.minRating)) return false;
+
+  return true;
+}
 
 // One card, normalised over the two sources so the deck engine is source-blind.
 // `kind` discriminates the action a swipe takes (a "new" right-swipe saves a
@@ -59,7 +91,7 @@ export function buildDeck(opts: {
     source === "saved"
       ? []
       : swiggy
-          .filter((r) => !alreadySaved(r, places))
+          .filter((r) => !alreadySaved(r, places) && newMatches(r, query))
           .map((r) => ({ key: `new:${r.id}`, kind: "new" as const, r }));
 
   const merged =
