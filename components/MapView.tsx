@@ -260,7 +260,10 @@ export default function MapView({
 
     const ink = "#55565a"; // neutral gray ink labels
     const halo = "rgba(247,247,245,0.95)";
-    const LAND = "#f3f3f0"; // neutral off-white (barely warm)
+    // Neutral off-white (barely warm). Read from the token rather than written
+    // here, because the same value paints the canvas behind a standalone PWA's
+    // viewport — see --map-land. Two copies of a colour is one colour and one bug.
+    const LAND = cssVar("--map-land") || "#f3f3f0";
     const WATER = "#dde5e7"; // soft cool water
     const BUILDING = "#e9e9e5";
     const ROAD = "#d4d4ce"; // light neutral streets

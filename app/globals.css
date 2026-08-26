@@ -40,6 +40,9 @@
   --sheet: oklch(0.175 0.006 265); /* solid ink — the detail sheet (never frost) */
   --deck-bg: #06070a; /* the deck: card body AND the ground it sits on, so the
                          two never read as an object on a field */
+  --map-land: #f3f3f0; /* the map's paper. MapView repaints the basemap's land
+                          with this exact value, so the two cannot drift */
+  --canvas: var(--map-land); /* what shows below the viewport; see html above */
   --star: oklch(0.78 0.12 75); /* rating star (amber, NOT watchlist state) */
   --star-empty: oklch(0.38 0.01 265);
 
@@ -89,8 +92,19 @@
    it at the deck's ground makes that strip continuous with the deck instead of
    a lighter band under it. Inside the viewport nothing changes: body paints its
    own box, and the map screen sets its background explicitly. */
+/* The canvas. iOS leaves a strip below a standalone PWA's viewport and paints
+   it from here — the canvas background propagates off <html> — so this is the
+   only thing that decides what that strip looks like. It was pinned to the
+   deck's ink, which is right for the deck and wrong for the map: near-black
+   under a sheet of light paper, a dead band either way. It follows the mode
+   now, on the same curve and delay the wordmark uses to change colour, so the
+   strip turns with the world instead of snapping. */
 html {
-  background: var(--deck-bg);
+  background: var(--canvas);
+  transition: background 0.42s ease 0.12s;
+}
+html[data-ground="deck"] {
+  --canvas: var(--deck-bg);
 }
 
 body {

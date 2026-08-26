@@ -100,6 +100,9 @@ export default function AppShell() {
   const [tell, setTell] = useState(true);
   // How far the name has to travel to sit in the middle of its row.
   const [centerShift, setCenterShift] = useState(0);
+  // Where the wordmark's box actually ends on THIS screen. The deck hangs its
+  // own second line and its card stage off this rather than off a tuned number.
+  const [nameBottom, setNameBottom] = useState(0);
 
   // Where each place sits on screen right now, read straight off the map's
   // markers. Deliberately DOM-side: MapView owns the map instance, and the pins
@@ -188,6 +191,14 @@ export default function AppShell() {
     };
   }, [inDeck]);
 
+  // The strip iOS leaves below a standalone PWA's viewport is painted from the
+  // canvas, off <html>, which is outside every React tree in here. So the mode
+  // has to reach up and say which ground it is over — otherwise that strip sits
+  // in the deck's ink under a sheet of light paper. See html[data-ground].
+  useEffect(() => {
+    document.documentElement.dataset.ground = inDeck ? "deck" : "map";
+  }, [inDeck]);
+
   // On the map the name shares its row with the menu button, so it sits at the
   // left margin where a masthead belongs. In the deck it is the only thing on
   // that row and the whole top of the screen is a title block, so it belongs in
@@ -204,6 +215,9 @@ export default function AppShell() {
       if (!h || !t) return;
       // The header's px-5, and nothing else on the row once the deck is open.
       setCenterShift(Math.max(0, (h.clientWidth - 40 - t.offsetWidth) / 2));
+      // Read, not assumed: the safe-area inset and the name's own line box are
+      // both device-dependent, and their sum is where the deck has to begin.
+      setNameBottom(Math.round(t.getBoundingClientRect().bottom));
     };
     measure();
     // Zodiak is a webfont: the name is one width in the fallback and another
@@ -211,7 +225,7 @@ export default function AppShell() {
     document.fonts?.ready.then(measure).catch(() => {});
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
-  }, []);
+  }, [inDeck]);
 
   const leaveSwipe = () => {
     setMode("map");
@@ -647,6 +661,7 @@ export default function AppShell() {
       {mode === "swipe" && (
         <SwipeMode
           entrance={reveal ? "fan" : "deal"}
+          mastheadBottom={nameBottom}
           closing={swipeClosing}
           onRequestClose={() => setSwipeClosing(true)}
           onClosed={leaveSwipe}

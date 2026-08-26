@@ -40,20 +40,6 @@ const FLICK_MIN = 44; // px — ignore taps / jitter below this travel
 // The deck says "deck" through motion instead — the deal on arrival, and the
 // card that scales up behind the one you just sent away.
 //
-// The top inset is the masthead, and it is worth naming what is actually in it,
-// because "why is there space above the photo" has one honest answer and one
-// dishonest one. The dishonest one is padding. The honest one: most of that
-// height is the iPhone's status bar — env(safe-area-inset-top), ~59pt, which no
-// app gets to reclaim — and the rest is two lines of type that have a job. Line
-// one is the name, centred, which in this mode is also the door out. Line two
-// says what you are being dealt, and is the way into the filters. Roughly 47pt
-// of masthead over ~59pt of clock and battery. There is no third thing in here
-// to delete; taking it lower would mean deleting the name.
-//
-// The two gaps inside it are deliberately unequal — the caption sits nearer the
-// name than the photo, because it belongs to the name. Equal gaps would read as
-// two unrelated lines; a caption touching the image reads as a leak.
-const STAGE_TOP = "calc(max(0.9rem, env(safe-area-inset-top)) + 3.45rem)";
 const OUT_MS = 190; // the mode's own fade-out, before AppShell unmounts it
 
 // ---- the opening beat -----------------------------------------------------
@@ -206,6 +192,7 @@ function saveNew(r: SwiggyRestaurant, seed: UserCoords): string {
 // (source + ask + filters) instead of being handed one on the way in.
 export default function SwipeMode({
   entrance = "deal",
+  mastheadBottom,
   closing,
   onRequestClose,
   onClosed,
@@ -217,6 +204,9 @@ export default function SwipeMode({
   // what every LATER run of the deck uses — a lens change or a reshuffle isn't
   // a reveal and shouldn't pretend to be one.
   entrance?: "fan" | "deal";
+  // The bottom of the wordmark's box, in px, measured by AppShell on this
+  // device. Not a layout constant — a reading.
+  mastheadBottom: number;
   closing: boolean; // AppShell has asked us to leave — play the outro
   onRequestClose: () => void; // Escape, from in here
   onClosed: () => void; // outro finished; safe to unmount
@@ -624,14 +614,66 @@ export default function SwipeMode({
 
   return (
     <div
-      className={`fixed inset-0 z-[52] ${closing ? "mode-out" : entryKind === "fan" ? "" : "mode-in"}`}
+      className={`fixed inset-0 z-[52] flex flex-col ${closing ? "mode-out" : entryKind === "fan" ? "" : "mode-in"}`}
       // The deck's own ground, not the map's. It matches the card body exactly,
       // which is what makes the strip iOS leaves below a standalone PWA's
       // viewport read as more screen instead of as a gap under a card.
       style={{ background: "var(--deck-bg)" }}
     >
-      {/* ---- card stage: everything below the masthead, edge to edge ---- */}
-      <div className="absolute" style={{ top: STAGE_TOP, left: 0, right: 0, bottom: 0 }}>
+      {/* The masthead's shadow. AppShell's wordmark is position:fixed and so is
+          outside this tree; this reserves exactly the room it occupies ON THIS
+          SCREEN — measured off its own box, safe-area inset and webfont metrics
+          included — instead of a rem someone tuned against one phone. Everything
+          below is ordinary flow, so the stage begins wherever the type actually
+          ends rather than wherever a constant said it would. */}
+      <div aria-hidden className="shrink-0" style={{ height: mastheadBottom, minHeight: "env(safe-area-inset-top)" }} />
+
+      {/* ---- line two: what this mode is showing.
+          Three versions of this now, and the third is the one that holds. It
+          began as a glass pill hung under the wordmark and looked it: a chunky
+          UI capsule stranded under a delicate serif, two languages colliding in
+          one corner. Killing the capsule was right; killing it down to 11px at
+          66% on the left margin overshot — the deck's only filter control had
+          become a footnote, easy to miss and easy to mistake for a caption.
+          So it keeps the capsule's absence and takes back its weight: 12.5px,
+          near-full brightness, centred directly beneath the name. The glyph
+          carries the app's accent, which is the whole highlight — one warm mark
+          in a dark masthead, saying "this is a control, the rest is type."
+          Centred because line one is centred: a name over a caption on a shared
+          axis is a masthead, the same two lines pinned to the left edge with
+          different weights was a corner. The whole line is the target. */}
+      <div
+        className="flex shrink-0 justify-center px-5"
+        // The gaps are the caption's own type size, not a number: half a line
+        // above, three-quarters below. It sits nearer the name than the photo
+        // because it belongs to the name, and it keeps that relationship at any
+        // text size on any screen, which a px pair would not.
+        style={{ fontSize: "12.5px", marginTop: "0.5em", marginBottom: "0.75em", zIndex: 10 }}
+      >
+        <button
+          onClick={() => setLensOpen(true)}
+          aria-label={lensLabel}
+          className="press flex max-w-full items-center gap-1.5"
+          style={{ color: "rgba(244,240,238,0.9)" }}
+        >
+          <SlidersHorizontal size={12} strokeWidth={2.5} className="shrink-0" style={{ color: "var(--accent)" }} />
+          <span
+            className="truncate"
+            style={{ fontFamily: "var(--font-mono)", fontWeight: 500, letterSpacing: "0.01em" }}
+          >
+            {sourceLabel}
+            {lens.summary.length > 0 && (
+              <span className="capitalize" style={{ color: "rgba(244,240,238,0.72)" }}>
+                {" "}
+                · {lens.summary.join(" · ")}
+              </span>
+            )}
+          </span>
+        </button>
+      </div>
+
+      {/* ---- card stage: whatever is left, edge to edge ---- */}
+      <div className="relative min-h-0 flex-1">
         {busy ? (
           <Centered>
             <Sparkles size={20} className="animate-pulse" style={{ color: "var(--accent)" }} />
@@ -768,45 +810,7 @@ export default function SwipeMode({
           the wordmark and the lens chip no longer sit over the photo, they sit
           above the card on the deck's own surface, which is already dark. */}
 
-      {/* ---- line two: what this mode is showing.
-          Three versions of this now, and the third is the one that holds. It
-          began as a glass pill hung under the wordmark and looked it: a chunky
-          UI capsule stranded under a delicate serif, two languages colliding in
-          one corner. Killing the capsule was right; killing it down to 11px at
-          66% on the left margin overshot — the deck's only filter control had
-          become a footnote, easy to miss and easy to mistake for a caption.
-          So it keeps the capsule's absence and takes back its weight: 12.5px,
-          near-full brightness, centred directly beneath the name. The glyph
-          carries the app's accent, which is the whole highlight — one warm mark
-          in a dark masthead, saying "this is a control, the rest is type."
-          Centred because line one is centred: a name over a caption on a shared
-          axis is a masthead, the same two lines pinned to the left edge with
-          different weights was a corner. The whole line is the target. */}
-      <div
-        className="absolute inset-x-0 flex justify-center px-5"
-        style={{ top: "calc(max(0.9rem,env(safe-area-inset-top)) + 1.95rem)", zIndex: 10 }}
-      >
-        <button
-          onClick={() => setLensOpen(true)}
-          aria-label={lensLabel}
-          className="press flex max-w-full items-center gap-1.5"
-          style={{ color: "rgba(244,240,238,0.9)" }}
-        >
-          <SlidersHorizontal size={12} strokeWidth={2.5} className="shrink-0" style={{ color: "var(--accent)" }} />
-          <span
-            className="truncate text-[12.5px]"
-            style={{ fontFamily: "var(--font-mono)", fontWeight: 500, letterSpacing: "0.01em" }}
-          >
-            {sourceLabel}
-            {lens.summary.length > 0 && (
-              <span className="capitalize" style={{ color: "rgba(244,240,238,0.72)" }}>
-                {" "}
-                · {lens.summary.join(" · ")}
-              </span>
-            )}
-          </span>
-        </button>
-      </div>
+
 
       {/* ---- the coach: which way is which, shown once per run ---- */}
       {phase === "coach" && current && (
