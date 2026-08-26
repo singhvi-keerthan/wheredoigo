@@ -31,13 +31,20 @@ server (`mcp.swiggy.com/dineout`). Without `SWIGGY_MCP_TOKEN` both fall back to
 mock data, so the app is fully usable with no credentials.
 
 ```bash
-npm run swiggy:auth   # browser consent (phone + OTP) → prints the env line
+npm run swiggy:auth   # browser consent (phone + OTP) → prints the env lines
 ```
 
-Swiggy's access tokens last **5 days** and v1.0 has **no refresh tokens** — the
-docs say to treat every 401 as "re-run authorization". So this is a recurring
-chore, not one-time setup: when the deck says *"Swiggy needs reconnecting"*,
-re-run the command above and update the env var (locally and on Vercel).
+Swiggy's access tokens last **5 days** and there is no way to renew one without
+redoing consent, so this is a recurring chore: when the deck says *"Swiggy needs
+reconnecting"*, re-run the command above and update the env vars (locally and on
+Vercel).
+
+Their server metadata advertises a `refresh_token` grant and the token endpoint
+does implement it — but no refresh token is ever issued, because Dynamic Client
+Registration is a stub that hands every caller the same `client_id` and stores
+nothing. `scripts/swiggy-oauth.ts` documents the probes. `npm run swiggy:refresh`
+exists and is correct; it simply has nothing to work with until Swiggy starts
+issuing refresh tokens.
 
 ## Checks
 

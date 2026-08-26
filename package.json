@@ -9,7 +9,8 @@
     "lint": "eslint",
     "test": "vitest run",
     "eval:decide": "tsx scripts/eval-decide.ts",
-    "swiggy:auth": "tsx scripts/swiggy-auth.ts"
+    "swiggy:auth": "tsx --env-file-if-exists=.env.local scripts/swiggy-auth.ts",
+    "swiggy:refresh": "tsx --env-file-if-exists=.env.local scripts/swiggy-refresh.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

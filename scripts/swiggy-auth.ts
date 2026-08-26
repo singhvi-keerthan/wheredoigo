@@ -1,73 +1,47 @@
 /**
- * Mint a Swiggy MCP access token.  `npm run swiggy:auth`
+ * Mint a Swiggy MCP access token from scratch.  `npm run swiggy:auth`
  *
  * Swiggy's Builders Club auth is OAuth 2.1 + PKCE with Dynamic Client
  * Registration (RFC 7591). MCP-native clients (Claude Desktop, Cursor) do this
  * invisibly; a server-rendered app has to do it itself, which is what this
  * script is for.
  *
- * The important constraint, straight from the docs: access tokens last **5
- * days** and there are **no refresh tokens in v1.0** — "always treat 401 as
- * 're-run authorization'". So this isn't a one-time setup step. It's a chore
- * that comes back roughly weekly, which is why it's a script and not a
- * paragraph in the README.
+ * Access tokens last 5 days and Swiggy issues no refresh token, so this — phone
+ * and an OTP — IS the renewal, every 5 days. scripts/swiggy-oauth.ts records
+ * why, and what would have to change on Swiggy's side for the cheaper
+ * `npm run swiggy:refresh` path to become the routine one instead.
  *
- * Flow: discover endpoints → register a client → PKCE → browser consent
- * (phone + OTP) → exchange the code → print the env line to paste.
+ * Flow: discover endpoints -> register a client -> PKCE -> browser consent
+ * (phone + OTP) -> exchange the code -> print the env lines to paste.
  */
 
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { exec } from "node:child_process";
+import { discover, expiryLine, type TokenResponse } from "./swiggy-oauth";
 
-const BASE = process.env.SWIGGY_AUTH_BASE ?? "https://mcp.swiggy.com";
 const PORT = Number(process.env.SWIGGY_AUTH_PORT ?? 8765);
 const REDIRECT_URI = `http://localhost:${PORT}/callback`;
 const SCOPE = "mcp:tools";
 
 const b64url = (b: Buffer) => b.toString("base64url");
 
-type Endpoints = { authorization: string; token: string; registration: string };
-
-// RFC 8414 metadata, with the documented paths as a fallback so a discovery
-// hiccup doesn't block the whole flow.
-async function discover(): Promise<Endpoints> {
-  const fallback: Endpoints = {
-    authorization: `${BASE}/auth/authorize`,
-    token: `${BASE}/auth/token`,
-    registration: `${BASE}/auth/register`,
-  };
-  try {
-    const res = await fetch(`${BASE}/.well-known/oauth-authorization-server`);
-    if (!res.ok) return fallback;
-    const meta = (await res.json()) as Record<string, unknown>;
-    return {
-      authorization: (meta.authorization_endpoint as string) ?? fallback.authorization,
-      token: (meta.token_endpoint as string) ?? fallback.token,
-      registration: (meta.registration_endpoint as string) ?? fallback.registration,
-    };
-  } catch {
-    return fallback;
-  }
-}
-
+// Always registers a fresh client. The previous version reused SWIGGY_CLIENT_ID
+// to "skip re-registering", which was wrong twice over: this script never
+// loaded .env.local (no dotenv, and tsx doesn't do it), so the variable was
+// unset unless you exported it by hand — and now that the npm script DOES load
+// it, reusing that id would hand back a client registered before we started
+// asking for the refresh grant. Swiggy won't issue a refresh token to a client
+// that never declared it, so a cached id would silently cost you the very thing
+// this is for. Registration is one unauthenticated POST; caching saves nothing.
 async function register(url: string): Promise<{ clientId: string; clientSecret?: string }> {
-  // A client id can be reused across runs — only the token expires. Set
-  // SWIGGY_CLIENT_ID to skip re-registering every time.
-  if (process.env.SWIGGY_CLIENT_ID) {
-    return {
-      clientId: process.env.SWIGGY_CLIENT_ID,
-      clientSecret: process.env.SWIGGY_CLIENT_SECRET,
-    };
-  }
-
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       client_name: "wheredoigokeerthan",
       redirect_uris: [REDIRECT_URI],
-      grant_types: ["authorization_code"],
+      grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: "none", // public client — PKCE is the protection
       scope: SCOPE,
@@ -156,14 +130,21 @@ async function main() {
   });
   if (!res.ok) throw new Error(`token exchange failed (${res.status}): ${await res.text()}`);
 
-  const token = (await res.json()) as { access_token?: string; expires_in?: number };
+  const token = (await res.json()) as TokenResponse;
   if (!token.access_token) throw new Error("token response had no access_token");
 
-  const days = token.expires_in ? (token.expires_in / 86400).toFixed(1) : "~5";
-  console.log(`\nToken good for ${days} days. Add to .env.local (and Vercel):\n`);
+  console.log("\n" + expiryLine(token.access_token) + "\n");
+  console.log("Paste into .env.local (and Vercel):\n");
   console.log(`SWIGGY_MCP_TOKEN=${token.access_token}`);
-  if (!process.env.SWIGGY_CLIENT_ID) {
-    console.log(`SWIGGY_CLIENT_ID=${clientId}   # reuse this to skip re-registering`);
+  console.log(`SWIGGY_CLIENT_ID=${clientId}`);
+  if (token.refresh_token) {
+    console.log(`SWIGGY_REFRESH_TOKEN=${token.refresh_token}`);
+    console.log("\nWith those set, `npm run swiggy:refresh` renews the access token");
+    console.log("with no phone and no OTP. Run it before the date above.");
+  } else {
+    console.log("\nNo refresh_token — expected, and not a failure: Swiggy doesn't issue");
+    console.log("them (scripts/swiggy-oauth.ts has the evidence). The next renewal is");
+    console.log("this same command, OTP included, before the date above.");
   }
   console.log("");
 }
