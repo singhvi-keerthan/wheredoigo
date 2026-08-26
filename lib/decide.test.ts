@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { rankPlaces } from "./decide";
+import { rankPlaces, areaMatches } from "./decide";
 import type { Place } from "./types";
 
 let n = 0;
@@ -112,5 +112,57 @@ describe("rankPlaces", () => {
       const out = rankPlaces([plain, noted], { keywords: ["pizza"] }, seed);
       expect(out[0].place.id).toBe(noted.id);
     }
+  });
+});
+
+// Localities arrive spelled three different ways — Google's "Indira Nagar",
+// Swiggy's "Indiranagar", and whatever you actually type — so the match has to
+// survive spacing and a wrong letter without merging genuinely different places.
+describe("areaMatches", () => {
+  it.each([
+    ["Indira Nagar", "Indiranagar", "spacing only"],
+    ["Indira Nagar", "Indra Nagar", "spacing and a dropped letter"],
+    ["Indiranagar", "Indranagar", "dropped letter"],
+    ["Jayanagar", "Jaya Nagar", "spacing"],
+    ["Jayanagar", "Jaynagar", "dropped letter"],
+    ["Jayanagar 4th Block", "Jayanagar", "nesting"],
+    ["Indiranagar 1st Stage", "Indranagar", "nesting plus a misspelling"],
+    ["Koramangala", "Coramangala", "wrong first letter"],
+    ["Malleshwaram", "Malleswaram", "dropped letter mid-word"],
+    ["Whitefield", "Whitfield", "dropped letter"],
+    ["Bellandur", "Bellandhur", "extra letter"],
+    ["Rajajinagar", "Rajaji Nagar", "spacing"],
+    ["Basavanagudi", "Basavangudi", "dropped letter"],
+    ["Marathahalli", "Marathalli", "dropped syllable"],
+    ["HSR Layout", "H.S.R. Layout", "punctuation"],
+    ["hsr layout", "HSR LAYOUT", "case"],
+  ])("matches %s / %s (%s)", (a, b) => {
+    expect(areaMatches(a, b)).toBe(true);
+    expect(areaMatches(b, a)).toBe(true); // symmetric, whichever side asks
+  });
+
+  // The failure that matters more than a miss: quietly folding two real
+  // neighbourhoods into one. The pairs below are all genuinely distinct.
+  it.each([
+    ["HSR", "HAL"],
+    ["HSR Layout", "HBR Layout"],
+    ["RT Nagar", "RR Nagar"],
+    ["JP Nagar", "Jayanagar"],
+    ["Banashankari", "Banaswadi"],
+    ["Koramangala", "Jayanagar"],
+    ["Frazer Town", "Cooke Town"],
+    ["Hebbal", "Domlur"],
+    ["Indiranagar", "Ulsoor"],
+  ])("keeps %s and %s apart", (a, b) => {
+    expect(areaMatches(a, b)).toBe(false);
+    expect(areaMatches(b, a)).toBe(false);
+  });
+
+  it("needs both sides", () => {
+    expect(areaMatches(undefined, "Indiranagar")).toBe(false);
+    expect(areaMatches("", "Indiranagar")).toBe(false);
+    expect(areaMatches("Indiranagar", "")).toBe(false);
+    expect(areaMatches("Indiranagar", "   ")).toBe(false);
+    expect(areaMatches("!!!", "Indiranagar")).toBe(false); // normalises to empty
   });
 });

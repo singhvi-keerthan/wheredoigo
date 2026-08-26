@@ -4,12 +4,14 @@ import { useState, type CSSProperties } from "react";
 import {
   Star,
   MapPin,
+  MapPinOff,
   Clock,
   Navigation,
   CalendarClock,
   SquarePen,
 } from "lucide-react";
 import { isOpenNow, type Place, type Visit } from "@/lib/types";
+import { swiggyDirectionsUrl } from "@/lib/swiggyClient";
 import { coverPhoto, photosSorted, leadRating, leadPrice, stateMeta, hoursPill, directionsUrl } from "@/lib/format";
 import type { DeckCard } from "@/lib/deck";
 import { PoweredBySwiggy } from "./PoweredBySwiggy";
@@ -53,6 +55,10 @@ type CardView = {
   ratingMine: boolean;
   priceLabel: string;
   area: string | null;
+  // Whether `area` is all we really know — see Place.approxLocation. Only the
+  // saved half can be approximate: a not-yet-saved Swiggy row isn't pinned
+  // anywhere, its Directions link searches by name, so it can't mislead.
+  approx: boolean;
   chips: string[]; // cuisine/staple tags, or Swiggy cuisines
   reasons: string[];
   open: boolean | null;
@@ -74,6 +80,7 @@ function savedView(place: Place, reasons: string[]): CardView {
     ratingMine: rating.mine,
     priceLabel: leadPrice(place).label,
     area: place.area ?? null,
+    approx: place.approxLocation === true,
     chips,
     reasons,
     open: isOpenNow(place.openingPeriods),
@@ -91,6 +98,7 @@ function newView(card: Extract<DeckCard, { kind: "new" }>): CardView {
     ratingMine: false,
     priceLabel: r.priceForTwo != null ? `₹${r.priceForTwo.toLocaleString("en-IN")} for two` : "—",
     area: r.area ?? null,
+    approx: false,
     chips: r.cuisines,
     reasons: [],
     open: null,
@@ -237,6 +245,14 @@ function SavedBody({
 
       <Section title="Where">
         <Prose>{place.address || place.area || "No address on file"}</Prose>
+        {/* The address can be right while the pin isn't — Directions goes to the
+            pin, so this belongs next to it. */}
+        {place.approxLocation && (
+          <p className="mt-1 inline-flex items-center gap-1.5 text-[12px]" style={{ color: "var(--text-tertiary)" }}>
+            <MapPinOff size={12} strokeWidth={2.25} />
+            Approximate pin — not the exact spot
+          </p>
+        )}
       </Section>
 
       {place.hoursText && place.hoursText.length > 0 && (
@@ -298,7 +314,7 @@ function NewBody({
       <Section title="Go">
         <div className="flex flex-col gap-2">
           <ActionButton
-            href={`https://www.google.com/maps/dir/?api=1&destination=${r.lat},${r.lng}`}
+            href={swiggyDirectionsUrl(r)}
             icon={<Navigation size={14} strokeWidth={2.5} fill="currentColor" />}
             label="Directions"
           />
@@ -530,10 +546,11 @@ export default function SwipeCard({
               </span>
             )}
             <span style={{ color: "rgba(255,255,255,0.8)" }}>{v.priceLabel}</span>
-            {v.area && (
+            {(v.area || v.approx) && (
               <span className="inline-flex items-center gap-1" style={{ color: "rgba(255,255,255,0.7)" }}>
-                <MapPin size={10} strokeWidth={2} />
-                {v.area}
+                {v.approx ? <MapPinOff size={10} strokeWidth={2} /> : <MapPin size={10} strokeWidth={2} />}
+                {v.area || "Location unknown"}
+                {v.approx && v.area ? " · approx." : ""}
               </span>
             )}
             {v.hours && (

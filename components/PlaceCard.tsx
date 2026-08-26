@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Star, Navigation, X, ChevronRight, ImagePlus, Camera, Trash2, Check, Ban, MapPin, Play } from "lucide-react";
+import { Star, Navigation, X, ChevronRight, ImagePlus, Camera, Trash2, Check, Ban, MapPin, MapPinOff, Play } from "lucide-react";
 import { displayState, type Place } from "@/lib/types";
 import { addPhoto, removePhoto, addVisit, toggleNeverAgain } from "@/lib/store";
 import { resizeImage } from "@/lib/image";
@@ -112,10 +112,13 @@ export default function PlaceCard({
             </h2>
 
             <div className="mt-1.5 flex items-center gap-2.5 text-[12.5px]" style={{ fontFamily: "var(--font-mono)" }}>
-              {place.area && (
+              {/* A crossed-out pin plus "approx." — the card has no room for a
+                  sentence, and this is the line the Directions button acts on. */}
+              {(place.area || place.approxLocation) && (
                 <span className="inline-flex items-center gap-1" style={{ color: "var(--text-tertiary)" }}>
-                  <MapPin size={11} strokeWidth={2} />
-                  {place.area}
+                  {place.approxLocation ? <MapPinOff size={11} strokeWidth={2} /> : <MapPin size={11} strokeWidth={2} />}
+                  {place.area || "Location unknown"}
+                  {place.approxLocation && place.area ? " · approx." : ""}
                 </span>
               )}
               {rating.value != null && (

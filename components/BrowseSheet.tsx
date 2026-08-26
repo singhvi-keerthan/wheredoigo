@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, ArrowLeft, ChevronRight, Star, MapPin, Images, Navigation } from "lucide-react";
+import { X, ArrowLeft, ChevronRight, Star, MapPin, MapPinOff, Images, Navigation } from "lucide-react";
 import { usePlaces } from "@/lib/store";
 import { NAMESPACE_LABELS, type Place, type TagNamespace } from "@/lib/types";
 import { coverPhoto, photosSorted, leadRating, stateMeta, hoursPill, directionsUrl } from "@/lib/format";
@@ -233,10 +233,11 @@ function PlaceRow({ place, onPick }: { place: Place; onPick: (id: string) => voi
           {place.name}
         </span>
         <span className="mt-0.5 flex items-center gap-2 font-[family-name:var(--font-mono)] text-[11.5px]" style={{ color: "var(--text-tertiary)" }}>
-          {place.area && (
+          {(place.area || place.approxLocation) && (
             <span className="inline-flex items-center gap-1 truncate">
-              <MapPin size={10} strokeWidth={2} />
-              {place.area}
+              {place.approxLocation ? <MapPinOff size={10} strokeWidth={2} /> : <MapPin size={10} strokeWidth={2} />}
+              {place.area || "Location unknown"}
+              {place.approxLocation && place.area ? " · approx." : ""}
             </span>
           )}
           {rating.value != null && (

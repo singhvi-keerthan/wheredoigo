@@ -11,7 +11,22 @@ export type { SwiggyRestaurant, SwiggySlot, SwiggyBooking, UserCoords };
 // rest of the app this one really does need a concrete fallback.
 export const FALLBACK_COORDS: UserCoords = { lat: 12.972, lng: 77.61 };
 
-// The access token lasts 5 days and Swiggy has no refresh flow in v1.0, so
+// Directions for a Swiggy card — the sibling of format.ts's Place-based
+// directionsUrl, which a not-yet-saved Swiggy row has no Place for.
+// Live rows have no coordinates — Swiggy doesn't
+// publish them — so the destination is the name and locality, which Google Maps
+// resolves as happily as a coordinate pair. Falls back to real coordinates when
+// there are any, which is the mock rows and any future Swiggy that ships them.
+export function swiggyDirectionsUrl(r: SwiggyRestaurant): string {
+  const destination =
+    r.lat != null && r.lng != null
+      ? `${r.lat},${r.lng}`
+      : [r.name, r.area].filter(Boolean).join(", ");
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}`;
+}
+
+// The access token lasts 5 days, and renewing it is a chore someone has to run
+// (`npm run swiggy:refresh`) — nothing in the request path renews it — so
 // "reconnect" is a normal state the UI has to be able to say out loud.
 export type SwiggyError = "swiggy_reauth" | "swiggy_unavailable" | "fetch_failed";
 

@@ -5,6 +5,7 @@ import { X, Star, MapPin, Navigation, Heart, CalendarClock, Check } from "lucide
 import {
   getSlots,
   bookTable,
+  swiggyDirectionsUrl,
   type SwiggyRestaurant,
   type SwiggySlot,
   type SwiggyError,
@@ -45,7 +46,7 @@ export default function NewCardDetail({
   const [note, setNote] = useState<string | null>(null);
   const [payUrl, setPayUrl] = useState<string | null>(null);
 
-  const directions = `https://www.google.com/maps/dir/?api=1&destination=${r.lat},${r.lng}`;
+  const directions = swiggyDirectionsUrl(r);
 
   const startBooking = async () => {
     setBooking(true);

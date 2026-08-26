@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  X, Navigation, Heart, Ban, Star, Plus, ImagePlus, Camera, Trash2, MapPin, Check, Clapperboard, Play, Pencil,
+  X, Navigation, Heart, Ban, Star, Plus, ImagePlus, Camera, Trash2, MapPin, MapPinOff, Check, Clapperboard, Play, Pencil,
 } from "lucide-react";
 import {
   usePlace, updatePlace, toggleFavorite, toggleNeverAgain, setTags, addPhoto, removePhoto,
@@ -132,6 +132,15 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
           </h1>
           {place.address && (
             <p className="mt-0.5 text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>{place.address}</p>
+          )}
+          {/* The address can be exact while the pin isn't — Swiggy gives one and
+              not the other. Directions below navigates to the pin, so this has
+              to be said before someone drives to it. */}
+          {place.approxLocation && (
+            <p className="mt-1 inline-flex items-center gap-1.5 text-[12px]" style={{ color: "var(--text-tertiary)" }}>
+              <MapPinOff size={12} strokeWidth={2.25} />
+              Approximate pin — not the exact spot
+            </p>
           )}
           {(place.area || open !== null || todayHours) && (
             <div className="mt-1.5 flex items-center gap-1.5 text-[12px]">

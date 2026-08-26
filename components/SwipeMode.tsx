@@ -142,7 +142,8 @@ async function fixSwiggyPosition(placeId: string, r: SwiggyRestaurant) {
   // Brewery", and "Toit" for "Toit - Indiranagar".
   if (hit && nameCarries(hit.name, r.name)) {
     if (!getPlace(placeId)) return; // undone while we were away
-    updatePlace(placeId, { lat: hit.lat, lng: hit.lng, googlePlaceId: hit.placeId });
+    // Google knows exactly where it is — the pin is no longer a guess.
+    updatePlace(placeId, { lat: hit.lat, lng: hit.lng, googlePlaceId: hit.placeId, approxLocation: false });
     return;
   }
 
@@ -174,6 +175,9 @@ function saveNew(r: SwiggyRestaurant, seed: UserCoords): string {
     // let fixSwiggyPosition correct it.
     lat: r.lat ?? seed.lat,
     lng: r.lng ?? seed.lng,
+    // Seeded from your position, so it's a guess until fixSwiggyPosition says
+    // otherwise — and it stays a guess if Google can only find the locality.
+    approxLocation: r.lat == null || r.lng == null,
     status: "watchlist",
     myRating: null,
     googleRating: r.rating,

@@ -85,6 +85,13 @@ export interface Place {
   city?: string;
   lat: number;
   lng: number;
+  // True when lat/lng is NOT the place's own position. Swiggy publishes no
+  // restaurant coordinates, so a swipe-saved find is stored at your position and
+  // then moved to whatever Google can resolve for it — an exact match clears
+  // this, falling back to the locality centroid (or failing outright) leaves it
+  // set. The UI has to say so out loud: a pin you can't tell is a guess is worse
+  // than a pin you know is one, because you'd drive to it.
+  approxLocation?: boolean;
   status: PlaceStatus;
   favorite: boolean; // preference flag, overlays visited
   neverAgain: boolean; // preference flag, overlays visited

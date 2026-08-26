@@ -50,16 +50,43 @@ export type DeckCard =
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
-// A Swiggy result that's clearly already on your map (same-ish name within
-// ~120m — the same rule findDuplicate uses). Dropped from New/Both so the deck
-// never offers a "new" card for a place you already have. Kept local to avoid
-// pulling the "use client" store into this pure module.
+// A Swiggy result that's clearly already on your map. Dropped from New/Both so
+// the deck never offers a "new" card for a place you already have. Kept local
+// to avoid pulling the "use client" store into this pure module.
+//
+// Two rules, because a Swiggy row may or may not have a position. With one it's
+// same-ish name within ~120m — what findDuplicate uses. Live Swiggy rows have
+// none (Swiggy doesn't publish restaurant coordinates; one is looked up from
+// Google at save time), so there the locality stands in for the proximity gate:
+// same name in the same area is the same restaurant. That's looser and can let
+// a duplicate through — the alternative is geocoding every card just to dedupe
+// the ones you'd never save.
 function alreadySaved(r: SwiggyRestaurant, places: Place[]): boolean {
   const rn = norm(r.name);
+  // Within 120m a 5-character prefix is safe — two restaurants that close with
+  // names starting the same way are the same restaurant. Without coordinates it
+  // is NOT: "The Black Pearl" and "The Bluebop Cafe" share "thebl", and in the
+  // same locality that prefix rule would silently hide a genuinely new place.
+  // So the coordinate-less path demands one name to contain the other whole.
+  const prefixName = (p: Place) => norm(p.name) === rn || norm(p.name).includes(rn.slice(0, 5));
+  const wholeName = (p: Place) => {
+    const pn = norm(p.name);
+    return pn === rn || pn.includes(rn) || rn.includes(pn);
+  };
+  // Blank on either side means the locality can't gate anything — a prose
+  // fallback row can carry area:"" and Place.area is optional. Standing the
+  // whole check down there would re-offer a place already on your map, so the
+  // name alone decides, and it has to match exactly. Otherwise areaMatches
+  // rules, spelling tolerance included: "Indira Nagar" (Google's sublocality)
+  // and "Indiranagar" (Swiggy's prose) are the same neighbourhood.
+  const sameArea = (p: Place) => {
+    if (!p.area?.trim() || !r.area.trim()) return norm(p.name) === rn;
+    return areaMatches(p.area, r.area);
+  };
   return places.some((p) => {
+    if (r.lat == null || r.lng == null) return sameArea(p) && wholeName(p);
     const near = Math.abs(p.lat - r.lat) < 0.0011 && Math.abs(p.lng - r.lng) < 0.0011;
-    if (!near) return false;
-    return norm(p.name) === rn || norm(p.name).includes(rn.slice(0, 5));
+    return near && prefixName(p);
   });
 }
 

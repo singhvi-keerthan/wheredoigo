@@ -87,3 +87,46 @@ describe("buildDeck — standard filters on Swiggy cards", () => {
     expect(deck([r], { cuisines: ["north-indian"] })).toEqual([`new:${r.id}`]);
   });
 });
+
+// Live Swiggy rows arrive without coordinates, so the ~120m proximity gate has
+// nothing to measure and the locality stands in for it — see alreadySaved.
+describe("buildDeck — deduping a Swiggy row that has no coordinates", () => {
+  const deckWith = (places: Place[], swiggy: SwiggyRestaurant[]) =>
+    buildDeck({ source: "new", places, query: {}, swiggy, seed: 1, seen: new Set() }).map((c) => c.key);
+
+  it("hides a coordinate-less row already on your map in the same area", () => {
+    const r = sw({ name: "Downtown Diner", area: "Residency Road", lat: null, lng: null });
+    const saved = mk({ name: "Downtown Diner", area: "Residency Road" });
+    expect(deckWith([saved], [r])).toEqual([]);
+  });
+
+  it("keeps a same-named row in a different area", () => {
+    const r = sw({ name: "Downtown Diner", area: "Whitefield", lat: null, lng: null });
+    const saved = mk({ name: "Downtown Diner", area: "Residency Road" });
+    expect(deckWith([saved], [r])).toEqual([`new:${r.id}`]);
+  });
+
+  it("keeps a different restaurant that merely shares a name prefix", () => {
+    // Without coordinates the locality is the only other gate, so a 5-char
+    // prefix rule would hide this: norm("The Bluebop Cafe") contains "thebl".
+    const r = sw({ name: "The Black Pearl", area: "Indiranagar", lat: null, lng: null });
+    const saved = mk({ name: "The Bluebop Cafe", area: "Indiranagar" });
+    expect(deckWith([saved], [r])).toEqual([`new:${r.id}`]);
+  });
+
+  it("matches localities that are spelled apart", () => {
+    // Google's sublocality says "Indira Nagar"; Swiggy's prose says
+    // "Indiranagar". Same place, and a plain lowercase compare misses it.
+    const r = sw({ name: "Copper & Char", area: "Indiranagar", lat: null, lng: null });
+    const saved = mk({ name: "Copper & Char", area: "Indira Nagar" });
+    expect(deckWith([saved], [r])).toEqual([]);
+  });
+
+  it("still uses proximity when the row does carry coordinates", () => {
+    // Same name, same coordinates, DIFFERENT area text: the coordinate path
+    // must not start consulting the locality.
+    const r = sw({ name: "Copper & Char", area: "Indiranagar", lat: 12.9719, lng: 77.6412 });
+    const saved = mk({ name: "Copper & Char", area: "somewhere else entirely", lat: 12.9719, lng: 77.6412 });
+    expect(deckWith([saved], [r])).toEqual([]);
+  });
+});

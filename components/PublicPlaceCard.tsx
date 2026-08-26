@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Image from "next/image";
-import { Star, Navigation, X, MapPin, Play } from "lucide-react";
+import { Star, Navigation, X, MapPin, MapPinOff, Play } from "lucide-react";
 import type { Place } from "@/lib/types";
 import { leadPrice, leadRating, stateMeta, directionsUrl, photosSorted, hoursPill, referenceSourceLabel } from "@/lib/format";
 import { PoweredBySwiggy } from "./PoweredBySwiggy";
@@ -97,10 +97,13 @@ export default function PublicPlaceCard({ place, onClose }: { place: Place; onCl
                 that gets cut off is what he paid — which is half the reason to
                 send someone this link at all. */}
             <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12.5px]" style={{ fontFamily: "var(--font-mono)" }}>
-              {place.area && (
+              {/* The person opening a shared link has no other way to know the
+                  pin is a guess — they'd just follow Directions to a junction. */}
+              {(place.area || place.approxLocation) && (
                 <span className="inline-flex items-center gap-1" style={{ color: "var(--text-tertiary)" }}>
-                  <MapPin size={11} strokeWidth={2} />
-                  {place.area}
+                  {place.approxLocation ? <MapPinOff size={11} strokeWidth={2} /> : <MapPin size={11} strokeWidth={2} />}
+                  {place.area || "Location unknown"}
+                  {place.approxLocation && place.area ? " · approx." : ""}
                 </span>
               )}
               {rating.value != null && (

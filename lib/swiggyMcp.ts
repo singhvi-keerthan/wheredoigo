@@ -65,6 +65,10 @@ function isAuthFailure(err: unknown): boolean {
 type ToolContent = { type?: string; text?: string };
 type ToolResult = { isError?: boolean; structuredContent?: unknown; content?: ToolContent[] };
 
+// Both halves of a Swiggy answer. Which half carries the payload is a property
+// of the TOOL, not of success or failure — see unwrapReply.
+export type SwiggyReply<T> = { data: T | null; text: string };
+
 function textOf(result: ToolResult): string {
   const parts = Array.isArray(result.content) ? result.content : [];
   return parts
@@ -74,21 +78,41 @@ function textOf(result: ToolResult): string {
     .trim();
 }
 
-// MCP servers may answer with `structuredContent` or with JSON stuffed into a
-// text block; Swiggy's docs show the payload shape but not which envelope, so
-// accept both.
-function unwrap<T>(raw: unknown): T {
-  const result = (raw ?? {}) as ToolResult;
-  if (result.isError) throw new Error(textOf(result) || "swiggy_tool_error");
-  if (result.structuredContent !== undefined) return result.structuredContent as T;
+const isFilledRecord = (v: unknown): boolean =>
+  typeof v === "object" && v !== null && !Array.isArray(v) && Object.keys(v).length > 0;
 
+// Swiggy fills exactly ONE of the two envelopes, and which one depends on the
+// tool — verified live against mcp.swiggy.com/dineout, not inferred:
+//
+//   structuredContent  render_restaurants_dineout, get_restaurant_details,
+//                      get_saved_locations, get_available_slots (when slots exist)
+//   text block         search_restaurants_dineout, get_available_slots (when none)
+//
+// The text-block tools still SEND `structuredContent` — as `{}`. An empty
+// object, not an absent one. So "is structuredContent defined?" is the wrong
+// question: `{}` is defined and carries nothing, and taking it is what silently
+// emptied the deck. Treat an empty object as absent and hand the caller both
+// halves, so each tool binding reads the envelope Swiggy actually filled.
+export function unwrapReply<T>(raw: unknown): SwiggyReply<T> {
+  const result = (raw ?? {}) as ToolResult;
   const text = textOf(result);
-  if (!text) throw new Error("swiggy_empty_result");
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    throw new Error("swiggy_unparsable_result");
+
+  // Tool-level failures come back as isError + the reason as prose.
+  if (result.isError) throw new Error(text || "swiggy_tool_error");
+
+  if (isFilledRecord(result.structuredContent)) {
+    return { data: result.structuredContent as T, text };
   }
+  // Some MCP servers stuff JSON into the text block instead. Swiggy's prose
+  // never starts with a brace, so this can't misfire on a prose answer.
+  if (text.startsWith("{") || text.startsWith("[")) {
+    try {
+      return { data: JSON.parse(text) as T, text };
+    } catch {
+      // Not JSON after all — fall through and let the caller read the prose.
+    }
+  }
+  return { data: null, text };
 }
 
 async function callOnce(bearer: string, name: string, args: Record<string, unknown>) {
@@ -96,26 +120,42 @@ async function callOnce(bearer: string, name: string, args: Record<string, unkno
   return client.callTool({ name, arguments: args });
 }
 
-export async function callSwiggyTool<T>(
+// Both envelopes, for the bindings that need to read Swiggy's prose.
+export async function callSwiggyReply<T>(
   name: string,
   args: Record<string, unknown>
-): Promise<T> {
+): Promise<SwiggyReply<T>> {
   const bearer = token();
   if (!bearer) throw new Error("swiggy_not_configured");
 
   try {
-    return unwrap<T>(await callOnce(bearer, name, args));
+    return unwrapReply<T>(await callOnce(bearer, name, args));
   } catch (err) {
     // Drop the session either way: a 401 invalidates it, and a transport error
     // usually means the server expired a session this instance still holds.
     cached = null;
     if (isAuthFailure(err)) throw new SwiggyAuthError();
     try {
-      return unwrap<T>(await callOnce(bearer, name, args));
+      return unwrapReply<T>(await callOnce(bearer, name, args));
     } catch (retryErr) {
       cached = null;
       if (isAuthFailure(retryErr)) throw new SwiggyAuthError();
       throw retryErr;
     }
   }
+}
+
+// Structured-or-throw, for the tools that genuinely do fill structuredContent.
+// A prose answer here means Swiggy changed shape under us — and quietly
+// returning an empty object on that is exactly what emptied the deck, so this
+// fails loudly instead, carrying Swiggy's own words into the error.
+export async function callSwiggyTool<T>(
+  name: string,
+  args: Record<string, unknown>
+): Promise<T> {
+  const { data, text } = await callSwiggyReply<T>(name, args);
+  if (data === null) {
+    throw new Error(text ? `swiggy_unstructured_result: ${text.slice(0, 160)}` : "swiggy_empty_result");
+  }
+  return data;
 }

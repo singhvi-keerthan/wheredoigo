@@ -8,16 +8,20 @@
 //
 // Shapes here follow the published tool reference:
 //   search_restaurants_dineout(query, entityType?, latitude, longitude)
+//   render_restaurants_dineout(searches[{query,latitude,longitude,entityType?}], restaurantIds)
 //   get_restaurant_details(restaurantId, latitude, longitude)
 //   get_available_slots(restaurantId, date, latitude, longitude, guestCount?)
 //   book_table(restaurantId, slotId, itemId, reservationTime, guestCount, lat, lng)
 //
 // IMPORTANT distinction the docs are firm about: the latitude/longitude passed
 // to every tool is the *user's* location, not the restaurant's — it's echoed
-// through search → details → slots → book unchanged. The restaurant's own
-// coords (what the map pin needs) only ever come out of the response payload.
+// through search → details → slots → book unchanged. And the restaurant's own
+// coordinates are NOT in any response: every field path of search, render and
+// details was enumerated against the live server and the only lat/lng present
+// is that same user echo, at the root. The map pin is bought from Google at
+// save time instead — see fixSwiggyPosition in components/SwipeMode.tsx.
 
-import { callSwiggyTool, swiggyLive } from "./swiggyMcp";
+import { callSwiggyReply, callSwiggyTool, swiggyLive, SwiggyAuthError } from "./swiggyMcp";
 
 export { SwiggyAuthError, swiggyLive } from "./swiggyMcp";
 
@@ -27,8 +31,13 @@ export interface SwiggyRestaurant {
   cuisines: string[];
   area: string;
   address: string;
-  lat: number;
-  lng: number;
+  // Swiggy Dineout does not publish restaurant coordinates — verified against
+  // every field of search / render / details: the only lat/lng in a response is
+  // the USER's, echoed back. So a live Swiggy card has no position, and one is
+  // looked up from Google at save time (SwipeMode.saveNew). Mock rows keep real
+  // coordinates so the no-token path still exercises the map shape.
+  lat: number | null;
+  lng: number | null;
   rating: number | null;
   priceForTwo: number | null;
   photo: string | null; // absolute URL, resolved from Swiggy's bare image id
@@ -292,51 +301,115 @@ function mockSlots(restaurantId: string): SwiggySlot[] {
 function toRestaurant(o: Rec): SwiggyRestaurant | null {
   const id = asStr(pick(o, "id", "restaurantId", "resId", "restaurant_id"));
   const name = asStr(pick(o, "name", "restaurantName", "restaurant_name"));
+  // An id and a name are the whole floor: without them the card can't be shown
+  // or booked. Coordinates used to be required too, back when they were assumed
+  // to be in the payload — they never are, so requiring them dropped every row.
+  if (!id || !name) return null;
+  // Kept anyway: costs nothing, and the day Swiggy starts sending real
+  // restaurant coordinates the save-time Google lookup stops being needed.
   const coords = coordsOf(o);
-  // Map-first app: a pin without a real position is worse than no pin, and a
-  // placeholder would poison the dedupe check in lib/deck.ts. Dropped instead,
-  // and counted by the caller so it shows up in logs rather than vanishing.
-  if (!id || !name || !coords) return null;
 
   const area = asStr(pick(o, "locality", "area", "subLocality", "neighbourhood")) ?? "";
+  // get_restaurant_details prefixes the address with the distance FROM THE USER
+  // ("13.6 km • A11, Block A, Kr Road…") — it changes depending on where you
+  // ask from, so it isn't part of the address and must not be stored as one.
+  const address = asStr(pick(o, "address", "fullAddress", "addressLine"))?.replace(
+    /^\s*[\d.]+\s*(?:km|m)\s*[•·]\s*/i,
+    ""
+  );
   return {
     id,
     name,
     cuisines: asCuisines(pick(o, "cuisines", "cuisine", "cuisineList")),
     area,
-    address: asStr(pick(o, "address", "fullAddress", "addressLine")) ?? area,
-    lat: coords.lat,
-    lng: coords.lng,
-    rating: asRating(pick(o, "rating", "avgRating", "ratingValue")),
+    address: address || area,
+    lat: coords?.lat ?? null,
+    lng: coords?.lng ?? null,
+    // Swiggy sends `{ value: "0", count: 0 }` for a restaurant nobody has rated,
+    // not a null. Left as 0 it renders as "0★", which reads as a terrible
+    // restaurant rather than an unrated one — and the rating filter drops both
+    // alike, so nothing is lost by normalising it here.
+    rating: asRating(pick(o, "rating", "avgRating", "ratingValue")) || null,
     priceForTwo: asMoney(pick(o, "costForTwo", "priceForTwo", "costForTwoString", "cft")),
     photo: photoOf(o),
   };
 }
 
-// get_restaurant_details — the fallback when a search hit has no coordinates on
-// it. Called only for the results that need it, never speculatively.
-async function detailCoords(
-  restaurantId: string,
-  user: UserCoords
-): Promise<{ lat: number; lng: number } | null> {
-  try {
-    const data = payload(
-      await callSwiggyTool("get_restaurant_details", {
-        restaurantId,
-        latitude: user.lat,
-        longitude: user.lng,
-      })
-    );
-    return isRec(data) ? coordsOf(data) : null;
-  } catch {
-    return null; // one unresolvable card shouldn't fail the whole search
+// One row of search_restaurants_dineout's prose list, e.g.
+//   8. Divina - Eden Park Restaurants —  | 4.0★ |  | Jayanagar (ID: 200005)
+// The columns between the dash and the id are pipe-separated and any of them
+// may be blank, so this reads them positionally-tolerantly rather than assuming
+// a fixed arity. The name is GREEDY on purpose: "Toit — Brewpub — | 4.5★ | …"
+// is a real shape, and a lazy match would silently truncate it to "Toit" — a
+// wrong name then flows into dedupe, Directions and the Google lookup.
+const SEARCH_ROW = /^\s*\d+\.\s+(.*)\s+—\s*([^—]*?)\s*\(ID:\s*(\d+)\)\s*$/;
+
+export type SearchRow = { id: string; name: string; rating: number | null; area: string };
+
+export function parseSearchRows(text: string): SearchRow[] {
+  const rows: SearchRow[] = [];
+  for (const line of text.split("\n")) {
+    const m = SEARCH_ROW.exec(line);
+    if (!m) continue;
+    const cols = m[2].split("|").map((c) => c.trim());
+    const star = cols.find((c) => c.endsWith("★"));
+    rows.push({
+      id: m[3],
+      name: m[1].trim(),
+      rating: star ? asNum(star.replace("★", "")) : null,
+      // The locality is the last column — but only the last NON-RATING one. A
+      // row that omits the locality would otherwise hand "4.1★" straight to the
+      // area filter, the dedupe check and the saved Place.area.
+      area: [...cols].reverse().find((c) => c !== "" && !c.endsWith("★")) ?? "",
+    });
   }
+  return rows;
 }
 
-// How many coordinate-less results are worth a follow-up detail call. The deck
-// only ever shows a handful before the user re-filters, so enriching the whole
-// tail would burn calls nobody sees.
-const ENRICH_LIMIT = 12;
+// A card built from the prose row alone. Fewer fields — no photo, no cost, no
+// cuisines — but a name, an area and a rating is still something the user can
+// act on, which beats an empty deck when the second call is what failed.
+function fromSearchRow(row: SearchRow): SwiggyRestaurant {
+  return {
+    id: row.id,
+    name: row.name,
+    cuisines: [],
+    area: row.area,
+    address: row.area,
+    lat: null,
+    lng: null,
+    // Same unrated-is-not-zero rule toRestaurant applies — the prose prints a
+    // ratingless restaurant as "0★", and a 0 here would render as "0.0" on the
+    // card and persist as googleRating: 0 onto your map when you save it.
+    rating: row.rating || null,
+    priceForTwo: null,
+    photo: null,
+  };
+}
+
+// render_restaurants_dineout — the structured twin of the search prose, and the
+// tool search itself tells you to call next. It takes the ids in the order they
+// should be shown plus the searches that produced them, and returns all of them
+// as real data in ONE call. That's two Swiggy calls per deck load instead of
+// one-per-restaurant, which matters while the agreement's rate limits are
+// stated only as categories with no numbers.
+async function renderRestaurants(ids: string[], search: Record<string, unknown>): Promise<Rec[]> {
+  if (ids.length === 0) return [];
+  try {
+    return listOf(
+      payload(
+        await callSwiggyTool<Rec>("render_restaurants_dineout", {
+          searches: [search],
+          restaurantIds: ids,
+        })
+      )
+    );
+  } catch (err) {
+    if (err instanceof SwiggyAuthError) throw err; // reconnect must reach the UI
+    console.warn("[swiggy] render_restaurants_dineout failed; falling back to the prose rows", err);
+    return [];
+  }
+}
 
 export async function searchDineoutRestaurants(query: {
   cuisine?: string;
@@ -363,29 +436,50 @@ export async function searchDineoutRestaurants(query: {
   };
   if (!keyword && cuisine) args.entityType = "CUISINE";
 
-  const raw = listOf(payload(await callSwiggyTool("search_restaurants_dineout", args)));
+  // Search answers in PROSE — a numbered list with ids in parentheses — and
+  // leaves structuredContent empty. See unwrapReply in swiggyMcp.ts.
+  const { data, text } = await callSwiggyReply<Rec>("search_restaurants_dineout", args);
 
-  const mapped = raw.map((o) => ({ o, r: toRestaurant(o) }));
-
-  // Retry the ones that failed only for want of coordinates.
-  const needsCoords = mapped
-    .filter((m) => !m.r && asStr(pick(m.o, "id", "restaurantId", "resId")) && asStr(pick(m.o, "name", "restaurantName")))
-    .slice(0, ENRICH_LIMIT);
-
-  if (needsCoords.length > 0) {
-    const resolved = await Promise.all(
-      needsCoords.map(async (m) => {
-        const id = asStr(pick(m.o, "id", "restaurantId", "resId"))!;
-        return { m, coords: await detailCoords(id, user) };
-      })
-    );
-    for (const { m, coords } of resolved) {
-      if (coords) m.r = toRestaurant({ ...m.o, latitude: coords.lat, longitude: coords.lng });
-    }
+  // If Swiggy ever starts filling structuredContent on search, prefer it.
+  let raw = listOf(payload(data ?? {}));
+  const rows = raw.length > 0 ? [] : parseSearchRows(text);
+  if (raw.length === 0) {
+    raw = await renderRestaurants(rows.map((r) => r.id), args);
   }
 
-  let results = mapped.map((m) => m.r).filter((r): r is SwiggyRestaurant => r !== null);
-  const dropped = mapped.length - results.length;
+  // The original bug was an unreadable answer being reported as an empty deck.
+  // If Swiggy reflows the sentence, parseSearchRows returns nothing and this
+  // would do exactly that again — one layer down. So when the prose itself says
+  // it found restaurants, or still carries ids we failed to read, fail loudly:
+  // the route turns that into a 502 the UI can actually say something about.
+  const claimed = /Found\s+(\d+)\s+restaurant/i.exec(text);
+  const shouldHaveRows = (claimed ? Number(claimed[1]) > 0 : false) || text.includes("(ID:");
+  if (data === null && rows.length === 0 && shouldHaveRows) {
+    console.error(`[swiggy] search prose parsed to zero rows — format changed? ${text.slice(0, 200)}`);
+    throw new Error("swiggy_unparsable_search");
+  }
+
+  let results = raw
+    .map((o) => toRestaurant(o))
+    .filter((r): r is SwiggyRestaurant => r !== null);
+
+  // Render can answer for only SOME of the ids, and toRestaurant drops anything
+  // with no id or name. Backfill those from the prose row instead of losing
+  // them — search already gave us a name, a rating and a locality for every one
+  // — and instead of the all-or-nothing fallback this used to do, which threw
+  // away nine good structured rows because the tenth was missing.
+  const covered = new Set(results.map((r) => r.id));
+  const missing = rows.filter((row) => !covered.has(row.id));
+  if (missing.length > 0) {
+    console.warn(
+      `[swiggy] ${missing.length}/${rows.length} rows had no structured record; using their prose`
+    );
+    results = [...results, ...missing.map(fromSearchRow)];
+  }
+
+  // What search offered but nothing could turn into a card. Counted against the
+  // prose rows when there are any, since that's the real denominator.
+  const dropped = Math.max(0, (rows.length || raw.length) - results.length);
 
   // Keyword took the query slot, so apply the cuisine lens here.
   if (keyword && cuisine) {
@@ -395,7 +489,7 @@ export async function searchDineoutRestaurants(query: {
   }
 
   if (dropped > 0) {
-    console.warn(`[swiggy] dropped ${dropped}/${mapped.length} search results with no resolvable coordinates`);
+    console.warn(`[swiggy] dropped ${dropped}/${rows.length || raw.length} results with no id or name`);
   }
   return { results, dropped };
 }
@@ -408,7 +502,13 @@ export async function getAvailableSlots(
 
   // Slots come back at the root of the response, not under `data` — the
   // reference calls this out explicitly ("access response.slots directly").
-  const res = await callSwiggyTool<Rec>("get_available_slots", {
+  //
+  // And when there are no tables for the date, Swiggy answers in prose ("No
+  // bookable slots for 2026-08-26. Do not retry this tool for the same date.")
+  // with an empty structuredContent and NO isError. That is an empty list, not
+  // a failure — so this reads the reply rather than the structured-or-throw
+  // wrapper, which would turn a normal sold-out evening into a 502.
+  const { data: res } = await callSwiggyReply<Rec>("get_available_slots", {
     restaurantId,
     date: opts.date ?? todayInIndia(),
     latitude: opts.lat ?? 12.972,

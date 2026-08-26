@@ -69,16 +69,80 @@ const PRICE_LEVEL_EST: Record<number, number> = { 0: 0, 1: 300, 2: 800, 3: 1500,
 
 const AREA_MAX_KM = 4;
 
-// Name-matched area. Localities nest ("Jayanagar" / "Jayanagar 4th Block"), so
-// containment either way is a match; exact equality would make half the chips
-// return nothing. Exported because the Swiggy half of the deck filters on the
-// same rule (lib/deck.ts) and the two must not drift.
+// Name-matched area. Two things make this looser than string equality.
+//
+// Localities nest ("Jayanagar" / "Jayanagar 4th Block"), so containment either
+// way is a match; exact equality would make half the chips return nothing.
+//
+// And people spell them differently. Google says "Indira Nagar", Swiggy's prose
+// says "Indiranagar", you'd type "Indra Nagar" — one place, three spellings, and
+// nobody should have to guess which one our records happen to hold. So the
+// comparison first strips everything that isn't a letter or digit (that alone
+// kills spacing, case, hyphens and periods), and only if that fails does it
+// allow a few character edits, which covers a dropped or doubled letter.
+//
+// Exported because the Swiggy half of the deck filters on the same rule
+// (lib/deck.ts) and the two must not drift.
+const normArea = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+// Words that name a KIND of locality rather than the locality. When two names
+// end in the same one, it's shared boilerplate and the difference lives entirely
+// in what's left — so "HSR Layout" vs "HBR Layout" is really "hsr" vs "hbr", and
+// gets judged on that, not on the 6 identical characters trailing it. Without
+// this they sit one edit apart and merge, and they are two different parts of
+// Bengaluru. Same for "RT Nagar" / "RR Nagar".
+const GENERIC = ["nagar", "layout", "colony", "town", "extension", "puram", "halli"];
+
+// The edit budget, scaled to the shorter name. Short names get none, because on
+// a 3-character name a single edit is most of the word: "HSR" and "HAL" are two
+// apart and unrelated. Capped so long names don't become a free-for-all.
+const editBudget = (len: number) => Math.min(2, Math.floor(len / 5));
+
+// Edit distance between `needle` and the closest substring of `hay` (Sellers'
+// free-start/free-end variant), so a misspelling still matches inside a longer
+// nested name — "indranagar" against "indiranagar 1st stage". Area names run to
+// a few dozen characters, so the full table is cheaper than being clever.
+function approxContains(hay: string, needle: string, max: number): boolean {
+  const n = hay.length;
+  const m = needle.length;
+  if (m === 0 || n === 0 || m > n + max) return false;
+  let prev = Array.from({ length: m + 1 }, (_, j) => j);
+  const row = new Array<number>(m + 1);
+  let best = m;
+  for (let i = 1; i <= n; i++) {
+    row[0] = 0; // free start — the match may begin anywhere in `hay`
+    for (let j = 1; j <= m; j++) {
+      const cost = hay.charCodeAt(i - 1) === needle.charCodeAt(j - 1) ? 0 : 1;
+      row[j] = Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + cost);
+    }
+    if (row[m] < best) best = row[m]; // free end — and it may stop anywhere
+    prev = row.slice();
+  }
+  return best <= max;
+}
+
 export function areaMatches(placeArea: string | undefined, asked: string): boolean {
   if (!placeArea) return false;
-  const a = placeArea.trim().toLowerCase();
-  const b = asked.trim().toLowerCase();
+  let a = normArea(placeArea);
+  let b = normArea(asked);
   if (!a || !b) return false;
-  return a.includes(b) || b.includes(a);
+  // Spelled the same (allowing for nesting): done, no fuzz needed.
+  if (a.includes(b) || b.includes(a)) return true;
+
+  // Drop the shared generic word before measuring, so the budget is spent on the
+  // part that actually names the place. Only when both carry the SAME one, and
+  // never down to nothing.
+  const shared = GENERIC.find((g) => a.endsWith(g) && b.endsWith(g));
+  if (shared) {
+    const [ta, tb] = [a.slice(0, -shared.length), b.slice(0, -shared.length)];
+    if (ta && tb) {
+      if (ta.includes(tb) || tb.includes(ta)) return true;
+      [a, b] = [ta, tb];
+    }
+  }
+
+  const [hay, needle] = a.length >= b.length ? [a, b] : [b, a];
+  return approxContains(hay, needle, editBudget(needle.length));
 }
 
 // Seeded RNG (mulberry32) so "Another" is reproducible per seed but varies
