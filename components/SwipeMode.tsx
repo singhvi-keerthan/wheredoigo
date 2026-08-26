@@ -40,10 +40,20 @@ const FLICK_MIN = 44; // px — ignore taps / jitter below this travel
 // The deck says "deck" through motion instead — the deal on arrival, and the
 // card that scales up behind the one you just sent away.
 //
-// The top inset is the masthead: the status bar, the wordmark at its full 26px,
-// and the line under it that says what you're being dealt. That second line is
-// 11px of quiet type, not a control — see the lens below.
-const STAGE_TOP = "calc(max(0.9rem, env(safe-area-inset-top)) + 3.1rem)";
+// The top inset is the masthead, and it is worth naming what is actually in it,
+// because "why is there space above the photo" has one honest answer and one
+// dishonest one. The dishonest one is padding. The honest one: most of that
+// height is the iPhone's status bar — env(safe-area-inset-top), ~59pt, which no
+// app gets to reclaim — and the rest is two lines of type that have a job. Line
+// one is the name, centred, which in this mode is also the door out. Line two
+// says what you are being dealt, and is the way into the filters. Roughly 47pt
+// of masthead over ~59pt of clock and battery. There is no third thing in here
+// to delete; taking it lower would mean deleting the name.
+//
+// The two gaps inside it are deliberately unequal — the caption sits nearer the
+// name than the photo, because it belongs to the name. Equal gaps would read as
+// two unrelated lines; a caption touching the image reads as a leak.
+const STAGE_TOP = "calc(max(0.9rem, env(safe-area-inset-top)) + 3.45rem)";
 const OUT_MS = 190; // the mode's own fade-out, before AppShell unmounts it
 
 // ---- the opening beat -----------------------------------------------------
@@ -726,30 +736,41 @@ export default function SwipeMode({
           the wordmark and the lens chip no longer sit over the photo, they sit
           above the card on the deck's own surface, which is already dark. */}
 
-      {/* ---- what this mode is showing.
-          It was a glass pill hung under the wordmark, and it looked it: a
-          chunky UI capsule stranded under a delicate serif, two design
-          languages colliding in the same corner. It is the same KIND of thing
-          the map already puts on that line — "3 places · Bengaluru", the line
-          that says what you're looking at — so it's written in that voice now:
-          11px, quiet, no capsule, sitting on the wordmark's own left margin.
-          Line one is the name, line two is what you're being dealt, in both
-          modes. Still the way into the filters; the whole line is the target,
-          and the glyph is what says so. */}
+      {/* ---- line two: what this mode is showing.
+          Three versions of this now, and the third is the one that holds. It
+          began as a glass pill hung under the wordmark and looked it: a chunky
+          UI capsule stranded under a delicate serif, two languages colliding in
+          one corner. Killing the capsule was right; killing it down to 11px at
+          66% on the left margin overshot — the deck's only filter control had
+          become a footnote, easy to miss and easy to mistake for a caption.
+          So it keeps the capsule's absence and takes back its weight: 12.5px,
+          near-full brightness, centred directly beneath the name. The glyph
+          carries the app's accent, which is the whole highlight — one warm mark
+          in a dark masthead, saying "this is a control, the rest is type."
+          Centred because line one is centred: a name over a caption on a shared
+          axis is a masthead, the same two lines pinned to the left edge with
+          different weights was a corner. The whole line is the target. */}
       <div
-        className="absolute left-5 top-[calc(max(0.9rem,env(safe-area-inset-top))+2rem)] flex"
-        style={{ zIndex: 10, maxWidth: "calc(100% - 160px)" }}
+        className="absolute inset-x-0 flex justify-center px-5"
+        style={{ top: "calc(max(0.9rem,env(safe-area-inset-top)) + 1.95rem)", zIndex: 10 }}
       >
         <button
           onClick={() => setLensOpen(true)}
+          aria-label="Change filters"
           className="press flex max-w-full items-center gap-1.5"
-          style={{ color: "rgba(244,240,238,0.66)" }}
+          style={{ color: "rgba(244,240,238,0.9)" }}
         >
-          <SlidersHorizontal size={10.5} strokeWidth={2.5} className="shrink-0" />
-          <span className="truncate text-[11px]" style={{ fontFamily: "var(--font-mono)", letterSpacing: "0.01em" }}>
+          <SlidersHorizontal size={12} strokeWidth={2.5} className="shrink-0" style={{ color: "var(--accent)" }} />
+          <span
+            className="truncate text-[12.5px]"
+            style={{ fontFamily: "var(--font-mono)", fontWeight: 500, letterSpacing: "0.01em" }}
+          >
             {sourceLabel}
             {lens.summary.length > 0 && (
-              <span className="capitalize"> · {lens.summary.join(" · ")}</span>
+              <span className="capitalize" style={{ color: "rgba(244,240,238,0.72)" }}>
+                {" "}
+                · {lens.summary.join(" · ")}
+              </span>
             )}
           </span>
         </button>

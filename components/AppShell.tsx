@@ -98,6 +98,8 @@ export default function AppShell() {
   // leaves stops being read, and this is the only thing left that says the
   // name is pressable, so it has to stay worth reading.
   const [tell, setTell] = useState(true);
+  // How far the name has to travel to sit in the middle of its row.
+  const [centerShift, setCenterShift] = useState(0);
 
   // Where each place sits on screen right now, read straight off the map's
   // markers. Deliberately DOM-side: MapView owns the map instance, and the pins
@@ -186,6 +188,31 @@ export default function AppShell() {
     };
   }, [inDeck]);
 
+  // On the map the name shares its row with the menu button, so it sits at the
+  // left margin where a masthead belongs. In the deck it is the only thing on
+  // that row and the whole top of the screen is a title block, so it belongs in
+  // the middle. Flex alignment cannot animate between those two, and switching
+  // it would snap the name sideways on the reveal's very first frame — the one
+  // element the whole sequence is built to hold still. So the distance is
+  // measured and applied as a transform on a wrapper, and the name TRAVELS to
+  // the centre on the same curve and the same delay as its own colour change:
+  // it moves with the world going dark, not ahead of it.
+  useEffect(() => {
+    const measure = () => {
+      const h = headerRef.current;
+      const t = titleRef.current;
+      if (!h || !t) return;
+      // The header's px-5, and nothing else on the row once the deck is open.
+      setCenterShift(Math.max(0, (h.clientWidth - 40 - t.offsetWidth) / 2));
+    };
+    measure();
+    // Zodiak is a webfont: the name is one width in the fallback and another
+    // once it lands, and a title centred on the wrong metrics is visibly off.
+    document.fonts?.ready.then(measure).catch(() => {});
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+
   const leaveSwipe = () => {
     setMode("map");
     setSwipeClosing(false);
@@ -263,55 +290,67 @@ export default function AppShell() {
         className={`pointer-events-none fixed inset-x-0 top-0 ${inDeck ? "z-[59]" : "z-10"} px-5 pt-[max(0.9rem,env(safe-area-inset-top))]`}
       >
         <div className="flex items-center justify-between">
-          <h1
-            ref={titleRef}
-            role="button"
-            tabIndex={0}
-            aria-label={inDeck ? "Back to the map" : "Open the deck"}
-            onDoubleClick={(e) => toggleByTitle(e.clientX, e.clientY)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                const r = e.currentTarget.getBoundingClientRect();
-                toggleByTitle(r.left + r.width / 2, r.top + r.height / 2);
-              }
-            }}
-            onPointerDown={(e) => {
-              flick.current = { x: e.clientX, t: e.timeStamp };
-            }}
-            onPointerUp={(e) => {
-              const f = flick.current;
-              flick.current = null;
-              if (f && Math.abs(e.clientX - f.x) > 30 && e.timeStamp - f.t < 600) {
-                toggleByTitle(e.clientX, e.clientY);
-              }
-            }}
-            onPointerCancel={() => {
-              flick.current = null;
-            }}
-            className="press pointer-events-auto font-medium leading-none tracking-[-0.015em]"
+          {/* The name's carriage. The transform lives here and not on the h1
+              because the h1 already owns transform twice over — `.press` scales
+              it under a thumb, and clearTheStage() compresses it on the way into
+              the deck. A travelling name and a pressed one are two different
+              motions; they get two different elements. */}
+          <div
             style={{
-              touchAction: "pan-y",
-              WebkitUserSelect: "none",
-              userSelect: "none",
-              cursor: "pointer",
-              fontFamily: "var(--font-display)",
-              // Dark ink on the paper map, light once the night is behind it.
-              // The delay lets the wash get going first, so the letters change
-              // with the world rather than ahead of it.
-              color: inDeck ? "#f4f0ee" : "#16181d",
-              transition: "color 0.42s ease 0.12s",
-              // Scales so the full 18-char name never clips against whatever
-              // shares its row. The 18 characters measure 10.15em wide in
-              // Zodiak (measured, not guessed). The reserve is everything else
-              // on the row: both side paddings, the gap, and the control — the
-              // 36px menu button on the map, the wider lens chip in the deck,
-              // which is capped at 128px and truncates inside that.
-              fontSize: "min(26px, calc((100vw - 86px) / 10.2))",
+              transform: inDeck ? `translateX(${centerShift}px)` : "none",
+              transition: "transform 0.46s cubic-bezier(0.22,0.61,0.36,1) 0.12s",
             }}
           >
-            wheredoigokeerthan
-          </h1>
+            <h1
+              ref={titleRef}
+              role="button"
+              tabIndex={0}
+              aria-label={inDeck ? "Back to the map" : "Open the deck"}
+              onDoubleClick={(e) => toggleByTitle(e.clientX, e.clientY)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  const r = e.currentTarget.getBoundingClientRect();
+                  toggleByTitle(r.left + r.width / 2, r.top + r.height / 2);
+                }
+              }}
+              onPointerDown={(e) => {
+                flick.current = { x: e.clientX, t: e.timeStamp };
+              }}
+              onPointerUp={(e) => {
+                const f = flick.current;
+                flick.current = null;
+                if (f && Math.abs(e.clientX - f.x) > 30 && e.timeStamp - f.t < 600) {
+                  toggleByTitle(e.clientX, e.clientY);
+                }
+              }}
+              onPointerCancel={() => {
+                flick.current = null;
+              }}
+              className="press pointer-events-auto font-medium leading-none tracking-[-0.015em]"
+              style={{
+                touchAction: "pan-y",
+                WebkitUserSelect: "none",
+                userSelect: "none",
+                cursor: "pointer",
+                fontFamily: "var(--font-display)",
+                // Dark ink on the paper map, light once the night is behind it.
+                // The delay lets the wash get going first, so the letters change
+                // with the world rather than ahead of it.
+                color: inDeck ? "#f4f0ee" : "#16181d",
+                transition: "color 0.42s ease 0.12s",
+                // Scales so the full 18-char name never clips against whatever
+                // shares its row. The 18 characters measure 10.15em wide in
+                // Zodiak (measured, not guessed). The reserve is everything else
+                // on the row: both side paddings, the gap, and the control — the
+                // 36px menu button on the map, the wider lens chip in the deck,
+                // which is capped at 128px and truncates inside that.
+                fontSize: "min(26px, calc((100vw - 86px) / 10.2))",
+              }}
+            >
+              wheredoigokeerthan
+            </h1>
+          </div>
           {onMap && (
             <button
               onClick={() => setMenuOpen(true)}
@@ -342,21 +381,27 @@ export default function AppShell() {
               was a button that switched modes, which is the one thing this
               masthead is not allowed to have — so what it was explaining now
               has to explain itself: the line names the gesture, not a control.
-              Fades rather than unmounts, so nothing on this line ever moves. */}
-          <span
-            aria-hidden
-            className="pointer-events-none ml-auto whitespace-nowrap text-[10.5px]"
-            style={{
-              fontFamily: "var(--font-mono)",
-              letterSpacing: "0.04em",
-              color: inDeck ? "rgba(244,240,238,0.62)" : "#8a93a0",
-              opacity: tell ? 1 : 0,
-              transform: tell ? "none" : "translateX(4px)",
-              transition: "opacity 0.32s ease, transform 0.32s ease, color 0.42s ease 0.12s",
-            }}
-          >
-            {inDeck ? "double-tap for the map" : "double-tap for the deck"}
-          </span>
+              Fades rather than unmounts, so nothing on this line ever moves.
+              The MAP's copy only. Once the name is centred there is no room
+              beside it for a right-aligned line — a 26px serif and 22 mono
+              characters do not fit across a phone — so the deck teaches the way
+              back in its own second line, which it owns anyway. See SwipeMode. */}
+          {onMap && (
+            <span
+              aria-hidden
+              className="pointer-events-none ml-auto whitespace-nowrap text-[10.5px]"
+              style={{
+                fontFamily: "var(--font-mono)",
+                letterSpacing: "0.04em",
+                color: "#8a93a0",
+                opacity: tell ? 1 : 0,
+                transform: tell ? "none" : "translateX(4px)",
+                transition: "opacity 0.32s ease, transform 0.32s ease",
+              }}
+            >
+              double-tap for the deck
+            </span>
+          )}
         </div>
 
       </header>
