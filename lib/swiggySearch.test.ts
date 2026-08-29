@@ -143,3 +143,26 @@ describe("searchDineoutRestaurants — what it sends", () => {
     expect(args).toMatchObject({ latitude: 12.972, longitude: 77.61 });
   });
 });
+
+describe("searchDineoutRestaurants — optional follow-ups never sink the answer", () => {
+  it("keeps the primary pages when the area top-up fails", async () => {
+    callSwiggyReply
+      .mockResolvedValueOnce(reply([["1", "Bobs Bar", "Ashok Nagar"]])) // concept: out of area
+      .mockRejectedValueOnce(new Error("flaky")); // the top-up
+
+    const { results, searched } = await searchDineoutRestaurants({ terms: ["Bar"], area: "Indiranagar" });
+    // A bare await here rejected the whole search, the route made it a 502, and
+    // the deck said "Swiggy didn't answer" while throwing away a good page.
+    expect(results.map((r) => r.name)).toEqual(["Bobs Bar"]);
+    expect(searched).toEqual(["Bar"]); // and it doesn't claim a search that failed
+  });
+
+  it("still surfaces a reauth from an optional follow-up", async () => {
+    callSwiggyReply
+      .mockResolvedValueOnce(reply([["1", "Bobs Bar", "Ashok Nagar"]]))
+      .mockRejectedValueOnce(new SwiggyAuthError());
+    await expect(
+      searchDineoutRestaurants({ terms: ["Bar"], area: "Indiranagar" })
+    ).rejects.toBeInstanceOf(SwiggyAuthError);
+  });
+});
