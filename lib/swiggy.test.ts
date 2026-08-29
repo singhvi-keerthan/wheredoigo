@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseSearchRows } from "./swiggy";
+import { buildSearchArgs, parseSearchRows } from "./swiggy";
 
 // Verbatim from a live search_restaurants_dineout call (query "dinner",
 // Bengaluru). Kept exactly as Swiggy sent it — trailing double-spaces, empty
@@ -59,5 +59,34 @@ describe("parseSearchRows — search answers in prose, not data", () => {
     expect(parseSearchRows("1. Foo — 4.1★ (ID: 5)")).toEqual([
       { id: "5", name: "Foo", rating: 4.1, area: "" },
     ]);
+  });
+});
+
+describe("buildSearchArgs — Swiggy New source search shape", () => {
+  const user = { lat: 12.972, lng: 77.61 };
+
+  it("keeps the cuisine entityType path when no area is selected", () => {
+    expect(buildSearchArgs({ cuisine: "italian" }, user)).toEqual({
+      query: "italian",
+      entityType: "CUISINE",
+      latitude: user.lat,
+      longitude: user.lng,
+    });
+  });
+
+  it("puts a selected area inside the Swiggy query", () => {
+    expect(buildSearchArgs({ area: "Jayanagar" }, user)).toEqual({
+      query: "restaurants in Jayanagar",
+      latitude: user.lat,
+      longitude: user.lng,
+    });
+  });
+
+  it("does not send entityType when cuisine and area share the one query slot", () => {
+    expect(buildSearchArgs({ cuisine: "italian", area: "Indiranagar" }, user)).toEqual({
+      query: "italian restaurants in Indiranagar",
+      latitude: user.lat,
+      longitude: user.lng,
+    });
   });
 });

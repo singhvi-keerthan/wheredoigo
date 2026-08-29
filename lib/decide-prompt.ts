@@ -80,6 +80,10 @@ const FEW_SHOTS: { in: string; out: DecideQuery }[] = [
     },
   },
   {
+    in: "Ashok Nagar, rated 4+",
+    out: { intent: "Ashok Nagar 4+", lifecycle: "any", area: "ashok nagar", minRating: 4 },
+  },
+  {
     in: "not italian, nothing too loud",
     out: {
       intent: "Quiet, not Italian",
@@ -179,6 +183,7 @@ RULES
 - Never place the same value in both a positive and its exclude field.
 - lifecycle: "watchlist" if they want somewhere new/untried; "visited" for a place they've already been; "favorites" for go-to/loved/usual spots; else "any".
 - maxBudget: a per-person rupee INTEGER only when they state a number ("under 1500", "1.5k" → 1500). Do not guess a number from words like "cheap" — instead map "cheap/affordable" to excludeVibes:["fine-dining"], and "fancy/splurge/nice" to vibes:["fine-dining"].
+- minRating: a numeric floor only when they ask for rating/stars ("rated 4+", "4.5+ stars", "above 4 rating"). Do not infer rating from quality adjectives like good/great/best; those belong in boostRatings or tags.
 - openNow: true ONLY when they require it be open right now ("open now", "still open", "right now"). The word "tonight" alone is NOT openNow.
 - boostRatings: quality asks about HOW GOOD a place is on a dimension — ${RATING_DIMENSIONS.join(", ")}. "great ambiance/ambience/atmosphere" → ["ambiance"]; "great food/delicious/best food" → ["food"]; "good/attentive service, friendly staff" → ["service"]; "good value, worth it, value for money, bang for buck" → ["value"]; "worth visiting/amazing to see/great day out" → ["experience"]. \`food\` is only rated somewhere you eat or drink and \`experience\` only somewhere you don't, so a general "anywhere great" ask should send BOTH. This ranks such places up; it does NOT replace vibe tags (a vibe like "cozy" is an attribute; ambiance is a quality score).
 - area: ONLY when they name a neighbourhood/locality they want to be near ("near jayanagar", "around koramangala", "in indiranagar") — the bare place name, lowercase. Not a cuisine, not a venue name, and never invented.
@@ -217,6 +222,7 @@ export const DECIDE_SCHEMA = {
     excludeVibes: enumArray("vibe"),
     excludePractical: enumArray("practical"),
     maxBudget: { type: "INTEGER", nullable: true },
+    minRating: { type: "NUMBER", nullable: true },
     openNow: { type: "BOOLEAN" },
     area: { type: "STRING" },
     boostRatings: { type: "ARRAY", items: { type: "STRING", enum: [...RATING_DIMENSIONS] } },
@@ -260,6 +266,9 @@ export function sanitizeQuery(raw: unknown): DecideQuery {
 
   const budget = typeof r.maxBudget === "number" ? Math.round(r.maxBudget) : null;
   if (budget != null && budget > 0 && budget <= 1_000_000) q.maxBudget = budget;
+
+  const minRating = typeof r.minRating === "number" ? r.minRating : null;
+  if (minRating != null && minRating > 0 && minRating <= 5) q.minRating = Math.round(minRating * 10) / 10;
 
   if (r.openNow === true) q.openNow = true;
 

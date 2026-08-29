@@ -14,6 +14,7 @@ import { searchBias } from "@/lib/bias";
 import { searchPlaces, geocodeArea } from "@/lib/places";
 import { buildDeck, type DeckCard } from "@/lib/deck";
 import { bumpSkip, resetSkip, decSkip, peekSkip, setSkip } from "@/lib/skips";
+import { BENGALURU_AREA_OPTIONS } from "@/lib/areas";
 import SwipeCard from "./SwipeCard";
 import NewCardDetail from "./NewCardDetail";
 import { useCardSwipe, DY_DAMP } from "./useCardSwipe";
@@ -214,7 +215,7 @@ export default function SwipeMode({
   onToast: (msg: string) => void;
 }) {
   const lens = useLens();
-  const { source, query, cuisine, keyword } = lens;
+  const { source, query, area, cuisine, keyword } = lens;
   const [lensOpen, setLensOpen] = useState(false);
   const places = usePlaces();
   const reduced = usePrefersReducedMotion();
@@ -291,7 +292,7 @@ export default function SwipeMode({
     return () => clearTimeout(t);
   }, [closing]);
 
-  // Fetch Swiggy's catalog for New/Both whenever the source or cuisine changes.
+  // Fetch Swiggy's catalog for New/Both whenever the source or discovery lens changes.
   useEffect(() => {
     if (source === "saved") return; // buildDeck ignores swiggy for "saved"
     let cancelled = false;
@@ -300,6 +301,7 @@ export default function SwipeMode({
       const { results, error } = await searchDineout({
         cuisine: cuisine ?? undefined,
         keyword: keyword.trim() || undefined,
+        area: area ?? undefined,
         lat: coords.lat,
         lng: coords.lng,
       });
@@ -313,7 +315,7 @@ export default function SwipeMode({
     return () => {
       cancelled = true;
     };
-  }, [source, cuisine, keyword, coords]);
+  }, [source, cuisine, keyword, area, coords]);
 
   // Rebuild the ordered deck when the lens changes (results / seed). The lens
   // itself is frozen at launch, so in practice this is the Swiggy fetch landing
@@ -336,14 +338,16 @@ export default function SwipeMode({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, queryKey, swiggy, seed]);
 
-  // The localities the Area filter can offer: whatever is actually in the pool
-  // this source draws from. Built off the UNFILTERED pool on purpose — narrowing
-  // the list as you narrow the deck would leave you one area to choose from and
-  // no way to see the others.
+  // The localities the Area filter can offer. New discovery cannot derive this
+  // only from the current Swiggy page, because that page is small and area is
+  // itself one way to broaden the page.
   const areas = useMemo(() => {
     const set = new Set<string>();
-    if (source !== "new") for (const p of places) if (p.area) set.add(p.area);
-    if (source !== "saved") for (const r of swiggy) if (r.area) set.add(r.area);
+    for (const p of places) if (p.area) set.add(p.area);
+    if (source !== "saved") {
+      for (const a of BENGALURU_AREA_OPTIONS) set.add(a);
+      for (const r of swiggy) if (r.area) set.add(r.area);
+    }
     return [...set];
   }, [source, places, swiggy]);
 
@@ -602,7 +606,7 @@ export default function SwipeMode({
 
   // What the collapsed trigger says. Never just "filters" — the mode should be
   // able to tell you what it is dealing you without being opened up.
-  const sourceLabel = source === "saved" ? "Your map" : source === "new" ? "New · Swiggy" : "Everything";
+  const sourceLabel = source === "saved" ? "Saved places" : source === "new" ? "New places" : "Saved + new";
 
   // Said aloud. Every other aria-label in this app is on an icon-only control —
   // Close, Back, Remove photo — where there is no text to read. This button HAS
@@ -614,11 +618,11 @@ export default function SwipeMode({
 
   return (
     <div
-      className={`fixed inset-0 z-[52] flex flex-col ${closing ? "mode-out" : entryKind === "fan" ? "" : "mode-in"}`}
+      className={`fixed inset-x-0 top-0 z-[52] flex flex-col ${closing ? "mode-out" : entryKind === "fan" ? "" : "mode-in"}`}
       // The deck's own ground, not the map's. It matches the card body exactly,
       // which is what makes the strip iOS leaves below a standalone PWA's
       // viewport read as more screen instead of as a gap under a card.
-      style={{ background: "var(--deck-bg)" }}
+      style={{ width: "100dvw", height: "var(--app-viewport-h)", background: "var(--deck-bg)" }}
     >
       {/* The masthead's shadow. AppShell's wordmark is position:fixed and so is
           outside this tree; this reserves exactly the room it occupies ON THIS

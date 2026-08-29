@@ -10,7 +10,7 @@ import { crossOrigin, forbidden } from "@/lib/api-guard";
 export async function POST(request: Request) {
   if (crossOrigin(request)) return forbidden();
 
-  let body: { cuisine?: string; keyword?: string; lat?: number; lng?: number };
+  let body: { cuisine?: string; keyword?: string; area?: string; lat?: number; lng?: number };
   try {
     body = await request.json();
   } catch {

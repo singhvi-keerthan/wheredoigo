@@ -1,6 +1,7 @@
 import { TAG_OPTIONS } from "./types";
 import type { DecideQuery } from "./decide";
 import { keywordsFromText, STOPWORDS } from "./decide-prompt";
+import { knownAreaFromText } from "./areas";
 
 // Local keyword parse — fallback when the Gemini NL route is unavailable.
 // Mirrors the model's guardrails: negated terms ("no bars", "not italian") go
@@ -69,12 +70,37 @@ function classify(vals: string[], t: string): { inc: string[]; exc: string[] } {
 // "near jayanagar" / "around koramangala" / "in indiranagar" → the bare area
 // name (max 3 words, stopword-led captures dropped: "in the mood" is not a place).
 function parseArea(t: string): string | undefined {
-  const m = t.match(/\b(?:near|around|in)\s+([a-z][a-z\s-]{2,30})/);
+  const known = knownAreaFromText(t);
+  if (known) return known;
+
+  const m = t.match(
+    /\b(?:near|around|in)\s+([a-z][a-z\s-]{2,40}?)(?=\s+(?:under|below|max|upto|up to|rated|rating|stars?|with|for|and|open|not|no|without)\b|[,.!?]|$)/
+  );
   if (!m) return undefined;
   const words = m[1].trim().split(/\s+/).slice(0, 3);
   while (words.length && STOPWORDS.has(words[words.length - 1])) words.pop();
   if (!words.length || STOPWORDS.has(words[0])) return undefined;
   return words.join(" ");
+}
+
+function parseBudget(t: string): number | undefined {
+  const m = t.match(/(?:under|below|max|upto|up to|<)\s*(?:₹|rs\.?|inr)?\s*(\d[\d,]*(?:\.\d+)?)\s*(k)?\b/);
+  if (!m) return undefined;
+  const value = Number(m[1].replace(/,/g, ""));
+  if (!Number.isFinite(value)) return undefined;
+  return Math.round(value * (m[2] ? 1000 : 1));
+}
+
+function parseRating(t: string): number | undefined {
+  const hits = [
+    ...t.matchAll(/\b(?:rated|rating|stars?)\s*(?:above|over|at least)?\s*(\d(?:\.\d)?)\s*\+?\b/g),
+    ...t.matchAll(/\b(\d(?:\.\d)?)\s*\+?\s*(?:stars?|rating)\b/g),
+  ];
+  for (const m of hits) {
+    const value = Number(m[1]);
+    if (value > 0 && value <= 5) return value;
+  }
+  return undefined;
 }
 
 export function parseFallback(text: string): DecideQuery {
@@ -104,8 +130,11 @@ export function parseFallback(text: string): DecideQuery {
   if (/\bnew\b|never been|haven't been|untried/.test(t)) q.lifecycle = "watchlist";
   if (/favou?rite|go-?to|loved|usual/.test(t)) q.lifecycle = "favorites";
   if (/open now|right now|still open|open right/.test(t)) q.openNow = true;
-  const budget = t.match(/(?:under|below|max|upto|up to|<)\s*₹?\s*(\d{2,5})/);
-  if (budget) q.maxBudget = +budget[1];
+  const budget = parseBudget(t);
+  if (budget != null) q.maxBudget = budget;
+
+  const rating = parseRating(t);
+  if (rating != null) q.minRating = rating;
 
   const area = parseArea(t);
   if (area) q.area = area;

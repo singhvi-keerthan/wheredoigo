@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Search, Plus, Menu, MapPin, TriangleAlert, Sparkles, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import Image from "next/image";
+import { Search, Plus, Menu, MapPin, TriangleAlert, X } from "lucide-react";
 import { usePlaces, usePersistError } from "@/lib/store";
 import { displayState, type DisplayState } from "@/lib/types";
 import { cityLabel } from "@/lib/city";
@@ -68,6 +69,8 @@ const WHITE_ACTION: CSSProperties = {
   boxShadow: "0 8px 22px -8px rgba(0,0,0,0.5)",
   border: "none",
 };
+
+const MASCOT_TIP_KEY = "wheredoigokeerthan.mascotTipSeen.v1";
 
 export default function AppShell() {
   const places = usePlaces();
@@ -201,6 +204,16 @@ export default function AppShell() {
     document.documentElement.dataset.ground = inDeck ? "deck" : "map";
   }, [inDeck]);
 
+  // iOS standalone PWAs can report a dynamic viewport that is shorter than the
+  // actual device screen, leaving a dead band at the bottom. Mark standalone at
+  // runtime as a fallback for browsers that don't apply the CSS media query.
+  useEffect(() => {
+    const nav = navigator as Navigator & { standalone?: boolean };
+    const standalone =
+      window.matchMedia("(display-mode: standalone)").matches || nav.standalone === true;
+    document.documentElement.dataset.displayMode = standalone ? "standalone" : "browser";
+  }, []);
+
   // On the map the name shares its row with the menu button, so it sits at the
   // left margin where a masthead belongs. In the deck it is the only thing on
   // that row and the whole top of the screen is a title block, so it belongs in
@@ -249,6 +262,46 @@ export default function AppShell() {
   const [browseMode, setBrowseMode] = useState<BrowseMode | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [mascotTip, setMascotTip] = useState(false);
+  const [mascotTipShown, setMascotTipShown] = useState(false);
+  const placesLenRef = useRef(places.length);
+
+  useEffect(() => {
+    placesLenRef.current = places.length;
+  });
+
+  const dismissMascotTip = useCallback(() => {
+    setMascotTipShown(false);
+    try {
+      localStorage.setItem(MASCOT_TIP_KEY, "1");
+    } catch {
+      // Private mode: harmless if it shows again next launch.
+    }
+    window.setTimeout(() => setMascotTip(false), 260);
+  }, []);
+
+  useEffect(() => {
+    let seen = false;
+    try {
+      seen = localStorage.getItem(MASCOT_TIP_KEY) === "1";
+    } catch {
+      // Private mode.
+    }
+    if (seen) return;
+    let auto = 0;
+    let revealTip = 0;
+    const t = window.setTimeout(() => {
+      if (placesLenRef.current === 0) return;
+      setMascotTip(true);
+      revealTip = window.setTimeout(() => setMascotTipShown(true), 30);
+      auto = window.setTimeout(dismissMascotTip, 9000);
+    }, 3600);
+    return () => {
+      clearTimeout(t);
+      clearTimeout(auto);
+      clearTimeout(revealTip);
+    };
+  }, [dismissMascotTip]);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -287,7 +340,7 @@ export default function AppShell() {
   return (
     <main
       className={`relative w-full overflow-hidden${reveal ? " reveal-on" : ""}`}
-      style={{ height: "100dvh", background: "var(--bg-base)" }}
+      style={{ width: "100dvw", height: "var(--app-viewport-h)", background: "var(--bg-base)" }}
     >
       <MapView places={visible} selectedId={selectedId} onSelect={setSelectedId} />
 
@@ -519,6 +572,54 @@ export default function AppShell() {
               more filter and left the busiest corner of the screen with three
               stacked bars in it. */}
           <div className="relative flex items-center gap-2.5 px-[18px] pb-2">
+            {mascotTip && (
+              <div
+                className="pointer-events-auto absolute bottom-full left-5 mb-2 max-w-[260px] px-3 py-2 text-[12.5px] leading-snug"
+                style={{
+                  ...GLASS,
+                  borderRadius: "var(--radius-sm)",
+                  color: "oklch(0.94 0 0)",
+                  opacity: mascotTipShown ? 1 : 0,
+                  transform: mascotTipShown ? "translateY(0)" : "translateY(6px)",
+                  transition: "opacity 0.22s ease, transform 0.22s ease",
+                }}
+              >
+                <button
+                  onClick={dismissMascotTip}
+                  aria-label="Dismiss Ask hint"
+                  className="press float-right ml-2 grid h-5 w-5 place-items-center rounded-full"
+                  style={{ background: "rgba(255,255,255,0.1)", color: "oklch(0.84 0.01 260)" }}
+                >
+                  <X size={11} strokeWidth={2.5} />
+                </button>
+                Can&apos;t decide? Ask me, or use filters to narrow the map.
+              </div>
+            )}
+            <button
+              onClick={() => {
+                dismissMascotTip();
+                setAskOpen(true);
+              }}
+              aria-label="Ask"
+              className="press grid shrink-0 place-items-center overflow-hidden"
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: "50%",
+                background: askQuery ? "var(--accent)" : "oklch(0.97 0 0)",
+                border: "1px solid rgba(255,255,255,0.48)",
+                boxShadow: "0 8px 22px -8px rgba(0,0,0,0.5)",
+              }}
+            >
+              <Image
+                src="/decide-mascot.png"
+                alt=""
+                width={36}
+                height={36}
+                className="h-full w-full object-cover"
+                draggable={false}
+              />
+            </button>
             {/* Filter tray — one dark-glass control, underline-select chips */}
             <div
               className="min-w-0 flex-1"
@@ -573,26 +674,6 @@ export default function AppShell() {
                 );
               })}
             </div>
-            {/* Ask. It sat in this row until 2026-08-19, when swipe became a
-                mode and Ask went with it into the deck's filter panel. This is
-                not a way into the deck — it narrows the map you are already on,
-                which is the thing the mascot used to do. Mirrors the + below
-                it: flex-1 control, then one round action, so the two rows read
-                as one dock. */}
-            <button
-              onClick={() => setAskOpen(true)}
-              aria-label="Ask"
-              className="press grid shrink-0 place-items-center"
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: "50%",
-                background: askQuery ? "var(--accent)" : "oklch(0.97 0 0)",
-                color: askQuery ? "var(--accent-ink)" : "oklch(0.16 0.006 260)",
-              }}
-            >
-              <Sparkles size={17} strokeWidth={2.25} />
-            </button>
           </div>
 
           {/* search dock — glass search + white add */}

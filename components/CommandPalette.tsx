@@ -9,6 +9,8 @@ import { stateMeta } from "@/lib/format";
 import { searchPlaces } from "@/lib/places";
 import { distanceKm, isAreaResult } from "@/lib/geo";
 import { searchBias } from "@/lib/bias";
+import { areaMatches } from "@/lib/decide";
+import { knownAreaFromText } from "@/lib/areas";
 import { useSheetDrag } from "./useSheetDrag";
 
 // Search across the places you've ALREADY saved — nothing else. Adding lives on
@@ -49,6 +51,7 @@ export default function CommandPalette({
 
   const trimmed = q.trim();
   const ql = trimmed.toLowerCase();
+  const knownArea = trimmed ? knownAreaFromText(trimmed) : undefined;
 
   // Geocode when the query could be an area: long enough and not a controlled
   // tag word ("date", "café"). We deliberately do NOT skip on place-name matches
@@ -90,9 +93,10 @@ export default function CommandPalette({
   };
 
   const activeArea = area && area.q === trimmed ? area.hit : null;
+  const activeAreaName = activeArea?.name ?? knownArea ?? null;
   // We intend to geocode this query but haven't resolved it yet — show a
   // "searching" state instead of flashing "No matches".
-  const geoPending = shouldGeo && (!area || area.q !== trimmed);
+  const geoPending = !knownArea && shouldGeo && (!area || area.q !== trimmed);
 
   // Area mode: everything within the radius of the geocoded centroid, nearest
   // first (catches adjacent neighbourhoods, not just an exact name match).
@@ -101,6 +105,10 @@ export default function CommandPalette({
         .map((p) => ({ p, d: distanceKm(activeArea, { lat: p.lat, lng: p.lng }) }))
         .filter((x) => x.d <= RADIUS_KM)
         .sort((a, b) => a.d - b.d)
+    : knownArea
+      ? places
+          .filter((p) => areaMatches(p.area, knownArea))
+          .map((p) => ({ p, d: null }))
     : [];
 
   // Text mode: substring across name / area / address / tag values / note — so
@@ -171,17 +179,17 @@ export default function CommandPalette({
               growing/shrinking list would ride the search field up and down as
               you type. A constant panel height keeps the field dead still. */}
           <Command.List className="scroll-quiet h-[44vh] overflow-y-auto px-3 pb-1 pt-2">
-            {activeArea ? (
+            {activeAreaName ? (
               <>
                 <div className="flex items-center gap-1.5 px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-[0.06em]" style={{ color: "var(--text-tertiary)" }}>
-                  <Navigation2 size={11} /> Around {activeArea.name}
+                  <Navigation2 size={11} /> {activeArea ? "Around" : "In"} {activeAreaName}
                 </div>
                 {near.length === 0 ? (
                   <p className="px-2 py-6 text-center text-[13px]" style={{ color: "var(--text-tertiary)" }}>
-                    Nothing saved around {activeArea.name} yet.
+                    Nothing saved around {activeAreaName} yet.
                   </p>
                 ) : (
-                  near.map(({ p, d }) => <Row key={p.id} place={p} right={fmtDist(d)} onPick={pick} />)
+                  near.map(({ p, d }) => <Row key={p.id} place={p} right={d == null ? "area" : fmtDist(d)} onPick={pick} />)
                 )}
               </>
             ) : text.length === 0 ? (

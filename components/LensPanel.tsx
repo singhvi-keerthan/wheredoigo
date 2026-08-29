@@ -1,10 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { X, Sparkles, RefreshCw, ChevronDown, Clock } from "lucide-react";
+import { X, Sparkles, RefreshCw, ChevronDown, Clock, MapPin } from "lucide-react";
 import { geocodeArea } from "@/lib/places";
 import { parseFallback } from "@/lib/decide-fallback";
 import { rankPlaces, type DecideQuery } from "@/lib/decide";
+import { keywordForNewSearch } from "@/lib/lens";
 import { TAG_OPTIONS } from "@/lib/types";
 import { usePlaces } from "@/lib/store";
 import type { DeckSource } from "@/lib/deck";
@@ -166,7 +167,6 @@ export function useLens() {
   // standard filters would silently no-op on the one source that's all new.
   const query = useMemo<DecideQuery>(() => buildQuery(filters, extras), [filters, extras]);
   const cuisine = filters.cuisine || null;
-  const keyword = source === "saved" ? "" : extras.keywords?.join(" ") ?? "";
 
   // Cheap and local (rankPlaces is pure), so the chips get live feedback.
   // Only meaningful for the saved side.
@@ -177,6 +177,7 @@ export function useLens() {
 
   // A one-line summary for the collapsed trigger, so the mode can always say
   // what it is showing you without the panel being open.
+  const area = filters.area || null;
   const summary = useMemo(() => {
     const bits: string[] = [];
     if (filters.lifecycle !== "any") bits.push(filters.lifecycle);
@@ -213,8 +214,9 @@ export function useLens() {
     extras,
     setExtras,
     query,
+    area,
     cuisine,
-    keyword,
+    keyword: source === "saved" ? "" : keywordForNewSearch(extras.keywords, filters.area),
     savedMatches,
     summary,
     dirty,
@@ -302,9 +304,11 @@ export default function LensPanel({
         if (hit) {
           q.areaCenter = { lat: hit.lat, lng: hit.lng };
           q.area = hit.name;
-        } else delete q.area;
+        }
       } catch {
-        delete q.area;
+        // Keep the area name. The deck and Swiggy search both have name-based
+        // fallbacks, so a geocode miss should not turn an area ask into a
+        // generic keyword ask.
       }
     }
     setFilters((f) => ({
@@ -313,6 +317,7 @@ export default function LensPanel({
       area: q.area ?? f.area,
       cuisine: q.cuisines?.[0] ?? f.cuisine,
       maxBudget: q.maxBudget ?? f.maxBudget,
+      minRating: q.minRating ?? f.minRating,
       type: q.types?.[0] ?? f.type,
       staple: q.staples?.[0] ?? f.staple,
       occasion: q.occasions?.[0] ?? f.occasion,
@@ -551,31 +556,65 @@ function ValueList({
   value: string;
   onPick: (id: FilterField, value: string) => void;
 }) {
+  const [customArea, setCustomArea] = useState("");
+  const typedArea = customArea.trim();
   // Lifecycle's "All" IS its any; every other category needs one adding.
   const values = cat.id === "lifecycle" ? cat.values : [{ value: "", label: "Any" }, ...cat.values];
   return (
     <div
-      className="animate-rise scroll-quiet mt-2 flex max-h-[34vh] flex-wrap gap-1.5 overflow-y-auto p-3"
+      className="animate-rise scroll-quiet mt-2 flex max-h-[34vh] flex-col gap-2 overflow-y-auto p-3"
       style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)" }}
     >
-      {values.map((v) => {
-        const on = value === v.value;
-        return (
-          <button
-            key={v.value || "any"}
-            onClick={() => onPick(cat.id, v.value)}
-            className="press px-3 py-1.5 text-[12.5px] font-semibold capitalize transition-colors"
-            style={{
-              borderRadius: "var(--radius-chip)",
-              background: on ? "oklch(0.97 0 0)" : "transparent",
-              color: on ? "oklch(0.16 0.006 260)" : "var(--text-secondary)",
-              border: `1px solid ${on ? "oklch(0.97 0 0)" : "var(--border-strong)"}`,
+      {cat.id === "area" && (
+        <div
+          className="flex items-center gap-2 px-3"
+          style={{
+            background: "var(--bg-raised)",
+            border: "1px solid var(--border-strong)",
+            borderRadius: "var(--radius-sm)",
+          }}
+        >
+          <MapPin size={14} strokeWidth={2.25} style={{ color: "var(--text-tertiary)" }} />
+          <input
+            value={customArea}
+            onChange={(e) => setCustomArea(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && typedArea) onPick("area", typedArea);
             }}
+            placeholder="Type any area"
+            className="min-w-0 flex-1 bg-transparent py-2.5 text-[13px] outline-none"
+            style={{ color: "var(--text-primary)" }}
+          />
+          <button
+            onClick={() => typedArea && onPick("area", typedArea)}
+            disabled={!typedArea}
+            className="press px-3 py-1.5 text-[12px] font-bold disabled:opacity-40"
+            style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
           >
-            {v.label}
+            Use
           </button>
-        );
-      })}
+        </div>
+      )}
+      <div className="flex flex-wrap gap-1.5">
+        {values.map((v) => {
+          const on = value === v.value;
+          return (
+            <button
+              key={v.value || "any"}
+              onClick={() => onPick(cat.id, v.value)}
+              className="press px-3 py-1.5 text-[12.5px] font-semibold capitalize transition-colors"
+              style={{
+                borderRadius: "var(--radius-chip)",
+                background: on ? "oklch(0.97 0 0)" : "transparent",
+                color: on ? "oklch(0.16 0.006 260)" : "var(--text-secondary)",
+                border: `1px solid ${on ? "oklch(0.97 0 0)" : "var(--border-strong)"}`,
+              }}
+            >
+              {v.label}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

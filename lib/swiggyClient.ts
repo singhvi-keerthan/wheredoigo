@@ -48,6 +48,7 @@ async function post<T>(path: string, body: unknown): Promise<{ data: T | null; e
 export async function searchDineout(query: {
   cuisine?: string;
   keyword?: string;
+  area?: string;
   lat?: number;
   lng?: number;
 }): Promise<{ results: SwiggyRestaurant[]; error?: SwiggyError }> {

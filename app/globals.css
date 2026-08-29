@@ -43,6 +43,7 @@
   --canvas: var(--bg-base); /* what shows below the viewport — see html/body.
                                Defaults to the ground the app has always had, so
                                the map is untouched; only the deck overrides it */
+  --app-viewport-h: 100dvh;
   --star: oklch(0.78 0.12 75); /* rating star (amber, NOT watchlist state) */
   --star-empty: oklch(0.38 0.01 265);
 
@@ -108,6 +109,17 @@ body {
 }
 html[data-ground="deck"] {
   --canvas: var(--deck-bg);
+}
+
+@supports (height: 100lvh) {
+  @media (display-mode: standalone) {
+    :root {
+      --app-viewport-h: 100lvh;
+    }
+  }
+  html[data-display-mode="standalone"] {
+    --app-viewport-h: 100lvh;
+  }
 }
 
 html,

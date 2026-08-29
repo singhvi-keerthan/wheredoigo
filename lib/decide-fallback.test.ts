@@ -74,3 +74,22 @@ describe("parseFallback · the widened vocabulary reaches non-food types", () =>
     expect(parseFallback("no museums today").excludeTypes).toEqual(["museum"]);
   });
 });
+
+describe("parseFallback · standard filters", () => {
+  it("parses a bare known area as an area, not only as keywords", () => {
+    const q = parseFallback("Ashok Nagar rated 4+");
+    expect(q.area).toBe("Ashok Nagar");
+    expect(q.minRating).toBe(4);
+  });
+
+  it("stops the area before budget and rating clauses", () => {
+    const q = parseFallback("in Ashok Nagar under ₹1,500 rated 4.5+");
+    expect(q.area).toBe("Ashok Nagar");
+    expect(q.maxBudget).toBe(1500);
+    expect(q.minRating).toBe(4.5);
+  });
+
+  it("parses k-style budgets", () => {
+    expect(parseFallback("date night under 1.5k").maxBudget).toBe(1500);
+  });
+});

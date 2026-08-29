@@ -22,6 +22,7 @@
 // save time instead — see fixSwiggyPosition in components/SwipeMode.tsx.
 
 import { callSwiggyReply, callSwiggyTool, swiggyLive, SwiggyAuthError } from "./swiggyMcp";
+import { areaMatches } from "./decide";
 
 export { SwiggyAuthError, swiggyLive } from "./swiggyMcp";
 
@@ -264,10 +265,13 @@ const MOCK_RESTAURANTS: SwiggyRestaurant[] = [
   { id: "sw-8", name: "Casa Mexicana", cuisines: ["mexican"], area: "Whitefield", address: "ITPL Main Road, Whitefield, Bengaluru", lat: 12.9698, lng: 77.7499, rating: 4.0, priceForTwo: 1500, photo: mockPhoto(7) },
 ];
 
-function mockSearch(query: { cuisine?: string; keyword?: string }): SwiggyRestaurant[] {
+function mockSearch(query: { cuisine?: string; keyword?: string; area?: string }): SwiggyRestaurant[] {
   let results = MOCK_RESTAURANTS;
   if (query.cuisine) {
     results = results.filter((r) => r.cuisines.includes(query.cuisine!));
+  }
+  if (query.area) {
+    results = results.filter((r) => areaMatches(r.area, query.area!));
   }
   if (query.keyword) {
     const kw = query.keyword.toLowerCase();
@@ -414,6 +418,7 @@ async function renderRestaurants(ids: string[], search: Record<string, unknown>)
 export async function searchDineoutRestaurants(query: {
   cuisine?: string;
   keyword?: string;
+  area?: string;
   lat?: number;
   lng?: number;
 }): Promise<{ results: SwiggyRestaurant[]; dropped: number }> {
@@ -424,17 +429,9 @@ export async function searchDineoutRestaurants(query: {
   const user: UserCoords = { lat: query.lat ?? 12.972, lng: query.lng ?? 77.61 };
   const keyword = query.keyword?.trim();
   const cuisine = query.cuisine?.trim();
+  const area = query.area?.trim();
 
-  // The tool takes one free-text `query`. A keyword is the more specific
-  // signal, so it wins and the cuisine becomes a local filter; with no keyword
-  // the cuisine is the query and entityType makes it an actual cuisine lens
-  // (the docs warn that omitting entityType returns generic nearby results).
-  const args: Record<string, unknown> = {
-    query: keyword || cuisine || "restaurants",
-    latitude: user.lat,
-    longitude: user.lng,
-  };
-  if (!keyword && cuisine) args.entityType = "CUISINE";
+  const args = buildSearchArgs({ keyword, cuisine, area }, user);
 
   // Search answers in PROSE — a numbered list with ids in parentheses — and
   // leaves structuredContent empty. See unwrapReply in swiggyMcp.ts.
@@ -481,8 +478,8 @@ export async function searchDineoutRestaurants(query: {
   // prose rows when there are any, since that's the real denominator.
   const dropped = Math.max(0, (rows.length || raw.length) - results.length);
 
-  // Keyword took the query slot, so apply the cuisine lens here.
-  if (keyword && cuisine) {
+  // Keyword/area took the query slot, so apply the cuisine lens here.
+  if ((keyword || area) && cuisine) {
     const c = cuisine.toLowerCase();
     const narrowed = results.filter((r) => r.cuisines.some((x) => x.includes(c)));
     if (narrowed.length > 0) results = narrowed;
@@ -492,6 +489,33 @@ export async function searchDineoutRestaurants(query: {
     console.warn(`[swiggy] dropped ${dropped}/${rows.length || raw.length} results with no id or name`);
   }
   return { results, dropped };
+}
+
+export function buildSearchArgs(
+  query: { cuisine?: string; keyword?: string; area?: string },
+  user: UserCoords
+): Record<string, unknown> {
+  const keyword = query.keyword?.trim();
+  const cuisine = query.cuisine?.trim();
+  const area = query.area?.trim();
+
+  // The tool takes one free-text `query`. With no area, keep the documented
+  // cuisine entityType path; with an area, the locality has to be inside the
+  // Swiggy query itself or New mode only filters whatever the first nearby page
+  // happened to return.
+  let text = keyword || cuisine || "restaurants";
+  if (area) {
+    const base = keyword || (cuisine ? `${cuisine} restaurants` : "restaurants");
+    text = `${base} in ${area}`;
+  }
+
+  const args: Record<string, unknown> = {
+    query: text,
+    latitude: user.lat,
+    longitude: user.lng,
+  };
+  if (!keyword && !area && cuisine) args.entityType = "CUISINE";
+  return args;
 }
 
 export async function getAvailableSlots(

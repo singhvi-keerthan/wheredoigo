@@ -20,6 +20,12 @@ describe("sanitizeQuery", () => {
     expect(sanitizeQuery({ maxBudget: 99_999_999 }).maxBudget).toBeUndefined();
   });
 
+  it("keeps a sane rating floor", () => {
+    expect(sanitizeQuery({ minRating: 4.26 }).minRating).toBe(4.3);
+    expect(sanitizeQuery({ minRating: 0 }).minRating).toBeUndefined();
+    expect(sanitizeQuery({ minRating: 6 }).minRating).toBeUndefined();
+  });
+
   it("filters keywords: stopwords, short words, dupes, cap at 6", () => {
     const q = sanitizeQuery({
       keywords: ["pizza", "the", "go", "PIZZA", "insta", "a1", "sunset", "ramen", "biryani", "dosa", "momo"],

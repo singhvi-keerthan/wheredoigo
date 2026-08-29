@@ -19,7 +19,7 @@
 // detail sheet: your notes, the visit timeline, who you went with, and the
 // per-dimension ratings.
 
-import { pullLive, syncConfigured } from "@/lib/sync/db";
+import { pullLive, syncConfigured } from "./sync/db";
 import type { Photo, Place } from "@/lib/types";
 
 export const publicOwner: string | null = (() => {
@@ -71,6 +71,7 @@ export function toPublic(raw: Place): Place {
     city: raw.city,
     lat: raw.lat,
     lng: raw.lng,
+    approxLocation: raw.approxLocation,
 
     // State: the pin colour, and the whole point of scenario "don't go there".
     status: raw.status,

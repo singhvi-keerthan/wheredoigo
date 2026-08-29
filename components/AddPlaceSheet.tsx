@@ -620,7 +620,7 @@ export default function AddPlaceSheet({
                 className="press mt-2 flex w-full items-center justify-center gap-2 py-3 text-[14.5px] font-semibold"
                 style={{ borderRadius: "var(--radius-chip)", border: "1px solid var(--border-strong)", color: "var(--text-primary)" }}
               >
-                <CalendarCheck size={16} strokeWidth={2.25} /> I've already been here
+                <CalendarCheck size={16} strokeWidth={2.25} /> I&apos;ve already been here
               </button>
             </div>
           )}
