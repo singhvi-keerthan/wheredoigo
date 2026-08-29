@@ -2,35 +2,15 @@ import { TAG_OPTIONS } from "./types";
 import type { DecideQuery } from "./decide";
 import { keywordsFromText, STOPWORDS } from "./decide-prompt";
 import { knownAreaFromText } from "./areas";
+import { wordHits } from "./words";
 
-// Local keyword parse — fallback when the Gemini NL route is unavailable.
+// Local keyword parse — fallback when the /api/decide model route is
+// unavailable (no key, rate limit, outage).
 // Mirrors the model's guardrails: negated terms ("no bars", "not italian") go
 // to exclude fields rather than inverting into positives, and "tonight" is not
 // open-now. Lives in lib (not the component) so the eval harness can grade it.
 
 const NEG_BEFORE = /\b(no|not|non|without|avoid|skip|except|hate|dislike)\b[\s\w-]{0,12}$/;
-
-// Vocabulary is matched on WORD BOUNDARIES, not raw substrings. Plain
-// `includes` made "barbecue" match `bar`, "working" match `work`, and would
-// have made "parking" match any value starting "park". A TRAILING PLURAL still
-// counts as a hit, because "no bars" has to keep excluding `bar` — that phrase
-// is this module's own canonical example, and a naive \b…\b fix silently
-// breaks it.
-const WORD = /[\p{L}\p{N}]/u;
-
-// Every index at which `needle` occurs as a whole word.
-function wordHits(hay: string, needle: string): number[] {
-  const out: number[] = [];
-  for (let i = hay.indexOf(needle); i !== -1; i = hay.indexOf(needle, i + 1)) {
-    if (i > 0 && WORD.test(hay[i - 1])) continue; // starts mid-word ("rebar")
-    let end = i + needle.length;
-    if (hay.slice(end, end + 2) === "es") end += 2; // "dosas" / "boxes"
-    else if (hay[end] === "s") end += 1;
-    if (end < hay.length && WORD.test(hay[end])) continue; // runs on ("barbecue")
-    out.push(i);
-  }
-  return out;
-}
 
 // Words people actually type for a value they'd never spell out. `park-garden`
 // is the only one the current vocabulary needs: "a park nearby" contains
@@ -67,6 +47,32 @@ function classify(vals: string[], t: string): { inc: string[]; exc: string[] } {
   return { inc, exc };
 }
 
+// Words that name a KIND of place rather than a place. "best pizza in town"
+// used to parse to area:"town", and an area is a HARD gate — the map then kept
+// only the places whose locality happens to contain "town" (Benson Town, Cooke
+// Town, Frazer Town) and dropped everything else. A phrase that named no
+// neighbourhood emptied the map. Same for "in the city" and "in the area".
+//
+// Kept separate from STOPWORDS because these are perfectly good keywords
+// elsewhere; they are only meaningless as a LOCALITY.
+const NON_AREA = new Set([
+  "town",
+  "city",
+  "area",
+  "areas",
+  "neighbourhood",
+  "neighborhood",
+  "centre",
+  "center",
+  "mood",
+  "general",
+  "here",
+  "walking distance",
+  "distance",
+  "range",
+  "budget",
+]);
+
 // "near jayanagar" / "around koramangala" / "in indiranagar" → the bare area
 // name (max 3 words, stopword-led captures dropped: "in the mood" is not a place).
 function parseArea(t: string): string | undefined {
@@ -80,7 +86,11 @@ function parseArea(t: string): string | undefined {
   const words = m[1].trim().split(/\s+/).slice(0, 3);
   while (words.length && STOPWORDS.has(words[words.length - 1])) words.pop();
   if (!words.length || STOPWORDS.has(words[0])) return undefined;
-  return words.join(" ");
+  const name = words.join(" ");
+  // A capture that is ONLY generic locality words names nothing. "south city"
+  // still passes, because "south" is not in the set.
+  if (words.every((w) => NON_AREA.has(w)) || NON_AREA.has(name)) return undefined;
+  return name;
 }
 
 function parseBudget(t: string): number | undefined {

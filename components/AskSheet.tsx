@@ -28,6 +28,11 @@ type FilterField =
 type Category = { id: FilterField; label: string; values: { value: string; label: string }[] };
 
 type Filters = {
+  // Parsed, not chipped. "somewhere I haven't tried" is a real narrowing and
+  // the map used to drop it on the floor: buildQuery hardcoded lifecycle:"any"
+  // and there was no field to put it in. There is still no chip for it — it
+  // shows up in the summary line instead, which is where the ask is echoed.
+  lifecycle: "any" | "watchlist" | "visited" | "favorites";
   area: string;
   cuisine: string;
   maxBudget: number | null;
@@ -44,15 +49,34 @@ type Extras = Pick<
   DecideQuery,
   | "areaCenter"
   | "keywords"
+  | "boostRatings"
   | "excludeCuisines"
   | "excludeTypes"
   | "excludeStaples"
   | "excludeOccasions"
   | "excludeVibes"
   | "excludePractical"
->;
+> & {
+  // The FULL arrays the parse produced, kept beside the single-select chips.
+  // "japanese or korean" parses to both and the chip can only show one; without
+  // this the second one was silently dropped on the way to the ranker.
+  multi?: Partial<Record<MultiField, string[]>>;
+};
+
+type MultiField = "types" | "cuisines" | "staples" | "occasions" | "vibes" | "practical";
+
+// Chip field → the DecideQuery array it feeds.
+const MULTI_OF: Record<MultiField, keyof Filters> = {
+  types: "type",
+  cuisines: "cuisine",
+  staples: "staple",
+  occasions: "occasion",
+  vibes: "vibe",
+  practical: "practical",
+};
 
 const EMPTY_FILTERS: Filters = {
+  lifecycle: "any",
   area: "",
   cuisine: "",
   maxBudget: null,
@@ -90,15 +114,27 @@ const TAG_CATS: Category[] = [
   { id: "practical", label: "Practical", values: opt(TAG_OPTIONS.practical) },
 ];
 
+// The values to send for one namespace. The chip holds one; the parse may have
+// found several. Keeping the rest only when the chip still shows the FIRST of
+// them means a hand-picked chip overrides the ask (you chose it, you meant it)
+// while an untouched one carries everything that was asked for.
+function valuesFor(f: Filters, x: Extras, field: MultiField): string[] | undefined {
+  const chip = f[MULTI_OF[field]] as string;
+  if (!chip) return undefined;
+  const parsed = x.multi?.[field];
+  return parsed?.length && parsed[0] === chip ? parsed : [chip];
+}
+
 function buildQuery(f: Filters, x: Extras): DecideQuery {
-  const q: DecideQuery = { lifecycle: "any" };
+  const q: DecideQuery = { lifecycle: f.lifecycle };
   if (f.openNow) q.openNow = true;
-  if (f.cuisine) q.cuisines = [f.cuisine];
-  if (f.type) q.types = [f.type];
-  if (f.staple) q.staples = [f.staple];
-  if (f.occasion) q.occasions = [f.occasion];
-  if (f.vibe) q.vibes = [f.vibe];
-  if (f.practical) q.practical = [f.practical];
+  q.cuisines = valuesFor(f, x, "cuisines");
+  q.types = valuesFor(f, x, "types");
+  q.staples = valuesFor(f, x, "staples");
+  q.occasions = valuesFor(f, x, "occasions");
+  q.vibes = valuesFor(f, x, "vibes");
+  q.practical = valuesFor(f, x, "practical");
+  if (x.boostRatings?.length) q.boostRatings = x.boostRatings;
   if (f.area) {
     q.area = f.area;
     if (x.areaCenter) q.areaCenter = x.areaCenter;
@@ -122,6 +158,7 @@ function buildQuery(f: Filters, x: Extras): DecideQuery {
 function mergeParsed(f: Filters, q: DecideQuery): Filters {
   return {
     ...f,
+    lifecycle: q.lifecycle ?? f.lifecycle,
     area: q.area ?? f.area,
     cuisine: q.cuisines?.[0] ?? f.cuisine,
     maxBudget: q.maxBudget ?? f.maxBudget,
@@ -139,6 +176,18 @@ function extrasFromParsed(prev: Extras, q: DecideQuery): Extras {
   return {
     areaCenter: q.area ? q.areaCenter : prev.areaCenter,
     keywords: q.keywords,
+    // Parsed by both the model and the offline fallback, consumed by
+    // rankPlaces, and until now thrown away in between — "great ambiance" and
+    // "good value" had no effect on either surface.
+    boostRatings: q.boostRatings,
+    multi: {
+      types: q.types,
+      cuisines: q.cuisines,
+      staples: q.staples,
+      occasions: q.occasions,
+      vibes: q.vibes,
+      practical: q.practical,
+    },
     excludeCuisines: q.excludeCuisines,
     excludeTypes: q.excludeTypes,
     excludeStaples: q.excludeStaples,
@@ -148,9 +197,21 @@ function extrasFromParsed(prev: Extras, q: DecideQuery): Extras {
   };
 }
 
-function summarize(f: Filters, text: string) {
+const LIFECYCLE_LABEL: Record<Filters["lifecycle"], string> = {
+  any: "",
+  watchlist: "not been yet",
+  visited: "been before",
+  favorites: "favourites",
+};
+
+function summarize(f: Filters, text: string, basic = false) {
   const bits: string[] = [];
   if (text) bits.push(text);
+  // Says out loud that the sentence was read by the keyword parser, not the
+  // model. It changes what the results mean, so it belongs on the line that
+  // already tells you what you are looking at.
+  if (basic) bits.push("basic matching");
+  if (f.lifecycle !== "any") bits.push(LIFECYCLE_LABEL[f.lifecycle]);
   if (f.area) bits.push(f.area);
   for (const k of ["cuisine", "type", "staple", "occasion", "vibe", "practical"] as const) {
     if (f[k]) bits.push(f[k]);
@@ -191,8 +252,16 @@ export default function AskSheet({
   const dirty = useMemo(
     () =>
       !!nl.trim() ||
-      Object.entries(filters).some(([k, v]) => (k === "openNow" ? v === true : v != null && v !== "")) ||
-      Object.values(extras).some((v) => (Array.isArray(v) ? v.length > 0 : v != null)),
+      Object.entries(filters).some(([k, v]) =>
+        k === "openNow" ? v === true : k === "lifecycle" ? v !== "any" : v != null && v !== ""
+      ) ||
+      // `multi` is excluded: extrasFromParsed always writes the object (its
+      // fields may all be undefined), so counting it made `dirty` permanently
+      // true after ANY ask — which lit the Clear button and made the deck offer
+      // to loosen a lens that was narrowing nothing.
+      Object.entries(extras).some(([k, v]) =>
+        k === "multi" ? false : Array.isArray(v) ? v.length > 0 : v != null
+      ),
     [nl, filters, extras]
   );
   const openCat = picker ? [...STANDARD_CATS, ...TAG_CATS].find((c) => c.id === picker) ?? null : null;
@@ -239,10 +308,20 @@ export default function AskSheet({
     setPicker(null);
   };
 
-  const parseAsk = async (): Promise<{ filters: Filters; extras: Extras; text: string }> => {
+  const parseAsk = async (): Promise<{
+    filters: Filters;
+    extras: Extras;
+    text: string;
+    basic: boolean;
+  }> => {
     const text = nl.trim();
-    if (!text) return { filters, extras, text };
+    if (!text) return { filters, extras, text, basic: false };
     let q: DecideQuery;
+    // `basic` = the model layer didn't answer and the offline keyword parser
+    // did. It has to be visible: a silently-degraded parse is exactly how the
+    // whole feature ran for weeks looking fine and understanding almost
+    // nothing. The route reports which one served the query.
+    let basic = true;
     try {
       const res = await fetch("/api/decide", {
         method: "POST",
@@ -250,7 +329,12 @@ export default function AskSheet({
         body: JSON.stringify({ prompt: text }),
       });
       const data = await res.json();
-      q = data.query ?? parseFallback(text);
+      if (data.query) {
+        q = data.query;
+        basic = data.parsedBy !== "model";
+      } else {
+        q = parseFallback(text);
+      }
     } catch {
       q = parseFallback(text);
     }
@@ -259,16 +343,18 @@ export default function AskSheet({
     const nextExtras = extrasFromParsed(extras, q);
     setFilters(nextFilters);
     setExtras(nextExtras);
-    return { filters: nextFilters, extras: nextExtras, text };
+    return { filters: nextFilters, extras: nextExtras, text, basic };
   };
 
   const apply = async (parseText: boolean) => {
     if (thinking || !dirty) return;
     setThinking(true);
-    const parsed = parseText ? await parseAsk() : { filters, extras, text: nl.trim() };
+    const parsed = parseText
+      ? await parseAsk()
+      : { filters, extras, text: nl.trim(), basic: false };
     const q = await geocodeQueryArea(buildQuery(parsed.filters, parsed.extras));
     setThinking(false);
-    onApply(q, summarize(parsed.filters, parsed.text));
+    onApply(q, summarize(parsed.filters, parsed.text, parsed.basic));
     onClose();
   };
 

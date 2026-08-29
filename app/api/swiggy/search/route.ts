@@ -1,4 +1,4 @@
-import { searchDineoutRestaurants, SwiggyAuthError } from "@/lib/swiggy";
+import { searchDineoutRestaurants, SwiggyAuthError, type DineoutSearchQuery } from "@/lib/swiggy";
 import { crossOrigin, forbidden } from "@/lib/api-guard";
 
 // Decide's "Swiggy" mode — browse Swiggy Dineout's own catalog, independent of
@@ -7,10 +7,12 @@ import { crossOrigin, forbidden } from "@/lib/api-guard";
 //
 // lat/lng are the *user's* coordinates: the tool requires a location and the
 // same pair has to be echoed to slots/book later, so the client sends it.
+// areaLat/areaLng are the geocoded centre of the asked locality, when there is
+// one — the concept searches run there instead.
 export async function POST(request: Request) {
   if (crossOrigin(request)) return forbidden();
 
-  let body: { cuisine?: string; keyword?: string; area?: string; lat?: number; lng?: number };
+  let body: Partial<DineoutSearchQuery>;
   try {
     body = await request.json();
   } catch {
@@ -18,8 +20,15 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { results, dropped } = await searchDineoutRestaurants(body);
-    return Response.json({ results, dropped });
+    const { results, dropped, searched } = await searchDineoutRestaurants({
+      ...body,
+      terms: Array.isArray(body.terms) ? body.terms.filter((t) => typeof t === "string") : [],
+    });
+    // `dropped` and `searched` travel to the client so an empty deck can say
+    // WHY it is empty — "Swiggy had nothing for rooftop" is a different message
+    // from "your filter hid everything", and the UI used to show the second one
+    // for both.
+    return Response.json({ results, dropped, searched });
   } catch (err) {
     // Tokens last 5 days and can't be refreshed, so this is a routine state:
     // the deck shows a "reconnect Swiggy" note rather than an error.

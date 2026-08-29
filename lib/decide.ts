@@ -2,13 +2,15 @@ import type { Place, TagNamespace, RatingDimension } from "./types";
 import { isOpenNow } from "./types";
 import { leadRating } from "./format";
 import { distanceKm } from "./geo";
+import { facetVerdict, matchedValue, carriesAny, scoreFacets, type Verdict } from "./facets";
+import { hasWord } from "./words";
 
 // ---------------------------------------------------------------------------
 // Decide mode — "help me pick where to go tonight."
 //
 // Rule-based and deterministic given (places, query, seed). NO proximity in the
 // logic by design. A query can be built from intent chips/toggles, or parsed
-// from free text by the optional Gemini layer (/api/decide) — either way it
+// from free text by the model layer (/api/decide) — either way it
 // lands here as a structured DecideQuery and the ranking stays local + honest.
 // ---------------------------------------------------------------------------
 
@@ -161,11 +163,16 @@ function tagValues(p: Place, ns: TagNamespace): string[] {
   return p.tags.filter((t) => t.namespace === ns).map((t) => t.value);
 }
 
-// null = no preference set; true = matches one; false = preference set, no match.
-function preference(p: Place, ns: TagNamespace, wanted?: string[]): boolean | null {
+// null = no preference set OR nothing known about this place for it;
+// true = evidence it matches; false = evidence it does not.
+//
+// Reads through lib/facets.ts rather than the tag array, so the ranker and the
+// map agree on what a place IS. Tags remain the strongest evidence; Google's
+// raw types and the place's own words fill the gaps that made this return a
+// flat "no" for every unhand-tagged place.
+function preference(p: Place, ns: TagNamespace, wanted?: string[]): Verdict {
   if (!wanted || wanted.length === 0) return null;
-  const have = tagValues(p, ns);
-  return wanted.some((w) => have.includes(w));
+  return facetVerdict(p, ns, wanted);
 }
 
 const PREFS: { ns: TagNamespace; key: keyof DecideQuery }[] = [
@@ -209,21 +216,60 @@ const POSITIVES: { ns: TagNamespace; key: keyof DecideQuery }[] = [
   { ns: "practical", key: "practical" },
 ];
 
-export function matchesAskedFacets(p: Place, query: DecideQuery): boolean {
+// The namespaces an ask actually named, in the shape lib/facets.ts wants.
+function askedNamespaces(query: DecideQuery): Partial<Record<TagNamespace, string[]>> {
+  const out: Partial<Record<TagNamespace, string[]>> = {};
   for (const { ns, key } of POSITIVES) {
     const want = query[key] as string[] | undefined;
-    if (!want || !want.length) continue; // not asked for → not a constraint
-    if (!tagValues(p, ns).some((v) => want.includes(v))) return false;
+    if (want?.length) out[ns] = want;
   }
-  return true;
+  return out;
+}
+
+// The map's narrowing, and the reason this is not just a `.filter()`.
+//
+// A hard gate is right on a map — order is invisible there, so asking for
+// "italian" and getting every pin back silently reordered reads as a broken
+// control. But the gate has to survive a library that has never been
+// hand-tagged, which is most libraries: ask for "somewhere romantic" over
+// places tagged only from Google and the strict answer is zero pins, every
+// time. An empty map is a worse lie than a loose one.
+//
+// So it degrades in one step instead of failing:
+//
+//   confident  at least one place positively answers everything asked → show
+//              exactly those. The control bit, and it bit cleanly.
+//   loose      nothing could be confirmed, so fall back to the places nothing
+//              CONTRADICTS, ranked. `confident: false` travels with them so the
+//              UI can say it is showing near-matches rather than pretending.
+//
+// Either way a place carrying an excluded tag is already gone — rankPlaces
+// dropped it before this sees it.
+export function narrowToAsk(
+  places: Place[],
+  query: DecideQuery,
+  seed = 1,
+  now: Date = new Date()
+): { places: Place[]; confident: boolean } {
+  const ranked = rankPlaces(places, query, seed, now).map((r) => r.place);
+  const asked = askedNamespaces(query);
+  if (Object.keys(asked).length === 0) return { places: ranked, confident: true };
+
+  const scored = ranked.map((p) => ({ p, s: scoreFacets(p, asked) }));
+  const confident = scored.filter((x) => x.s.contradicted === 0 && x.s.matched === x.s.asked);
+  if (confident.length) return { places: confident.map((x) => x.p), confident: true };
+
+  // Nothing confirmed. Keep whatever isn't ruled out, best-supported first.
+  const loose = scored
+    .filter((x) => x.s.contradicted === 0)
+    .sort((a, b) => b.s.matched - a.s.matched);
+  return { places: loose.map((x) => x.p), confident: false };
 }
 
 function isExcluded(p: Place, query: DecideQuery): boolean {
   for (const { ns, key } of EXCLUDES) {
     const avoid = query[key] as string[] | undefined;
-    if (avoid && avoid.length && tagValues(p, ns).some((v) => avoid.includes(v))) {
-      return true;
-    }
+    if (avoid?.length && carriesAny(p, ns, avoid)) return true;
   }
   return false;
 }
@@ -319,13 +365,22 @@ export function rankPlaces(
 
     // Preference matches (soft but strong — set chips steer, don't hard-filter).
     for (const { ns, key } of PREFS) {
-      const m = preference(p, ns, query[key] as string[] | undefined);
+      const want = query[key] as string[] | undefined;
+      const m = preference(p, ns, want);
       if (m === true) {
         score += 18;
-        const hit = (query[key] as string[]).find((w) => tagValues(p, ns).includes(w));
+        // Name the value that ACTUALLY matched, whichever evidence found it.
+        // Falling back to want[0] made a place matched on "kimchi and bibimbap"
+        // report "Good for japanese" when the ask was ["japanese","korean"].
+        const hit = want ? matchedValue(p, ns, want) : null;
         if (hit && reasons.length < 3) reasons.push(`Good for ${hit}`);
       } else if (m === false) {
         score -= 10;
+      } else if (want?.length) {
+        // Asked, and nothing is known either way. Not a strike — a place with
+        // no vibe tag is not un-cozy — but a confirmed match should still
+        // outrank a maybe, so silence costs a little.
+        score -= 3;
       }
     }
 
@@ -347,7 +402,11 @@ export function rankPlaces(
     if (query.keywords?.length) {
       const hay = `${p.notes} ${p.name} ${p.summary ?? ""}`.toLowerCase();
       let hits = 0;
-      for (const kw of query.keywords) if (kw.length >= 3 && hay.includes(kw)) hits++;
+      // Whole words, not substrings. `includes` let "bar" score a barbecue
+      // joint and "work" score anything with "artwork" in its summary, which
+      // is the same class of bug the fallback parser was already guarding
+      // against — same matcher now, so they cannot disagree.
+      for (const kw of query.keywords) if (kw.length >= 3 && hasWord(hay, kw.toLowerCase())) hits++;
       if (hits) {
         score += Math.min(hits, 3) * 15;
         if (reasons.length < 3) reasons.push("Matches your note");

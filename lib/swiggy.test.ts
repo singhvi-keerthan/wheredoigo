@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildSearchArgs, parseSearchRows } from "./swiggy";
+import { buildSearchArgs, SEARCH_LIMIT, mergeRestaurantDetails, parseSearchRows, type SwiggyRestaurant } from "./swiggy";
 
 // Verbatim from a live search_restaurants_dineout call (query "dinner",
 // Bengaluru). Kept exactly as Swiggy sent it — trailing double-spaces, empty
@@ -65,28 +65,81 @@ describe("parseSearchRows — search answers in prose, not data", () => {
 describe("buildSearchArgs — Swiggy New source search shape", () => {
   const user = { lat: 12.972, lng: 77.61 };
 
-  it("keeps the cuisine entityType path when no area is selected", () => {
-    expect(buildSearchArgs({ cuisine: "italian" }, user)).toEqual({
-      query: "italian",
-      entityType: "CUISINE",
+  // The tool's contract: "One term, not a sentence, and no location words when
+  // latitude/longitude already cover the location." Every case here is a
+  // regression guard on the shape that used to return zero rows.
+  it("sends one bare term and the page size", () => {
+    expect(buildSearchArgs({ term: "Italian" }, user)).toEqual({
+      query: "Italian",
       latitude: user.lat,
       longitude: user.lng,
+      limit: SEARCH_LIMIT,
     });
   });
 
-  it("puts a selected area inside the Swiggy query", () => {
-    expect(buildSearchArgs({ area: "Jayanagar" }, user)).toEqual({
-      query: "restaurants in Jayanagar",
+  it("never builds a sentence — a locality is its own term, not a suffix", () => {
+    expect(buildSearchArgs({ term: "Jayanagar" }, user).query).toBe("Jayanagar");
+    expect(buildSearchArgs({ term: "Rooftop" }, user).query).toBe("Rooftop");
+  });
+
+  it("does not send entityType at all", () => {
+    expect(buildSearchArgs({ term: "Italian" }, user)).not.toHaveProperty("entityType");
+  });
+
+  it("asks for the documented maximum page rather than the default 10", () => {
+    expect(buildSearchArgs({ term: "Bar" }, user).limit).toBe(30);
+  });
+
+  it("passes an explicit offset through for the next page", () => {
+    expect(buildSearchArgs({ term: "Biryani", offset: 10 }, user)).toEqual({
+      query: "Biryani",
       latitude: user.lat,
       longitude: user.lng,
+      limit: SEARCH_LIMIT,
+      offset: 10,
     });
   });
 
-  it("does not send entityType when cuisine and area share the one query slot", () => {
-    expect(buildSearchArgs({ cuisine: "italian", area: "Indiranagar" }, user)).toEqual({
-      query: "italian restaurants in Indiranagar",
-      latitude: user.lat,
-      longitude: user.lng,
+  it("falls back to a browsable term rather than an empty query", () => {
+    expect(buildSearchArgs({ term: "   " }, user).query).toBe("restaurants");
+  });
+});
+
+describe("mergeRestaurantDetails — active Swiggy card enrichment", () => {
+  const base: SwiggyRestaurant = {
+    id: "42",
+    name: "Base Bistro",
+    cuisines: ["italian"],
+    area: "Indiranagar",
+    address: "12th Main, Indiranagar",
+    lat: null,
+    lng: null,
+    rating: 4.1,
+    priceForTwo: 1400,
+    photo: "https://cdn.example/base.jpg",
+  };
+
+  it("keeps search fields while adding gallery and details", () => {
+    const merged = mergeRestaurantDetails(base, {
+      restaurant: {
+        name: "Base Bistro",
+        images: ["gallery-one", { imageId: "gallery-two" }],
+        description: "A compact dinner spot with a wood-fired menu.",
+        highlights: [{ title: "Outdoor seating" }, { label: "Serves cocktails" }],
+        offers: [{ offerText: "Flat 20% off on pre-booking" }],
+        distanceString: "2.4 km away",
+      },
     });
+
+    expect(merged.id).toBe(base.id);
+    expect(merged.rating).toBe(base.rating);
+    expect(merged.priceForTwo).toBe(base.priceForTwo);
+    expect(merged.photos).toHaveLength(3);
+    expect(merged.photos?.[0]).toContain("gallery-one");
+    expect(merged.photo).toBe(merged.photos?.[0]);
+    expect(merged.description).toBe("A compact dinner spot with a wood-fired menu.");
+    expect(merged.highlights).toEqual(["Outdoor seating", "Serves cocktails"]);
+    expect(merged.offers).toEqual(["Flat 20% off on pre-booking"]);
+    expect(merged.distance).toBe("2.4 km away");
   });
 });

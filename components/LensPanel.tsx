@@ -5,7 +5,7 @@ import { X, Sparkles, RefreshCw, ChevronDown, Clock, MapPin } from "lucide-react
 import { geocodeArea } from "@/lib/places";
 import { parseFallback } from "@/lib/decide-fallback";
 import { rankPlaces, type DecideQuery } from "@/lib/decide";
-import { keywordForNewSearch } from "@/lib/lens";
+import { buildSearchPlan } from "@/lib/swiggyTerms";
 import { TAG_OPTIONS } from "@/lib/types";
 import { usePlaces } from "@/lib/store";
 import type { DeckSource } from "@/lib/deck";
@@ -114,23 +114,49 @@ type Extras = Pick<
   DecideQuery,
   | "areaCenter"
   | "keywords"
+  | "boostRatings"
   | "excludeCuisines"
   | "excludeTypes"
   | "excludeStaples"
   | "excludeOccasions"
   | "excludeVibes"
   | "excludePractical"
->;
+> & {
+  // The full arrays a parse produced. The chips are single-select, so without
+  // this "japanese or korean" reached the ranker as "japanese".
+  multi?: Partial<Record<MultiField, string[]>>;
+};
+
+type MultiField = "types" | "cuisines" | "staples" | "occasions" | "vibes" | "practical";
+
+const MULTI_OF: Record<MultiField, keyof Filters> = {
+  types: "type",
+  cuisines: "cuisine",
+  staples: "staple",
+  occasions: "occasion",
+  vibes: "vibe",
+  practical: "practical",
+};
+
+// A hand-picked chip overrides the ask; an untouched one carries everything the
+// ask found. See the same rule in AskSheet.
+function valuesFor(f: Filters, x: Extras, field: MultiField): string[] | undefined {
+  const chip = f[MULTI_OF[field]] as string;
+  if (!chip) return undefined;
+  const parsed = x.multi?.[field];
+  return parsed?.length && parsed[0] === chip ? parsed : [chip];
+}
 
 function buildQuery(f: Filters, x: Extras): DecideQuery {
   const q: DecideQuery = { lifecycle: f.lifecycle };
   if (f.openNow) q.openNow = true;
-  if (f.cuisine) q.cuisines = [f.cuisine];
-  if (f.type) q.types = [f.type];
-  if (f.staple) q.staples = [f.staple];
-  if (f.occasion) q.occasions = [f.occasion];
-  if (f.vibe) q.vibes = [f.vibe];
-  if (f.practical) q.practical = [f.practical];
+  q.cuisines = valuesFor(f, x, "cuisines");
+  q.types = valuesFor(f, x, "types");
+  q.staples = valuesFor(f, x, "staples");
+  q.occasions = valuesFor(f, x, "occasions");
+  q.vibes = valuesFor(f, x, "vibes");
+  q.practical = valuesFor(f, x, "practical");
+  if (x.boostRatings?.length) q.boostRatings = x.boostRatings;
   if (f.area) {
     q.area = f.area;
     // Only Ask ever produces a centroid; with one, rankPlaces gates by distance
@@ -160,6 +186,9 @@ export function useLens() {
   const [source, setSource] = useState<DeckSource>("saved");
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [extras, setExtras] = useState<Extras>({});
+  // True when the last Ask was read by the offline keyword parser rather than
+  // the model. Lives on the lens because the deck's collapsed trigger shows it.
+  const [basicParse, setBasicParse] = useState(false);
 
   // Built for every source. The tag half only lands on saved cards (buildDeck
   // never ranks Swiggy through rankPlaces), but area/budget/rating do gate the
@@ -188,8 +217,9 @@ export function useLens() {
     if (filters.maxBudget != null) bits.push(`under ₹${filters.maxBudget.toLocaleString("en-IN")}`);
     if (filters.minRating != null) bits.push(`${filters.minRating.toFixed(1)}+`);
     if (filters.openNow) bits.push("open now");
+    if (basicParse) bits.push("basic matching");
     return bits;
-  }, [filters]);
+  }, [filters, basicParse]);
 
   // Is anything narrowing the deck right now? Not just `summary.length` — Ask
   // can set keywords and hard negatives that no chip shows, and a Clear that
@@ -197,13 +227,20 @@ export function useLens() {
   const dirty = useMemo(
     () =>
       summary.length > 0 ||
-      Object.values(extras).some((v) => (Array.isArray(v) ? v.length > 0 : v != null)),
+      // `multi` is excluded: extrasFromParsed always writes the object (its
+      // fields may all be undefined), so counting it made `dirty` permanently
+      // true after ANY ask — which lit the Clear button and made the deck offer
+      // to loosen a lens that was narrowing nothing.
+      Object.entries(extras).some(([k, v]) =>
+        k === "multi" ? false : Array.isArray(v) ? v.length > 0 : v != null
+      ),
     [summary, extras]
   );
 
   const clear = () => {
     setFilters(EMPTY_FILTERS);
     setExtras({});
+    setBasicParse(false);
   };
 
   return {
@@ -213,10 +250,16 @@ export function useLens() {
     setFilters,
     extras,
     setExtras,
+    basicParse,
+    setBasicParse,
     query,
     area,
     cuisine,
-    keyword: source === "saved" ? "" : keywordForNewSearch(extras.keywords, filters.area),
+    // What New mode should actually ask Swiggy for. Built from the STRUCTURED
+    // query, not from the user's leftover words: the old path joined whatever
+    // keywords survived stopword-stripping into one string ("rooftop friends"),
+    // which Swiggy resolves as nothing. See lib/swiggyTerms.ts.
+    searchPlan: source === "saved" ? { terms: [] } : buildSearchPlan(query, extras.keywords),
     savedMatches,
     summary,
     dirty,
@@ -240,6 +283,7 @@ export default function LensPanel({
   const [picker, setPicker] = useState<FilterField | null>(null);
   const [nl, setNl] = useState("");
   const [thinking, setThinking] = useState(false);
+  const { basicParse, setBasicParse } = lens;
 
   // A chosen area survives in the list even after the pool moves under it (a
   // cuisine change refetches Swiggy), so the chip never points at a value the
@@ -279,14 +323,18 @@ export default function LensPanel({
     setPicker(null);
   };
 
-  // Ask — the ONE natural-language mechanism, same for every source. Gemini
-  // parses free text into the structured query; here we fan it out onto the
-  // category filters (so the chips reflect what you asked) plus the extras.
+  // Ask — the ONE natural-language mechanism, same for every source. The model
+  // route parses free text into the structured query; here we fan it out onto
+  // the category filters (so the chips reflect what you asked) plus the extras.
   const ask = async () => {
     const text = nl.trim();
     if (!text) return;
     setThinking(true);
     let q: DecideQuery;
+    // See AskSheet: a silent drop to the keyword parser is how this feature ran
+    // for weeks looking fine and understanding almost nothing, so the deck says
+    // when it happened.
+    let basic = true;
     try {
       const res = await fetch("/api/decide", {
         method: "POST",
@@ -294,10 +342,16 @@ export default function LensPanel({
         body: JSON.stringify({ prompt: text }),
       });
       const data = await res.json();
-      q = data.query ?? parseFallback(text);
+      if (data.query) {
+        q = data.query;
+        basic = data.parsedBy !== "model";
+      } else {
+        q = parseFallback(text);
+      }
     } catch {
       q = parseFallback(text);
     }
+    setBasicParse(basic);
     if (q.area) {
       try {
         const hit = await geocodeArea(q.area);
@@ -332,6 +386,16 @@ export default function LensPanel({
       // its centroid has to stand with it.
       areaCenter: q.area ? q.areaCenter : x.areaCenter,
       keywords: q.keywords,
+      // Parsed and then discarded until now, on both surfaces.
+      boostRatings: q.boostRatings,
+      multi: {
+        types: q.types,
+        cuisines: q.cuisines,
+        staples: q.staples,
+        occasions: q.occasions,
+        vibes: q.vibes,
+        practical: q.practical,
+      },
       excludeCuisines: q.excludeCuisines,
       excludeTypes: q.excludeTypes,
       excludeStaples: q.excludeStaples,

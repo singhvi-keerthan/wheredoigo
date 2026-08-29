@@ -47,6 +47,8 @@ export default function NewCardDetail({
   const [payUrl, setPayUrl] = useState<string | null>(null);
 
   const directions = swiggyDirectionsUrl(r);
+  const highlights = r.highlights ?? [];
+  const offers = r.offers ?? [];
 
   const startBooking = async () => {
     setBooking(true);
@@ -160,6 +162,21 @@ export default function NewCardDetail({
             </p>
           )}
 
+          {(r.description || r.distance) && (
+            <div className="mt-3">
+              {r.description && (
+                <p className="text-[13px] leading-snug" style={{ color: "var(--text-secondary)" }}>
+                  {r.description}
+                </p>
+              )}
+              {r.distance && (
+                <p className="mt-1 text-[12px] leading-snug" style={{ color: "var(--text-tertiary)" }}>
+                  {r.distance}
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="mt-3 flex flex-wrap gap-1.5">
             {r.cuisines.map((c) => (
               <span
@@ -170,7 +187,30 @@ export default function NewCardDetail({
                 {c}
               </span>
             ))}
+            {highlights.map((h) => (
+              <span
+                key={h}
+                className="px-2.5 py-[3px] text-[11px]"
+                style={{ borderRadius: "var(--radius-chip)", background: "var(--bg-elevated)", color: "var(--text-secondary)" }}
+              >
+                {h}
+              </span>
+            ))}
           </div>
+
+          {offers.length > 0 && (
+            <div className="mt-3 flex flex-col gap-1.5">
+              {offers.map((offer) => (
+                <p
+                  key={offer}
+                  className="rounded-[6px] px-3 py-2 text-[12.5px] leading-snug"
+                  style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)" }}
+                >
+                  {offer}
+                </p>
+              ))}
+            </div>
+          )}
 
           {/* book a table — carried over from the old Swiggy panel */}
           {booking ? (

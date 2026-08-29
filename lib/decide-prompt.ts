@@ -1,4 +1,4 @@
-// Single source of truth for the Decide NL layer: the instruction, the few-shot
+// Single source of truth for the Ask NL layer: the instruction, the few-shot
 // dataset, the constrained response schema, and the post-parse sanitizer. Both
 // the API route (app/api/decide/route.ts) and the eval harness
 // (scripts/eval-decide.ts) import from here so what ships is exactly what's tested.
@@ -53,7 +53,7 @@ export const STOPWORDS = new Set([
 ]);
 
 // Pull distinctive free-text terms out of raw request text (the offline fallback
-// for when Gemini is unavailable): drop stopwords + short words, keep the rest.
+// for when the model layer is unavailable): drop stopwords + short words, keep the rest.
 export function keywordsFromText(text: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -173,7 +173,7 @@ export function buildDecideInstruction(prompt: string): string {
 
   return `You translate a person's "where should I go out tonight?" request into structured filters for picking a place from their OWN saved list. Output only the JSON object defined by the schema — no prose.
 
-Use ONLY values from this controlled vocabulary. If nothing fits a field, omit it — never invent a value, never translate to a near-synonym that isn't listed.
+Use ONLY values from this controlled vocabulary. If nothing fits a field, leave it EMPTY — an empty array for the list fields, null for maxBudget / minRating / area, false for openNow. Never invent a value, never translate to a near-synonym that isn't listed. Every field must be present in the output even when empty.
 ${VOCAB}
 
 RULES
@@ -198,36 +198,72 @@ Request: "${prompt}"`;
 }
 
 const enumArray = (ns: TagNamespace) => ({
-  type: "ARRAY",
-  items: { type: "STRING", enum: [...TAG_OPTIONS[ns]] },
+  type: "array",
+  items: { type: "string", enum: [...TAG_OPTIONS[ns]] },
 });
 
-// Gemini responseSchema (OpenAPI subset). Enums on the array items constrain the
-// model to the vocabulary; sanitizeQuery is the belt-and-suspenders backstop.
+// Structured-output schema for the Anthropic Messages API
+// (`output_config.format = { type: "json_schema", schema: DECIDE_SCHEMA }`).
+//
+// Plain JSON Schema, not the OpenAPI subset Gemini wanted — lowercase type
+// names, and `anyOf: [{type: T}, {type: "null"}]` where Gemini had `nullable`.
+// The shorthand `{type: ["integer","null"]}` is accepted today but is not in
+// the documented subset, so the long form is used instead; both were checked
+// against a live call on 2026-08-30 and the long form is the one that is
+// promised to keep working.
+//
+// `required` lists every property. That is a choice, not an obligation —
+// listing them all means "nothing to say about this field" arrives as an
+// explicit null or empty array rather than an absent key, which is one shape
+// for the sanitizer to handle instead of two. sanitizeQuery treats both the
+// same way regardless.
+//
+// Enums on the array items constrain the model to the vocabulary;
+// sanitizeQuery is the belt-and-suspenders backstop.
+const NS_SCHEMA_FIELDS = [
+  ["types", "type"],
+  ["cuisines", "cuisine"],
+  ["staples", "staple"],
+  ["occasions", "occasion"],
+  ["vibes", "vibe"],
+  ["practical", "practical"],
+  ["excludeTypes", "type"],
+  ["excludeCuisines", "cuisine"],
+  ["excludeStaples", "staple"],
+  ["excludeOccasions", "occasion"],
+  ["excludeVibes", "vibe"],
+  ["excludePractical", "practical"],
+] as const;
+
+const NS_PROPERTIES = Object.fromEntries(
+  NS_SCHEMA_FIELDS.map(([field, ns]) => [field, enumArray(ns)])
+);
+
 export const DECIDE_SCHEMA = {
-  type: "OBJECT",
+  type: "object",
+  additionalProperties: false,
   properties: {
-    intent: { type: "STRING" },
-    lifecycle: { type: "STRING", enum: [...LIFECYCLES] },
-    types: enumArray("type"),
-    cuisines: enumArray("cuisine"),
-    staples: enumArray("staple"),
-    occasions: enumArray("occasion"),
-    vibes: enumArray("vibe"),
-    practical: enumArray("practical"),
-    excludeTypes: enumArray("type"),
-    excludeCuisines: enumArray("cuisine"),
-    excludeStaples: enumArray("staple"),
-    excludeOccasions: enumArray("occasion"),
-    excludeVibes: enumArray("vibe"),
-    excludePractical: enumArray("practical"),
-    maxBudget: { type: "INTEGER", nullable: true },
-    minRating: { type: "NUMBER", nullable: true },
-    openNow: { type: "BOOLEAN" },
-    area: { type: "STRING" },
-    boostRatings: { type: "ARRAY", items: { type: "STRING", enum: [...RATING_DIMENSIONS] } },
-    keywords: { type: "ARRAY", items: { type: "STRING" } },
+    intent: { type: "string" },
+    lifecycle: { type: "string", enum: [...LIFECYCLES] },
+    ...NS_PROPERTIES,
+    maxBudget: { anyOf: [{ type: "integer" }, { type: "null" }] },
+    minRating: { anyOf: [{ type: "number" }, { type: "null" }] },
+    openNow: { type: "boolean" },
+    area: { anyOf: [{ type: "string" }, { type: "null" }] },
+    boostRatings: { type: "array", items: { type: "string", enum: [...RATING_DIMENSIONS] } },
+    keywords: { type: "array", items: { type: "string" } },
   },
+  required: [
+    "intent",
+    "lifecycle",
+    ...NS_SCHEMA_FIELDS.map(([field]) => field),
+    "maxBudget",
+    "minRating",
+    "openNow",
+    "area",
+    "boostRatings",
+    "keywords",
+  ],
 } as const;
 
 function cleanList(raw: unknown, ns: TagNamespace): string[] | undefined {

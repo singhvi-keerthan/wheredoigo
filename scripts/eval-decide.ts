@@ -6,12 +6,13 @@
  * per case, and scores the structured output against expectations. Prints a pass
  * rate so every prompt/guardrail change is measured, not guessed.
  *
- *   GOOGLE_GENERATIVE_AI_API_KEY=... npx tsx scripts/eval-decide.ts [--limit N]
+ *   ANTHROPIC_API_KEY=... npx tsx scripts/eval-decide.ts [--limit N]
  *
  * A case asserts only the fields that matter (`expect`) and can require certain
  * fields to stay empty (`forbid`) — that's how we catch negation inversion and
  * over-eager open-now.
  */
+import Anthropic from "@anthropic-ai/sdk";
 import { buildDecideInstruction, DECIDE_SCHEMA, sanitizeQuery } from "../lib/decide-prompt";
 import { parseFallback } from "../lib/decide-fallback";
 import type { DecideQuery } from "../lib/decide";
@@ -86,8 +87,17 @@ const CASES: Case[] = [
 
   // ---- combos / robustness ----
   {
+    // Matches the few-shot for this exact prompt in decide-prompt.ts, which
+    // teaches ["romantic","fine-dining"]. The expectation used to demand
+    // ["fine-dining"] alone, so a parser that reproduced its own teaching
+    // example was graded as failing.
     prompt: "date night, somewhere new and a bit fancy, under 1500",
-    expect: { lifecycle: "watchlist", occasions: ["date"], vibes: ["fine-dining"], maxBudget: 1500 },
+    expect: {
+      lifecycle: "watchlist",
+      occasions: ["date"],
+      vibes: ["romantic", "fine-dining"],
+      maxBudget: 1500,
+    },
   },
   {
     prompt: "veg friendly rooftop for friends, not too pricey",
@@ -124,12 +134,24 @@ function isEmpty(v: unknown): boolean {
   return v == null || (Array.isArray(v) && v.length === 0);
 }
 
+// `area` is graded case- and spacing-insensitively. The model answers
+// "indiranagar" and the offline parser answers "Indiranagar" (it resolves
+// against the canonical BENGALURU_AREA_OPTIONS list); areaMatches normalises
+// both before comparing, so grading them as different answers was the harness
+// failing two correct parses, not the parsers disagreeing.
+const normArea = (v: unknown) =>
+  typeof v === "string" ? v.toLowerCase().replace(/[^a-z0-9]/g, "") : v;
+
 // Returns the list of field-level failures for one case ([] === pass).
 function grade(got: DecideQuery, c: Case): string[] {
   const fails: string[] = [];
   for (const [k, want] of Object.entries(c.expect) as [keyof DecideQuery, unknown][]) {
     const have = got[k];
-    const ok = NS_ARRAY_FIELDS.has(k) ? eqSet(have, want) : have === want;
+    const ok = NS_ARRAY_FIELDS.has(k)
+      ? eqSet(have, want)
+      : k === "area"
+        ? normArea(have) === normArea(want)
+        : have === want;
     if (!ok) fails.push(`${k}: want ${JSON.stringify(want)}, got ${JSON.stringify(have)}`);
   }
   for (const k of c.forbid ?? []) {
@@ -142,23 +164,44 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Free-tier Gemini is 5 req/min, so pace ~1 call / 13s by default (override with
 // EVAL_PACE_MS=0 on a paid key). Honors the server's retryDelay on 429.
-const PACE_MS = Number(process.env.EVAL_PACE_MS ?? 13_000);
+// Concurrency, not pacing. The old harness serialised with a 13s gap because
+// free-tier Gemini capped at 5 req/min; the current transport has no such cap,
+// so the whole set runs in the time a handful of calls take. EVAL_PACE_MS is
+// gone — EVAL_CONCURRENCY replaces it.
+const CONCURRENCY = Math.max(1, Number(process.env.EVAL_CONCURRENCY ?? 6));
 
-function retryDelayMs(msg: string): number {
-  const inline = msg.match(/retry in ([\d.]+)s/i);
-  const field = msg.match(/"retryDelay":\s*"(\d+(?:\.\d+)?)s"/);
-  const secs = Number(inline?.[1] ?? field?.[1]);
-  return Number.isFinite(secs) ? Math.ceil(secs * 1000) + 1500 : 22_000;
+// How many live cases run when nobody says otherwise. Enough to catch a broken
+// prompt or a rejected schema; nowhere near a billable sweep.
+const DEFAULT_LIMIT = 10;
+
+const client = new Anthropic();
+
+async function callModel(prompt: string): Promise<DecideQuery> {
+  // Must mirror app/api/decide/route.ts exactly — same model, same knobs — or
+  // the harness stops measuring what ships. See that file for why `effort` is
+  // absent and `temperature` is present on this model.
+  const message = await client.messages.create({
+    model: "claude-haiku-4-5",
+    max_tokens: 4096,
+    temperature: 0,
+    output_config: { format: { type: "json_schema", schema: DECIDE_SCHEMA } },
+    messages: [{ role: "user", content: buildDecideInstruction(prompt) }],
+  });
+  if (message.stop_reason === "refusal") throw new Error("refused");
+  const text = message.content.find((b) => b.type === "text")?.text;
+  if (!text) throw new Error("no output");
+  return sanitizeQuery(JSON.parse(text));
 }
 
-async function callWithRetry(key: string, prompt: string, tries = 4): Promise<DecideQuery> {
+// The SDK already retries 429/5xx twice; this only adds a wider backoff for a
+// sustained rate limit, which a whole-set run can hit.
+async function callWithRetry(prompt: string, tries = 3): Promise<DecideQuery> {
   for (let i = 0; ; i++) {
     try {
-      return await callGemini(key, prompt);
+      return await callModel(prompt);
     } catch (e) {
-      const msg = (e as Error).message;
-      if (msg.startsWith("gemini 429") && i < tries - 1) {
-        await sleep(retryDelayMs(msg));
+      if (e instanceof Anthropic.RateLimitError && i < tries - 1) {
+        await sleep(4000 * (i + 1));
         continue;
       }
       throw e;
@@ -166,34 +209,34 @@ async function callWithRetry(key: string, prompt: string, tries = 4): Promise<De
   }
 }
 
-async function callGemini(key: string, prompt: string): Promise<DecideQuery> {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: buildDecideInstruction(prompt) }] }],
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema: DECIDE_SCHEMA,
-          temperature: 0,
-        },
-      }),
-    }
-  );
-  if (!res.ok) throw new Error(`gemini ${res.status}: ${await res.text()}`);
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error("no output");
-  return sanitizeQuery(JSON.parse(text));
+// Fixed-size worker pool over the case list, preserving input order in `out`.
+async function mapPool<T, R>(items: T[], size: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(size, items.length) }, async () => {
+    for (let i = next++; i < items.length; i = next++) out[i] = await fn(items[i], i);
+  });
+  await Promise.all(workers);
+  return out;
 }
 
 async function main() {
   const offline = process.argv.includes("--offline");
-
+  // A live run costs real money on someone's key, so the full sweep is now a
+  // DECISION, not the default. On 2026-08-30 three unflagged 48-case sweeps in
+  // under an hour exhausted the account's spend cap — and two of the three were
+  // re-verifying edits that a handful of cases would have caught.
+  //
+  //   npm run eval:decide              → the first 10 cases
+  //   npm run eval:decide -- --limit N → N cases
+  //   npm run eval:decide -- --full    → all of them, deliberately
   const limitArg = process.argv.indexOf("--limit");
-  const cases = limitArg > -1 ? CASES.slice(0, Number(process.argv[limitArg + 1]) || CASES.length) : CASES;
+  const full = process.argv.includes("--full");
+  const limit = limitArg > -1 ? Number(process.argv[limitArg + 1]) || DEFAULT_LIMIT : DEFAULT_LIMIT;
+  const cases = offline || full ? CASES : CASES.slice(0, limit);
+  if (!offline && cases.length < CASES.length) {
+    console.log(`── ${cases.length}/${CASES.length} cases (add --full for the whole set) ──\n`);
+  }
 
   // --offline: grade the local parseFallback (what runs when Gemini is down or
   // keyless) against the same dataset. Informational — the fallback is cruder
@@ -214,33 +257,30 @@ async function main() {
     return;
   }
 
-  const key = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-  if (!key) {
-    console.error("✗ GOOGLE_GENERATIVE_AI_API_KEY is not set — cannot run the eval (use --offline for the fallback parser).");
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.error("✗ ANTHROPIC_API_KEY is not set — cannot run the eval (use --offline for the fallback parser).");
     process.exit(1);
   }
 
   let pass = 0;
   const failed: { prompt: string; fails: string[] }[] = [];
 
-  // Sequential + paced — free-tier Gemini caps at 5 req/min.
-  for (let idx = 0; idx < cases.length; idx++) {
-    const c = cases[idx];
-    if (idx > 0 && PACE_MS > 0) await sleep(PACE_MS);
+  const graded = await mapPool(cases, CONCURRENCY, async (c) => {
     try {
-      const got = await callWithRetry(key, c.prompt);
-      const fails = grade(got, c);
-      if (fails.length === 0) {
-        pass++;
-        console.log(`✓ ${c.prompt}`);
-      } else {
-        failed.push({ prompt: c.prompt, fails });
-        console.log(`✗ ${c.prompt}`);
-        for (const f of fails) console.log(`    ${f}`);
-      }
+      return { c, fails: grade(await callWithRetry(c.prompt), c) };
     } catch (e) {
-      failed.push({ prompt: c.prompt, fails: [`ERROR: ${(e as Error).message}`] });
-      console.log(`✗ ${c.prompt}\n    ERROR: ${(e as Error).message}`);
+      return { c, fails: [`ERROR: ${(e as Error).message}`] };
+    }
+  });
+
+  for (const { c, fails } of graded) {
+    if (fails.length === 0) {
+      pass++;
+      console.log(`✓ ${c.prompt}`);
+    } else {
+      failed.push({ prompt: c.prompt, fails });
+      console.log(`✗ ${c.prompt}`);
+      for (const f of fails) console.log(`    ${f}`);
     }
   }
 

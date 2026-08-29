@@ -5,6 +5,7 @@ import { RotateCcw, Sparkles, X, Heart, Check, SlidersHorizontal } from "lucide-
 import { usePlaces, addPlace, removePlace, updatePlace, getPlace, toggleNeverAgain } from "@/lib/store";
 import {
   searchDineout,
+  getDineoutDetails,
   FALLBACK_COORDS,
   type SwiggyRestaurant,
   type SwiggyError,
@@ -14,6 +15,7 @@ import { searchBias } from "@/lib/bias";
 import { searchPlaces, geocodeArea } from "@/lib/places";
 import { buildDeck, type DeckCard } from "@/lib/deck";
 import { bumpSkip, resetSkip, decSkip, peekSkip, setSkip } from "@/lib/skips";
+import { readNewSwipeMemory, recordNewSwipe, undoNewSwipe, type SwipeDir, type NewSwipeMemory } from "@/lib/swipeMemory";
 import { BENGALURU_AREA_OPTIONS } from "@/lib/areas";
 import SwipeCard from "./SwipeCard";
 import NewCardDetail from "./NewCardDetail";
@@ -79,7 +81,13 @@ type Phase = "deal" | "coach" | "done";
 // undo has to put right; restoreSkip → the exact count to put back (a right
 // swipe RESETS the count, and neither decSkip nor a second reset can undo that),
 // absent when the swipe merely bumped it and a decrement is the reverse.
-type UndoEntry = { key: string; placeId: string | null; skipId?: string; restoreSkip?: number };
+type UndoEntry = {
+  key: string;
+  placeId: string | null;
+  skipId?: string;
+  restoreSkip?: number;
+  newSwipe?: { restaurant: SwiggyRestaurant; dir: SwipeDir };
+};
 
 function usePrefersReducedMotion(): boolean {
   const [reduced, setReduced] = useState(false);
@@ -215,7 +223,8 @@ export default function SwipeMode({
   onToast: (msg: string) => void;
 }) {
   const lens = useLens();
-  const { source, query, area, cuisine, keyword } = lens;
+  const { source, query, area, searchPlan } = lens;
+  const areaCenter = query.areaCenter;
   const [lensOpen, setLensOpen] = useState(false);
   const places = usePlaces();
   const reduced = usePrefersReducedMotion();
@@ -228,14 +237,21 @@ export default function SwipeMode({
   });
 
   const seenRef = useRef<Set<string>>(new Set()); // session dismiss/decided ledger
+  const newMemoryRef = useRef<NewSwipeMemory | null>(null);
+  if (newMemoryRef.current === null) newMemoryRef.current = readNewSwipeMemory();
   const [deck, setDeck] = useState<DeckCard[]>([]);
   const [pos, setPos] = useState(0);
   const [seed, setSeed] = useState(1);
   const [undo, setUndo] = useState<UndoEntry[]>([]);
 
   const [swiggy, setSwiggy] = useState<SwiggyRestaurant[]>([]);
+  const [newDetails, setNewDetails] = useState<Record<string, SwiggyRestaurant>>({});
+  const detailRequested = useRef<Set<string>>(new Set());
   const [loadingNew, setLoadingNew] = useState(false);
   const [newError, setNewError] = useState<SwiggyError | null>(null);
+  // The terms Swiggy was actually asked for. Only used by the empty state, so
+  // it can name what came back with nothing instead of blaming your filter.
+  const [searchedTerms, setSearchedTerms] = useState<string[]>([]);
   // Every Swiggy tool takes the same coordinate pair from search through slots
   // to booking. Use whatever bias the app already has (GPS only if permission
   // was previously granted, otherwise the map centre), then fall back. Swipe
@@ -292,22 +308,36 @@ export default function SwipeMode({
     return () => clearTimeout(t);
   }, [closing]);
 
-  // Fetch Swiggy's catalog for New/Both whenever the source or discovery lens changes.
+  // Fetch Swiggy's catalog for New/Both whenever the source or discovery lens
+  // changes. The lens hands over a SEARCH PLAN — one resolved Swiggy term per
+  // concept — rather than a cuisine and a bag of leftover words; see
+  // lib/swiggyTerms.ts for why the old shape returned nothing.
+  //
+  // `areaCenter` is the geocoded centre of the asked locality when Ask found
+  // one. Sending it makes the concept searches run where the ask pointed
+  // instead of where the phone is, which is the difference between "rooftop"
+  // returning 1 Indiranagar result and returning 4. `coords` still travels
+  // as the user's own position, because slots and booking need that pair
+  // unchanged.
+  const planKey = JSON.stringify(searchPlan);
   useEffect(() => {
     if (source === "saved") return; // buildDeck ignores swiggy for "saved"
     let cancelled = false;
     const run = async () => {
       setLoadingNew(true);
-      const { results, error } = await searchDineout({
-        cuisine: cuisine ?? undefined,
-        keyword: keyword.trim() || undefined,
+      const plan = JSON.parse(planKey) as { terms: string[] };
+      const { results, error, searched } = await searchDineout({
+        terms: plan.terms,
         area: area ?? undefined,
+        areaLat: areaCenter?.lat,
+        areaLng: areaCenter?.lng,
         lat: coords.lat,
         lng: coords.lng,
       });
       if (!cancelled) {
         setSwiggy(results);
         setNewError(error ?? null);
+        setSearchedTerms(searched);
         setLoadingNew(false);
       }
     };
@@ -315,11 +345,20 @@ export default function SwipeMode({
     return () => {
       cancelled = true;
     };
-  }, [source, cuisine, keyword, area, coords]);
+  }, [source, planKey, area, areaCenter, coords]);
 
   // Rebuild the ordered deck when the lens changes (results / seed). The lens
   // itself is frozen at launch, so in practice this is the Swiggy fetch landing
   // and the "start over" reshuffle.
+  //
+  // newMemory is READ FROM A REF ON PURPOSE, and is deliberately not a dep. A
+  // swipe updates the attribute map immediately (see commit), but re-ranking on
+  // it here would reorder the pile under the user's thumb mid-session — the
+  // card behind the one they are holding would change identity between the
+  // drag and the release. So what a swipe teaches lands on the NEXT deck: a
+  // lens change, a reshuffle, or the next session. If you ever want it to bite
+  // sooner, add it as a dep AND stop resetting pos/undo, or it will also throw
+  // away the user's position on every swipe.
   const queryKey = JSON.stringify(query);
   useEffect(() => {
     setDeck(
@@ -330,6 +369,7 @@ export default function SwipeMode({
         swiggy,
         seed,
         seen: seenRef.current,
+        newMemory: newMemoryRef.current ?? {},
       })
     );
     setPos(0);
@@ -351,7 +391,34 @@ export default function SwipeMode({
     return [...set];
   }, [source, places, swiggy]);
 
-  const current = deck[pos] ?? null;
+  const enrichCard = (card: DeckCard): DeckCard => {
+    if (card.kind !== "new") return card;
+    const enriched = newDetails[card.r.id];
+    return enriched ? { ...card, r: enriched } : card;
+  };
+
+  const currentBase = deck[pos] ?? null;
+  const current = currentBase ? enrichCard(currentBase) : null;
+  const currentNew = current?.kind === "new" ? current.r : null;
+
+  useEffect(() => {
+    if (!currentNew) return;
+    const hasUsefulDetails =
+      (currentNew.photos?.length ?? 0) > 1 ||
+      Boolean(currentNew.description || currentNew.highlights?.length || currentNew.offers?.length);
+    if (hasUsefulDetails || detailRequested.current.has(currentNew.id)) return;
+
+    let cancelled = false;
+    detailRequested.current.add(currentNew.id);
+    getDineoutDetails(currentNew, { lat: coords.lat, lng: coords.lng }).then(({ restaurant, error }) => {
+      if (cancelled || error || !restaurant) return;
+      setNewDetails((prev) => (prev[currentNew.id] ? prev : { ...prev, [currentNew.id]: restaurant }));
+      setDetailNew((open) => (open?.id === currentNew.id ? restaurant : open));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentNew, coords]);
 
   // ---- actions -----------------------------------------------------------
   const commit = (dir: "left" | "right") => {
@@ -361,7 +428,8 @@ export default function SwipeMode({
     let prompt = false; // 3rd skip on a saved card → offer a permanent hide
     if (dir === "right") {
       if (card.kind === "new") {
-        entry = { key: card.key, placeId: saveNew(card.r, coords) };
+        newMemoryRef.current = recordNewSwipe(card.r, dir);
+        entry = { key: card.key, placeId: saveNew(card.r, coords), newSwipe: { restaurant: card.r, dir } };
         onToast("Added to watchlist");
       } else {
         // Changed your mind — drop the skip ramp, but remember where it was so
@@ -371,11 +439,16 @@ export default function SwipeMode({
         entry = { key: card.key, placeId: null, skipId: card.place.id, restoreSkip: prior };
         onToast("Already on your map");
       }
-    } else if (card.kind === "saved") {
-      // Soft dismiss, but count it: the 3rd skip of the same place prompts.
-      const n = bumpSkip(card.place.id);
-      entry = { key: card.key, placeId: null, skipId: card.place.id };
-      if (n >= 3) prompt = true;
+    } else {
+      if (card.kind === "new") {
+        newMemoryRef.current = recordNewSwipe(card.r, dir);
+        entry = { key: card.key, placeId: null, newSwipe: { restaurant: card.r, dir } };
+      } else {
+        // Soft dismiss, but count it: the 3rd skip of the same place prompts.
+        const n = bumpSkip(card.place.id);
+        entry = { key: card.key, placeId: null, skipId: card.place.id };
+        if (n >= 3) prompt = true;
+      }
     }
     setUndo((u) => [...u, entry]);
     setExiting({ dir, key: card.key });
@@ -429,7 +502,8 @@ export default function SwipeMode({
     }
     const card = current;
     const placeId = saveNew(card.r, coords); // side effect kept out of the state updater
-    setUndo((u) => [...u, { key: card.key, placeId }]);
+    newMemoryRef.current = recordNewSwipe(card.r, "right");
+    setUndo((u) => [...u, { key: card.key, placeId, newSwipe: { restaurant: card.r, dir: "right" } }]);
     onToast("Added to watchlist");
     seenRef.current.add(card.key);
     setPos((p) => p + 1);
@@ -448,6 +522,9 @@ export default function SwipeMode({
       // it by one (step it back).
       if (last.restoreSkip != null) setSkip(last.skipId, last.restoreSkip);
       else decSkip(last.skipId);
+    }
+    if (last.newSwipe) {
+      newMemoryRef.current = undoNewSwipe(last.newSwipe.restaurant, last.newSwipe.dir);
     }
     seenRef.current.delete(last.key);
     setUndo((u) => u.slice(0, -1));
@@ -507,7 +584,7 @@ export default function SwipeMode({
   const rightStamp = isNewCard ? "Watchlist" : "Yes";
   const rightAction = isNewCard ? "Add to watchlist" : "Yes, I’d go";
 
-  const stack = deck.slice(pos, pos + 3);
+  const stack = deck.slice(pos, pos + 3).map(enrichCard);
   const exhausted = deck.length > 0 && pos >= deck.length;
   const empty = deck.length === 0;
   // Busy the whole time a Swiggy fetch is in flight — not just on first load — so
@@ -517,6 +594,14 @@ export default function SwipeMode({
   // A Swiggy failure has to read differently from "no matches" — the deck is
   // empty either way, but only one of them is fixable by changing the filter.
   const newFailed = source !== "saved" && newError !== null;
+  // Swiggy answered, and its answer was nothing. Distinct from a failure (there
+  // is nothing to reconnect or retry) and from a tight lens (there is nothing
+  // to loosen — the catalogue simply has no match for the term).
+  // Both sources, not just New: on a Both deck with no saved matches, an empty
+  // catalogue answer produced exactly the "loosen a filter" message this branch
+  // exists to avoid.
+  const emptyFromSwiggy =
+    source !== "saved" && !newError && swiggy.length === 0 && searchedTerms.length > 0;
   const showCards = !busy && !newFailed && !empty && !exhausted;
 
   // The coach runs once per RUN of the deck — opening the mode, changing the
@@ -699,10 +784,18 @@ export default function SwipeMode({
         ) : empty ? (
           <Centered>
             <p className="text-[15px] font-semibold" style={{ color: "var(--text-secondary)" }}>
-              Nothing matches this filter
+              {emptyFromSwiggy ? "Swiggy had nothing for this" : "Nothing matches this filter"}
             </p>
-            <p className="mt-1 text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>
-              {lens.dirty ? "Loosen one and the deck comes back." : "Nothing here to swipe yet."}
+            <p className="mt-1 text-[12.5px] leading-snug" style={{ color: "var(--text-tertiary)" }}>
+              {/* An empty catalogue answer is not the same as an over-tight
+                  filter, and telling someone to "loosen one" when the search
+                  itself came back with nothing sends them to fix the one thing
+                  that was never the problem. Name the term that found nothing. */}
+              {emptyFromSwiggy
+                ? `No Dineout results for ${searchedTerms.slice(0, 3).join(", ")}. Try a different word — or swipe your own saved places.`
+                : lens.dirty
+                  ? "Loosen one and the deck comes back."
+                  : "Nothing here to swipe yet."}
             </p>
             {lens.dirty && (
               <button

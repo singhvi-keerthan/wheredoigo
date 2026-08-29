@@ -117,19 +117,57 @@ const TYPE_MAP: Record<string, { ns: TagNamespace; value: string }> = {
   // → cuisine
   italian_restaurant: { ns: "cuisine", value: "italian" },
   chinese_restaurant: { ns: "cuisine", value: "chinese" },
+  chinese_noodle_restaurant: { ns: "cuisine", value: "chinese" },
+  cantonese_restaurant: { ns: "cuisine", value: "chinese" },
   japanese_restaurant: { ns: "cuisine", value: "japanese" },
+  japanese_izakaya_restaurant: { ns: "cuisine", value: "japanese" },
+  japanese_curry_restaurant: { ns: "cuisine", value: "japanese" },
   thai_restaurant: { ns: "cuisine", value: "thai" },
   mexican_restaurant: { ns: "cuisine", value: "mexican" },
   korean_restaurant: { ns: "cuisine", value: "korean" },
+  korean_barbecue_restaurant: { ns: "cuisine", value: "korean" },
+  // The four that had no mapping at all, which is why "south indian" — the
+  // single most common ask in this city — returned nothing on a map tagged
+  // purely from Google. Every key below is a real Table A type, checked
+  // against the live Place Types (New) list on 2026-08-30.
+  south_indian_restaurant: { ns: "cuisine", value: "south-indian" },
+  north_indian_restaurant: { ns: "cuisine", value: "north-indian" },
+  // Bare `indian_restaurant` is deliberately NOT mapped. It is the type Google
+  // returns most often here and it names no region, so guessing one is worse
+  // than staying silent: a guessed tag FILLS the cuisine namespace, and a
+  // filled namespace is what lets lib/facets.ts answer a hard "no". Mapping it
+  // to north-indian made Brahmins Coffee Bar — `indian_restaurant`, summary
+  // "benne masala dosa and filter coffee" — answer FALSE to "south indian" and
+  // vanish from a map it should have led. Left unmapped it answers null, and
+  // the dish words in its own summary answer yes.
+  //
+  // pizzeria is absent for a different reason: it is not a Table A type at all
+  // (pizza_restaurant is, and is mapped below).
+  french_restaurant: { ns: "cuisine", value: "continental" },
+  mediterranean_restaurant: { ns: "cuisine", value: "continental" },
+  spanish_restaurant: { ns: "cuisine", value: "continental" },
+  greek_restaurant: { ns: "cuisine", value: "continental" },
+  turkish_restaurant: { ns: "cuisine", value: "continental" },
+  middle_eastern_restaurant: { ns: "cuisine", value: "mughlai" },
+  pakistani_restaurant: { ns: "cuisine", value: "mughlai" },
+  afghani_restaurant: { ns: "cuisine", value: "mughlai" },
   // → staple (the specific dish, when Google names it unambiguously)
   pizza_restaurant: { ns: "staple", value: "pizza" },
   hamburger_restaurant: { ns: "staple", value: "burger" },
   ramen_restaurant: { ns: "staple", value: "ramen" },
   sushi_restaurant: { ns: "staple", value: "sushi" },
   sandwich_shop: { ns: "staple", value: "sandwich" },
+  bagel_shop: { ns: "staple", value: "sandwich" },
+  chicken_wings_restaurant: { ns: "staple", value: "wings" },
+  burrito_restaurant: { ns: "staple", value: "burrito" },
+  taco_restaurant: { ns: "staple", value: "tacos" },
   // → practical
   vegetarian_restaurant: { ns: "practical", value: "vegetarian" },
   vegan_restaurant: { ns: "practical", value: "vegan-options" },
+  // → vibe. Only one Google type carries a vibe honestly; the rest of the
+  // namespace has no automatic source and is filled from the place's own words
+  // instead (lib/facets.ts). Better one true mapping than eight invented ones.
+  fine_dining_restaurant: { ns: "vibe", value: "fine-dining" },
 };
 
 export function tagsFromGoogleTypes(types: string[] | undefined): Tag[] {

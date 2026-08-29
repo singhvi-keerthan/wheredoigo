@@ -1,6 +1,7 @@
 import type { Place } from "./types";
 import type { SwiggyRestaurant } from "./swiggy";
 import { areaMatches, rankPlaces, type DecideQuery } from "./decide";
+import { newSwipeAffinity, PER_PERSON, type NewSwipeMemory } from "./swipeMemory";
 
 // The swipe deck's source is the FIRST filter the user picks — before any
 // cuisine lens. "saved" ranks your own map (the full DecideQuery vocabulary);
@@ -21,7 +22,16 @@ export type DeckSource = "saved" | "new" | "both";
 // CUISINE), so the pool is already narrowed upstream, and re-filtering here on
 // Swiggy's own much larger cuisine vocabulary would empty decks on a spelling
 // mismatch rather than tighten them.
-const PER_PERSON = 2; // Swiggy quotes cost for two; the app's budget is per head
+
+function mulberry32(seed: number) {
+  return () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 function newMatches(r: SwiggyRestaurant, q: DecideQuery): boolean {
   // Ask's geocoded centroid has no counterpart here (Swiggy hands back a
@@ -46,9 +56,40 @@ function newMatches(r: SwiggyRestaurant, q: DecideQuery): boolean {
 // fresh Place; a "saved" one is a no-op confirm — see SwipeDeck).
 export type DeckCard =
   | { key: string; kind: "saved"; place: Place; reasons: string[] }
-  | { key: string; kind: "new"; r: SwiggyRestaurant };
+  | { key: string; kind: "new"; r: SwiggyRestaurant; score: number; reasons: string[] };
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const display = (s: string) => s.replace(/-/g, " ");
+
+function termMatches(have: string, want: string): boolean {
+  const h = norm(have);
+  const w = norm(want);
+  return h !== "" && w !== "" && (h.includes(w) || w.includes(h));
+}
+
+function hasCuisine(r: SwiggyRestaurant, values?: string[]): boolean {
+  return Boolean(values?.some((want) => r.cuisines.some((have) => termMatches(have, want))));
+}
+
+function newText(r: SwiggyRestaurant): string {
+  return [
+    r.name,
+    r.area,
+    r.address,
+    ...r.cuisines,
+    r.description ?? "",
+    ...(r.highlights ?? []),
+    ...(r.offers ?? []),
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function addReason(reasons: string[], reason: string): void {
+  if (reasons.length >= 3 || reasons.includes(reason)) return;
+  reasons.push(reason);
+}
 
 // A Swiggy result that's clearly already on your map. Dropped from New/Both so
 // the deck never offers a "new" card for a place you already have. Kept local
@@ -90,10 +131,101 @@ function alreadySaved(r: SwiggyRestaurant, places: Place[]): boolean {
   });
 }
 
+type RankedNewCard = Extract<DeckCard, { kind: "new" }> & { affinity: number };
+
+function rankNew(
+  r: SwiggyRestaurant,
+  q: DecideQuery,
+  rand: () => number,
+  memory: NewSwipeMemory
+): RankedNewCard {
+  const reasons: string[] = [];
+  let score = 0;
+  const affinity = newSwipeAffinity(memory, r);
+
+  if (q.area && areaMatches(r.area, q.area)) {
+    score += 16;
+    addReason(reasons, `Near ${q.area}`);
+  }
+
+  const cuisineHit = q.cuisines?.find((wanted) => r.cuisines.some((have) => termMatches(have, wanted)));
+  if (cuisineHit) {
+    score += 18;
+    addReason(reasons, `${display(cuisineHit)} match`);
+  }
+
+  if (q.keywords?.length) {
+    const hay = newText(r);
+    const hits = q.keywords.filter((kw) => kw.length >= 3 && hay.includes(kw.toLowerCase())).length;
+    if (hits > 0) {
+      score += Math.min(hits, 3) * 12;
+      addReason(reasons, "Matches your ask");
+    }
+  }
+
+  if (q.maxBudget != null) {
+    if (r.priceForTwo != null) {
+      const perHead = r.priceForTwo / PER_PERSON;
+      const spare = Math.max(0, q.maxBudget - perHead);
+      score += 12 + Math.min(8, (spare / Math.max(q.maxBudget, 1)) * 8);
+      addReason(reasons, `Under ₹${q.maxBudget.toLocaleString("en-IN")}/head`);
+    } else {
+      score += 4;
+    }
+  } else if (r.priceForTwo != null) {
+    const perHead = r.priceForTwo / PER_PERSON;
+    if (perHead <= 1000) score += 8;
+    else if (perHead <= 1500) score += 5;
+  }
+
+  if (r.rating != null) {
+    score += r.rating * 8;
+    if (r.rating >= (q.minRating ?? 4.2)) addReason(reasons, `${r.rating.toFixed(1)} on Swiggy`);
+  } else {
+    score += 24; // unknown ~= a soft 3.0; visible, but not a quality lead
+  }
+
+  if (r.photo || r.photos?.length) score += 3;
+  if (r.description || r.highlights?.length) score += 2;
+  if (r.offers?.length) score += 1;
+
+  const memoryScore = Math.max(-18, Math.min(18, affinity * 5));
+  score += memoryScore;
+  if (affinity >= 1) addReason(reasons, "Matches your swipes");
+
+  // Same role as rankPlaces' variety term: enough exploration to avoid a dead
+  // provider-order list, not enough to let weak matches jump strong ones.
+  score += rand() * 6;
+
+  if (reasons.length === 0) addReason(reasons, "New on Swiggy");
+  return { key: `new:${r.id}`, kind: "new", r, score, reasons, affinity };
+}
+
+function toNewCard(card: RankedNewCard): Extract<DeckCard, { kind: "new" }> {
+  return { key: card.key, kind: "new", r: card.r, score: card.score, reasons: card.reasons };
+}
+
+function withExplorationReserve(cards: RankedNewCard[]): Extract<DeckCard, { kind: "new" }>[] {
+  const used = new Set<string>();
+  const out: RankedNewCard[] = [];
+
+  for (let slot = 0; slot < cards.length; slot += 1) {
+    const reserve = (slot + 1) % 5 === 0;
+    const pick =
+      (reserve ? cards.find((c) => !used.has(c.key) && c.affinity <= 0) : null) ??
+      cards.find((c) => !used.has(c.key));
+    if (!pick) break;
+    used.add(pick.key);
+    out.push(pick);
+  }
+
+  return out.map(toNewCard);
+}
+
 // Materialise the ordered deck for the current lens. Excludes the session
 // `seen` set (left-dismissed or already-decided cards) so nothing resurfaces on
 // a reshuffle within the session. Saved order comes from the existing seeded
-// ranker; New order is the Swiggy list as returned.
+// ranker; New order is scored locally over the fields Swiggy actually returns.
 export function buildDeck(opts: {
   source: DeckSource;
   places: Place[];
@@ -101,8 +233,9 @@ export function buildDeck(opts: {
   swiggy: SwiggyRestaurant[];
   seed: number;
   seen: Set<string>;
+  newMemory?: NewSwipeMemory;
 }): DeckCard[] {
-  const { source, places, query, swiggy, seed, seen } = opts;
+  const { source, places, query, swiggy, seed, seen, newMemory = {} } = opts;
 
   const savedCards: DeckCard[] =
     source === "new"
@@ -114,12 +247,17 @@ export function buildDeck(opts: {
           reasons: r.reasons,
         }));
 
+  const newRand = mulberry32(seed);
   const newCards: DeckCard[] =
     source === "saved"
       ? []
-      : swiggy
-          .filter((r) => !alreadySaved(r, places) && newMatches(r, query))
-          .map((r) => ({ key: `new:${r.id}`, kind: "new" as const, r }));
+      : withExplorationReserve(
+          swiggy
+            .filter((r) => !alreadySaved(r, places) && newMatches(r, query))
+            .filter((r) => !hasCuisine(r, query.excludeCuisines))
+            .map((r) => rankNew(r, query, newRand, newMemory))
+            .sort((a, b) => b.score - a.score)
+        );
 
   const merged =
     source === "both" ? [...savedCards, ...newCards] : source === "new" ? newCards : savedCards;

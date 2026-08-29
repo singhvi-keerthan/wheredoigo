@@ -42,6 +42,11 @@ export interface SwiggyRestaurant {
   rating: number | null;
   priceForTwo: number | null;
   photo: string | null; // absolute URL, resolved from Swiggy's bare image id
+  photos?: string[]; // gallery URLs, first one mirrors photo when present
+  description?: string | null;
+  highlights?: string[];
+  offers?: string[];
+  distance?: string | null;
 }
 
 // A bookable slot. book_table needs slotId + itemId + reservationTime together,
@@ -139,6 +144,18 @@ function asCuisines(v: unknown): string[] {
 const MEDIA_BASE =
   process.env.SWIGGY_MEDIA_BASE ?? "https://media-assets.swiggy.com/swiggy/image/upload";
 const MEDIA_TRANSFORMS = "fl_lossy,f_auto,q_auto,w_800";
+// Two gates on how much of Swiggy's quota one lens change may spend. The
+// agreement names rate limits, request quotas, payload sizes and concurrency
+// (Cl. 4(viii)) but numbers none of them, and a Cl. 4 breach is an immediate-
+// termination trigger — so the default is ONE search per lens change, the call
+// count this app has always shipped. Both flags stay off until Swiggy answers
+// with figures in writing.
+//   SWIGGY_WIDE_SEARCH       — a search per concept term, in parallel, plus the
+//                              locality top-up. Up to 5x the calls (and the
+//                              concurrency is itself one of the named limits).
+//   SWIGGY_EXTRA_SEARCH_PAGE — a second page of the first search. One more call.
+const WIDE_SEARCH = process.env.SWIGGY_WIDE_SEARCH === "1";
+const EXTRA_SEARCH_PAGE = process.env.SWIGGY_EXTRA_SEARCH_PAGE === "1";
 
 function imageUrl(v: unknown): string | null {
   const raw = asStr(v);
@@ -148,36 +165,220 @@ function imageUrl(v: unknown): string | null {
   return `${MEDIA_BASE}/${MEDIA_TRANSFORMS}/${raw.replace(/^\/+/, "")}`;
 }
 
-function photoOf(o: Rec): string | null {
-  const direct = imageUrl(
-    pick(
-      o,
-      "cloudinaryImageId",
-      "imageId",
-      "image_id",
-      "imageUrl",
-      "image",
-      "photo",
-      "thumbnail",
-      "banner",
-      "bannerImage",
-      "headerImage",
-      "coverImage",
-      "media"
-    )
-  );
-  if (direct) return direct;
+const IMAGE_KEYS = [
+  "cloudinaryImageId",
+  "imageId",
+  "image_id",
+  "imageUrl",
+  "image",
+  "photo",
+  "thumbnail",
+  "banner",
+  "bannerImage",
+  "headerImage",
+  "coverImage",
+  "media",
+];
 
-  // Some payloads nest the media, or hand back a gallery array.
-  for (const key of ["images", "photos", "gallery", "mediaFiles", "imageGallery"]) {
+const GALLERY_KEYS = ["images", "photos", "gallery", "mediaFiles", "imageGallery"];
+
+function uniq(values: string[], limit = 8): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of values) {
+    const clean = v.trim();
+    if (!clean || seen.has(clean)) continue;
+    seen.add(clean);
+    out.push(clean);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function photosOf(o: Rec): string[] {
+  const urls: string[] = [];
+  for (const key of IMAGE_KEYS) {
     const v = o[key];
-    if (Array.isArray(v) && v.length > 0) {
-      const first = v[0];
-      const url = isRec(first) ? photoOf(first) : imageUrl(first);
-      if (url) return url;
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        if (isRec(item)) urls.push(...photosOf(item));
+        else {
+          const url = imageUrl(item);
+          if (url) urls.push(url);
+        }
+      }
+      continue;
+    }
+    if (isRec(v)) urls.push(...photosOf(v));
+    else {
+      const url = imageUrl(v);
+      if (url) urls.push(url);
     }
   }
+
+  // Some payloads nest the media, or hand back a gallery array.
+  for (const key of GALLERY_KEYS) {
+    const v = o[key];
+    if (Array.isArray(v) && v.length > 0) {
+      for (const item of v) {
+        if (isRec(item)) urls.push(...photosOf(item));
+        else {
+          const url = imageUrl(item);
+          if (url) urls.push(url);
+        }
+      }
+    } else if (isRec(v)) {
+      urls.push(...photosOf(v));
+    }
+  }
+  return uniq(urls);
+}
+
+function cleanText(v: unknown): string | null {
+  const s = asStr(v);
+  if (!s) return null;
+  return s.replace(/\s+/g, " ").trim() || null;
+}
+
+function textList(v: unknown, limit = 6): string[] {
+  const out: string[] = [];
+  const read = (item: unknown) => {
+    if (out.length >= limit) return;
+    if (typeof item === "string" || typeof item === "number") {
+      const text = cleanText(item);
+      if (text && text.length <= 140) out.push(text);
+      return;
+    }
+    if (Array.isArray(item)) {
+      for (const child of item) read(child);
+      return;
+    }
+    if (!isRec(item)) return;
+    const text = cleanText(
+      pick(
+        item,
+        "label",
+        "title",
+        "name",
+        "text",
+        "displayText",
+        "offerText",
+        "discountText",
+        "description",
+        "subtitle"
+      )
+    );
+    if (text && text.length <= 140) out.push(text);
+  };
+  read(v);
+  return uniq(out, limit);
+}
+
+function descriptionOf(o: Rec): string | null {
+  for (const key of ["description", "restaurantDescription", "about", "summary", "tagline", "subtitle"]) {
+    const text = cleanText(o[key]);
+    if (text && text.length > 12) return text;
+  }
   return null;
+}
+
+function textListOf(o: Rec, keys: string[], limit = 6): string[] {
+  const out: string[] = [];
+  for (const key of keys) {
+    out.push(...textList(o[key], limit));
+    if (out.length >= limit) break;
+  }
+  return uniq(out, limit);
+}
+
+function restaurantRecord(data: unknown): Rec {
+  if (!isRec(data)) return {};
+  for (const key of ["restaurant", "restaurantInfo", "restaurantDetails", "details", "item"]) {
+    const v = data[key];
+    if (isRec(v)) return v;
+  }
+  const list = listOf(data);
+  if (list.length > 0) return list[0];
+  return data;
+}
+
+export function mergeRestaurantDetails(base: SwiggyRestaurant, detail: unknown): SwiggyRestaurant {
+  const d = restaurantRecord(payload(detail));
+  const parsed = toRestaurant({ ...d, id: pick(d, "id", "restaurantId", "resId", "restaurant_id") ?? base.id, name: pick(d, "name", "restaurantName", "restaurant_name") ?? base.name });
+  const photos = uniq([
+    ...(parsed?.photos ?? []),
+    ...(parsed?.photo ? [parsed.photo] : []),
+    ...(base.photos ?? []),
+    ...(base.photo ? [base.photo] : []),
+  ]);
+  return {
+    ...base,
+    ...(parsed ?? {}),
+    id: base.id,
+    name: parsed?.name ?? base.name,
+    cuisines: (parsed?.cuisines.length ? parsed.cuisines : base.cuisines) ?? [],
+    area: parsed?.area || base.area,
+    address: parsed?.address || base.address,
+    rating: parsed?.rating ?? base.rating,
+    priceForTwo: parsed?.priceForTwo ?? base.priceForTwo,
+    photo: photos[0] ?? parsed?.photo ?? base.photo,
+    photos,
+    description: parsed?.description ?? base.description ?? descriptionOf(d),
+    highlights: uniq([...(parsed?.highlights ?? []), ...(base.highlights ?? [])], 6),
+    offers: uniq([...(parsed?.offers ?? []), ...(base.offers ?? [])], 6),
+    distance: parsed?.distance ?? base.distance ?? cleanText(pick(d, "distance", "distanceString", "distanceText")),
+  };
+}
+
+function withDetails(o: Rec, base: Omit<SwiggyRestaurant, "photo">): SwiggyRestaurant {
+  const photos = photosOf(o);
+  return {
+    ...base,
+    photo: photos[0] ?? null,
+    photos,
+    description: descriptionOf(o),
+    highlights: textListOf(o, ["highlights", "facilities", "amenities", "features", "badges", "labels"], 6),
+    offers: textListOf(o, ["offers", "coupons", "deals", "discounts", "dineoutOffers"], 6),
+    distance: cleanText(pick(o, "distance", "distanceString", "distanceText")),
+  };
+}
+
+function mockPhotos(i: number): string[] {
+  const photos: string[] = [];
+  for (let n = 0; n < 3; n += 1) {
+    const url = mockPhoto((i + n) % MOCK_IMAGE_IDS.length);
+    if (url) photos.push(url);
+  }
+  return photos;
+}
+
+function enrichMock(r: SwiggyRestaurant, i = 0): SwiggyRestaurant {
+  return {
+    ...r,
+    photos: r.photos?.length ? r.photos : mockPhotos(i),
+    photo: r.photo ?? mockPhotos(i)[0] ?? null,
+    description: r.description ?? `${r.name} is a Swiggy Dineout option around ${r.area || "Bengaluru"}.`,
+    highlights: r.highlights?.length ? r.highlights : ["Table booking", "Dineout listing"],
+    offers: r.offers?.length ? r.offers : ["Dineout offers may apply"],
+    distance: r.distance ?? null,
+  };
+}
+
+export async function getDineoutRestaurantDetails(
+  base: SwiggyRestaurant,
+  opts: { lat?: number; lng?: number } = {}
+): Promise<SwiggyRestaurant> {
+  if (!swiggyLive()) {
+    const idx = MOCK_RESTAURANTS.findIndex((r) => r.id === base.id);
+    return enrichMock(base, Math.max(0, idx));
+  }
+
+  const data = await callSwiggyTool<Rec>("get_restaurant_details", {
+    restaurantId: base.id,
+    latitude: opts.lat ?? 12.972,
+    longitude: opts.lng ?? 77.61,
+  });
+  return mergeRestaurantDetails(base, data);
 }
 
 // The restaurant's own position, wherever it happens to live in the payload.
@@ -265,24 +466,38 @@ const MOCK_RESTAURANTS: SwiggyRestaurant[] = [
   { id: "sw-8", name: "Casa Mexicana", cuisines: ["mexican"], area: "Whitefield", address: "ITPL Main Road, Whitefield, Bengaluru", lat: 12.9698, lng: 77.7499, rating: 4.0, priceForTwo: 1500, photo: mockPhoto(7) },
 ];
 
-function mockSearch(query: { cuisine?: string; keyword?: string; area?: string }): SwiggyRestaurant[] {
+// Mirrors the live shape: the area gates, then an OR across the concept terms —
+// which is what merging several one-term searches amounts to. Keyed on `terms`
+// because `cuisine`/`keyword` no longer exist; while it still read those, dev
+// mode silently ignored the whole lens and reported terms it never applied.
+function mockSearch(query: { terms?: string[]; area?: string }): {
+  results: SwiggyRestaurant[];
+  used: string[];
+} {
   let results = MOCK_RESTAURANTS;
-  if (query.cuisine) {
-    results = results.filter((r) => r.cuisines.includes(query.cuisine!));
-  }
   if (query.area) {
     results = results.filter((r) => areaMatches(r.area, query.area!));
   }
-  if (query.keyword) {
-    const kw = query.keyword.toLowerCase();
-    results = results.filter(
-      (r) =>
+  const terms = (query.terms ?? []).filter((t) => t && t.toLowerCase() !== "restaurants");
+  const used: string[] = [];
+  if (terms.length) {
+    const hit = (r: SwiggyRestaurant, t: string) => {
+      const kw = t.toLowerCase();
+      return (
         r.name.toLowerCase().includes(kw) ||
         r.cuisines.some((c) => c.includes(kw)) ||
         r.area.toLowerCase().includes(kw)
-    );
+      );
+    };
+    const narrowed = results.filter((r) => terms.some((t) => hit(r, t)));
+    // A term the mock catalogue can't answer leaves the pool alone rather than
+    // emptying it — eight fixtures cannot cover the real vocabulary.
+    if (narrowed.length) {
+      results = narrowed;
+      used.push(...terms);
+    }
   }
-  return results;
+  return { results, used };
 }
 
 // Mock slots mirror the real shape (ids + reservationTime), not just a label,
@@ -321,7 +536,7 @@ function toRestaurant(o: Rec): SwiggyRestaurant | null {
     /^\s*[\d.]+\s*(?:km|m)\s*[•·]\s*/i,
     ""
   );
-  return {
+  return withDetails(o, {
     id,
     name,
     cuisines: asCuisines(pick(o, "cuisines", "cuisine", "cuisineList")),
@@ -335,8 +550,7 @@ function toRestaurant(o: Rec): SwiggyRestaurant | null {
     // alike, so nothing is lost by normalising it here.
     rating: asRating(pick(o, "rating", "avgRating", "ratingValue")) || null,
     priceForTwo: asMoney(pick(o, "costForTwo", "priceForTwo", "costForTwoString", "cft")),
-    photo: photoOf(o),
-  };
+  });
 }
 
 // One row of search_restaurants_dineout's prose list, e.g.
@@ -397,14 +611,23 @@ function fromSearchRow(row: SearchRow): SwiggyRestaurant {
 // as real data in ONE call. That's two Swiggy calls per deck load instead of
 // one-per-restaurant, which matters while the agreement's rate limits are
 // stated only as categories with no numbers.
-async function renderRestaurants(ids: string[], search: Record<string, unknown>): Promise<Rec[]> {
-  if (ids.length === 0) return [];
+// Swiggy's own caps on this call, and both are hard errors rather than
+// truncations: "restaurantIds must contain at most 50 ids" is what a
+// multi-term deck hits first (two 30-row searches is 60), and `searches` is
+// capped at 5. Deduping comes before the slice so the 50 spent are 50 distinct
+// restaurants — the same id routinely comes back from more than one term.
+const RENDER_MAX_IDS = 50;
+const RENDER_MAX_SEARCHES = 5;
+
+async function renderRestaurants(ids: string[], searches: Record<string, unknown>[]): Promise<Rec[]> {
+  const unique = [...new Set(ids)].slice(0, RENDER_MAX_IDS);
+  if (unique.length === 0 || searches.length === 0) return [];
   try {
     return listOf(
       payload(
         await callSwiggyTool<Rec>("render_restaurants_dineout", {
-          searches: [search],
-          restaurantIds: ids,
+          searches: searches.slice(0, RENDER_MAX_SEARCHES),
+          restaurantIds: unique,
         })
       )
     );
@@ -415,33 +638,139 @@ async function renderRestaurants(ids: string[], search: Record<string, unknown>)
   }
 }
 
-export async function searchDineoutRestaurants(query: {
-  cuisine?: string;
-  keyword?: string;
+function nextOffset(text: string): number | null {
+  const m = /offset=(\d+)/i.exec(text);
+  if (!m) return null;
+  const offset = Number(m[1]);
+  return Number.isFinite(offset) ? offset : null;
+}
+
+// One search_restaurants_dineout call, both envelopes kept. Named because the
+// fan-out below has to hold an array of them through Promise.allSettled.
+export interface SearchPage {
+  search: Record<string, unknown>;
+  raw: Rec[];
+  rows: SearchRow[];
+  text: string;
+  data: Rec | null;
+}
+
+async function searchPage(search: Record<string, unknown>): Promise<SearchPage> {
+  const { data, text } = await callSwiggyReply<Rec>("search_restaurants_dineout", search);
+  const raw = listOf(payload(data ?? {}));
+  return {
+    search,
+    raw,
+    rows: raw.length > 0 ? [] : parseSearchRows(text),
+    text,
+    data,
+  };
+}
+
+function uniqRestaurants(results: SwiggyRestaurant[]): SwiggyRestaurant[] {
+  const seen = new Set<string>();
+  const out: SwiggyRestaurant[] = [];
+  for (const r of results) {
+    if (seen.has(r.id)) continue;
+    seen.add(r.id);
+    out.push(r);
+  }
+  return out;
+}
+
+export interface DineoutSearchQuery {
+  // Already-resolved Swiggy terms, most specific first. Built from the
+  // structured ask by lib/swiggyTerms.ts — never raw user words.
+  terms: string[];
+  // The locality name. Used as its own search term when the concept searches
+  // do not cover it, and as the client-side gate either way.
   area?: string;
+  // The geocoded centre of `area` when Ask found one. Concept searches run
+  // here rather than at the user's position, which is what makes a concept
+  // term return anything near the place that was asked about.
+  areaLat?: number;
+  areaLng?: number;
+  // The user's own position — the fallback centre, and the pair that has to
+  // travel unchanged to slots and booking.
   lat?: number;
   lng?: number;
-}): Promise<{ results: SwiggyRestaurant[]; dropped: number }> {
+}
+
+export async function searchDineoutRestaurants(
+  query: DineoutSearchQuery
+): Promise<{ results: SwiggyRestaurant[]; dropped: number; searched: string[] }> {
   if (!swiggyLive()) {
-    return { results: mockSearch(query), dropped: 0 };
+    const mock = mockSearch(query);
+    return { results: mock.results, dropped: 0, searched: mock.used };
   }
 
   const user: UserCoords = { lat: query.lat ?? 12.972, lng: query.lng ?? 77.61 };
-  const keyword = query.keyword?.trim();
-  const cuisine = query.cuisine?.trim();
   const area = query.area?.trim();
+  // Search where the ask pointed, not where the phone is.
+  const centre: UserCoords =
+    query.areaLat != null && query.areaLng != null
+      ? { lat: query.areaLat, lng: query.areaLng }
+      : user;
 
-  const args = buildSearchArgs({ keyword, cuisine, area }, user);
+  const terms = query.terms.map((t) => t.trim()).filter(Boolean);
+  if (terms.length === 0 && area) terms.push(area);
+  if (terms.length === 0) terms.push("restaurants");
 
-  // Search answers in PROSE — a numbered list with ids in parentheses — and
-  // leaves structuredContent empty. See unwrapReply in swiggyMcp.ts.
-  const { data, text } = await callSwiggyReply<Rec>("search_restaurants_dineout", args);
+  // Narrow (the default): the most specific term only — one call, one page of
+  // the documented 30-row maximum. Wide: one search per concept, in parallel —
+  // render_restaurants_dineout accepts up to 5 searches and resolves ids across
+  // all of them, so that is the shape the tool was built for. Either way it is
+  // a TERM, never a sentence: "rooftop friends in Indiranagar" measurably
+  // returns 0 rows where "rooftop" returns 30, and the coordinates below carry
+  // the location the sentence used to.
+  const used = WIDE_SEARCH ? terms.slice(0, 4) : terms.slice(0, 1);
+  // allSettled, not all: with a fan-out, `all` means one flaky term rejects the
+  // whole set, the route turns that into a 502, and the deck says "reconnect
+  // Swiggy" while discarding three perfectly good pages. A reauth still has to
+  // reach the UI, and a total failure still has to surface — but a partial one
+  // is just a smaller deck.
+  const settled = await Promise.allSettled(
+    used.map((term) => searchPage(buildSearchArgs({ term }, centre)))
+  );
+  const authFailure = settled.find(
+    (r) => r.status === "rejected" && r.reason instanceof SwiggyAuthError
+  );
+  if (authFailure && authFailure.status === "rejected") throw authFailure.reason;
+  const firstFailure = settled.find((r) => r.status === "rejected");
+  if (firstFailure?.status === "rejected" && !settled.some((r) => r.status === "fulfilled")) {
+    throw firstFailure.reason; // every term failed — that IS the outage
+  }
+  const pages = settled
+    .filter((r): r is PromiseFulfilledResult<SearchPage> => r.status === "fulfilled")
+    .map((r) => r.value);
+  const searched = used.filter((_, i) => settled[i].status === "fulfilled");
 
-  // If Swiggy ever starts filling structuredContent on search, prefer it.
-  let raw = listOf(payload(data ?? {}));
-  const rows = raw.length > 0 ? [] : parseSearchRows(text);
-  if (raw.length === 0) {
-    raw = await renderRestaurants(rows.map((r) => r.id), args);
+  // Did the concepts actually land near the area that was asked for? If not,
+  // the locality earns a search of its own — the difference between an empty
+  // deck and a usable one on "biryani near koramangala". It is still a call, so
+  // it spends the same wide budget the fan-out does; narrow leans on `centre`
+  // (the geocoded area, when Ask found one) to aim the single search instead.
+  if (WIDE_SEARCH && area) {
+    // Counted over BOTH envelopes. `page.rows` is the prose fallback and
+    // searchPage leaves it empty whenever structuredContent was filled, so
+    // reading only that would make inArea permanently 0 the day Swiggy starts
+    // filling it — firing the top-up unconditionally, which is the opposite of
+    // deciding from the result.
+    const inArea = pages
+      .flatMap((page: SearchPage) => [
+        ...page.rows.map((row) => row.area),
+        ...page.raw.map((o) => toRestaurant(o)?.area ?? ""),
+      ])
+      .filter((a) => a && areaMatches(a, area)).length;
+    if (inArea < AREA_TOPUP_BELOW && !used.some((t) => areaMatches(t, area))) {
+      searched.push(area);
+      pages.push(await searchPage(buildSearchArgs({ term: area }, centre)));
+    }
+  }
+
+  const offset = EXTRA_SEARCH_PAGE ? nextOffset(pages[0]?.text ?? "") : null;
+  if (offset != null && pages[0]) {
+    pages.push(await searchPage({ ...pages[0].search, offset }));
   }
 
   // The original bug was an unreadable answer being reported as an empty deck.
@@ -449,16 +778,26 @@ export async function searchDineoutRestaurants(query: {
   // would do exactly that again — one layer down. So when the prose itself says
   // it found restaurants, or still carries ids we failed to read, fail loudly:
   // the route turns that into a 502 the UI can actually say something about.
-  const claimed = /Found\s+(\d+)\s+restaurant/i.exec(text);
-  const shouldHaveRows = (claimed ? Number(claimed[1]) > 0 : false) || text.includes("(ID:");
-  if (data === null && rows.length === 0 && shouldHaveRows) {
-    console.error(`[swiggy] search prose parsed to zero rows — format changed? ${text.slice(0, 200)}`);
-    throw new Error("swiggy_unparsable_search");
+  for (const page of pages) {
+    const claimed = /Found\s+(\d+)\s+restaurant/i.exec(page.text);
+    const shouldHaveRows = (claimed ? Number(claimed[1]) > 0 : false) || page.text.includes("(ID:");
+    if (page.data === null && page.rows.length === 0 && shouldHaveRows) {
+      console.error(`[swiggy] search prose parsed to zero rows — format changed? ${page.text.slice(0, 200)}`);
+      throw new Error("swiggy_unparsable_search");
+    }
   }
 
-  let results = raw
-    .map((o) => toRestaurant(o))
-    .filter((r): r is SwiggyRestaurant => r !== null);
+  const rows = pages.flatMap((page) => page.rows);
+  let raw = pages.flatMap((page) => page.raw);
+  if (rows.length > 0) {
+    raw = [...raw, ...(await renderRestaurants(rows.map((r) => r.id), pages.map((page) => page.search)))];
+  }
+
+  let results = uniqRestaurants(
+    raw
+      .map((o) => toRestaurant(o))
+      .filter((r): r is SwiggyRestaurant => r !== null)
+  );
 
   // Render can answer for only SOME of the ids, and toRestaurant drops anything
   // with no id or name. Backfill those from the prose row instead of losing
@@ -471,52 +810,61 @@ export async function searchDineoutRestaurants(query: {
     console.warn(
       `[swiggy] ${missing.length}/${rows.length} rows had no structured record; using their prose`
     );
-    results = [...results, ...missing.map(fromSearchRow)];
+    results = uniqRestaurants([...results, ...missing.map(fromSearchRow)]);
   }
 
   // What search offered but nothing could turn into a card. Counted against the
   // prose rows when there are any, since that's the real denominator.
-  const dropped = Math.max(0, (rows.length || raw.length) - results.length);
-
-  // Keyword/area took the query slot, so apply the cuisine lens here.
-  if ((keyword || area) && cuisine) {
-    const c = cuisine.toLowerCase();
-    const narrowed = results.filter((r) => r.cuisines.some((x) => x.includes(c)));
-    if (narrowed.length > 0) results = narrowed;
-  }
+  // Deduped denominator: `rows` is flattened across every search, so the same
+  // restaurant coming back from two terms counted as a DROP under a fan-out.
+  const offered = new Set(rows.map((r) => r.id)).size || raw.length;
+  const dropped = Math.max(0, offered - results.length);
 
   if (dropped > 0) {
-    console.warn(`[swiggy] dropped ${dropped}/${rows.length || raw.length} results with no id or name`);
+    console.warn(`[swiggy] dropped ${dropped}/${offered} results with no id or name`);
   }
-  return { results, dropped };
+  return { results, dropped, searched };
 }
 
+// The tool's default page is 10 and its cap is 30. Nothing used to send this at
+// all, so the deck drew from 10 candidates and then filtered them — on a query
+// where Swiggy's own prose said "Found 38 restaurant(s) ... 28 more available".
+export const SEARCH_LIMIT = 30;
+
+// ONE search. One term, no location words, and the coordinates carry the place.
+//
+// The old version built a sentence — `${keyword} in ${area}` out of a
+// stopword-stripped bag of the user's words — which is the shape
+// search_restaurants_dineout documents as wrong ("One term, not a sentence"),
+// and which measurably returns nothing: "rooftop friends in Indiranagar" → 0
+// rows, while "rooftop" → 30.
+//
+// `entityType` is gone with it. The doc calls it "rarely needed ... set this
+// only to force a specific interpretation of an ambiguous term", and the
+// condition that used to set it (`!keyword && !area && cuisine`) could
+// essentially never be true once a keyword existed — which was every typed ask.
 export function buildSearchArgs(
-  query: { cuisine?: string; keyword?: string; area?: string },
+  query: { term: string; offset?: number; limit?: number },
   user: UserCoords
 ): Record<string, unknown> {
-  const keyword = query.keyword?.trim();
-  const cuisine = query.cuisine?.trim();
-  const area = query.area?.trim();
-
-  // The tool takes one free-text `query`. With no area, keep the documented
-  // cuisine entityType path; with an area, the locality has to be inside the
-  // Swiggy query itself or New mode only filters whatever the first nearby page
-  // happened to return.
-  let text = keyword || cuisine || "restaurants";
-  if (area) {
-    const base = keyword || (cuisine ? `${cuisine} restaurants` : "restaurants");
-    text = `${base} in ${area}`;
-  }
-
   const args: Record<string, unknown> = {
-    query: text,
+    query: query.term.trim() || "restaurants",
     latitude: user.lat,
     longitude: user.lng,
+    limit: query.limit ?? SEARCH_LIMIT,
   };
-  if (!keyword && !area && cuisine) args.entityType = "CUISINE";
+  if (query.offset != null) args.offset = query.offset;
   return args;
 }
+
+// Below this many in-area results, a concept search has not really answered an
+// area ask and the locality gets a search of its own as a top-up. Measured:
+// `query="bar"` at Indiranagar's coordinates returns 30 rows with 2 in
+// Indiranagar, while `query="Indiranagar"` returns 28 rows with 28 in it. One
+// shape wins on relevance, the other on coverage, and which you need depends on
+// what the concept search actually came back with — so it is decided from the
+// result, not guessed up front.
+const AREA_TOPUP_BELOW = 5;
 
 export async function getAvailableSlots(
   restaurantId: string,

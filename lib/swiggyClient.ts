@@ -46,14 +46,35 @@ async function post<T>(path: string, body: unknown): Promise<{ data: T | null; e
 }
 
 export async function searchDineout(query: {
-  cuisine?: string;
-  keyword?: string;
+  // Swiggy-shaped terms, one concept each — see lib/swiggyTerms.ts.
+  terms: string[];
   area?: string;
+  areaLat?: number;
+  areaLng?: number;
   lat?: number;
   lng?: number;
-}): Promise<{ results: SwiggyRestaurant[]; error?: SwiggyError }> {
-  const { data, error } = await post<{ results?: SwiggyRestaurant[] }>("/api/swiggy/search", query);
-  return { results: data?.results ?? [], error };
+}): Promise<{
+  results: SwiggyRestaurant[];
+  error?: SwiggyError;
+  // What Swiggy offered that nothing could be built from. Returned by the route
+  // and thrown away here until now, which is why an empty deck could never tell
+  // "Swiggy had nothing" apart from "we parsed none of what it sent".
+  dropped: number;
+  // The terms actually searched, so the deck can name them when it comes back
+  // empty instead of blaming the user's filter.
+  searched: string[];
+}> {
+  const { data, error } = await post<{
+    results?: SwiggyRestaurant[];
+    dropped?: number;
+    searched?: string[];
+  }>("/api/swiggy/search", query);
+  return {
+    results: data?.results ?? [],
+    error,
+    dropped: data?.dropped ?? 0,
+    searched: data?.searched ?? query.terms,
+  };
 }
 
 export async function getSlots(
@@ -65,6 +86,17 @@ export async function getSlots(
     ...opts,
   });
   return { results: data?.results ?? [], error };
+}
+
+export async function getDineoutDetails(
+  restaurant: SwiggyRestaurant,
+  opts: { lat?: number; lng?: number } = {}
+): Promise<{ restaurant: SwiggyRestaurant | null; error?: SwiggyError }> {
+  const { data, error } = await post<{ restaurant?: SwiggyRestaurant }>("/api/swiggy/details", {
+    restaurant,
+    ...opts,
+  });
+  return { restaurant: data?.restaurant ?? null, error };
 }
 
 export async function bookTable(

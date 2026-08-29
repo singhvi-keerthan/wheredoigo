@@ -61,7 +61,7 @@ const PAGER_TOP = 30;
 const BODY_TAIL = "max(2.5vh, env(safe-area-inset-bottom))";
 
 // Normalised display fields, so the card renders the same shape whether it's a
-// saved Place or a raw Swiggy result (which has no photos, tags or hours).
+// saved Place or a Swiggy result (which may hydrate extra details after search).
 type CardView = {
   name: string;
   cover: string | null;
@@ -114,7 +114,7 @@ function newView(card: Extract<DeckCard, { kind: "new" }>): CardView {
     area: r.area ?? null,
     approx: false,
     chips: r.cuisines,
-    reasons: [],
+    reasons: card.reasons,
     open: null,
     hours: null,
     badge: { label: "New · Swiggy", color: "var(--accent)" },
@@ -126,12 +126,12 @@ export function cardView(card: DeckCard): CardView {
 }
 
 // Every image the hero can page through. A saved place can genuinely have
-// several (your own uploads, ordered mine-first by photosSorted); a Swiggy
-// result carries exactly one. Google's own photos are NOT in here today — see
-// the note on the pager below.
+// several (your own uploads, ordered mine-first by photosSorted); Swiggy search
+// starts with one and the active-card details call can add a gallery.
 function heroPhotos(card: DeckCard): string[] {
   if (card.kind === "saved") return photosSorted(card.place).map((p) => p.dataUrl).filter(Boolean);
-  return card.r.photo ? [card.r.photo] : [];
+  const photos = [...(card.r.photos ?? []), card.r.photo].filter((p): p is string => Boolean(p));
+  return [...new Set(photos)];
 }
 
 // The most recent visit that actually recorded something worth re-reading.
@@ -313,11 +313,46 @@ function NewBody({
   onBook: () => void;
 }) {
   const { r } = card;
+  const highlights = r.highlights ?? [];
+  const offers = r.offers ?? [];
   return (
     <>
       {r.cuisines.length > 0 && (
         <Section title="Cuisines">
           <Chips values={r.cuisines} />
+        </Section>
+      )}
+
+      {(r.description || r.distance) && (
+        <Section title="About">
+          {r.description && <Prose>{r.description}</Prose>}
+          {r.distance && (
+            <p className="mt-2 text-[13px] leading-snug" style={{ color: "var(--text-tertiary)" }}>
+              {r.distance}
+            </p>
+          )}
+        </Section>
+      )}
+
+      {highlights.length > 0 && (
+        <Section title="Good to know">
+          <Chips values={highlights} />
+        </Section>
+      )}
+
+      {offers.length > 0 && (
+        <Section title="Dineout">
+          <div className="flex flex-col gap-1.5">
+            {offers.map((offer) => (
+              <p
+                key={offer}
+                className="rounded-[6px] px-3 py-2 text-[13px] leading-snug"
+                style={{ background: "rgba(255,255,255,0.07)", color: "var(--text-secondary)" }}
+              >
+                {offer}
+              </p>
+            ))}
+          </div>
         </Section>
       )}
 

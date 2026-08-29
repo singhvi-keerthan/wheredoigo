@@ -15,7 +15,7 @@ import SwipeMode from "./SwipeMode";
 import PlaceWizard from "./PlaceWizard";
 import MenuSheet from "./MenuSheet";
 import AskSheet from "./AskSheet";
-import { rankPlaces, matchesAskedFacets, type DecideQuery } from "@/lib/decide";
+import { narrowToAsk, type DecideQuery } from "@/lib/decide";
 import BrowseSheet, { type BrowseMode } from "./BrowseSheet";
 import ModeReveal, { BEATS, type RevealSpec } from "./ModeReveal";
 
@@ -325,13 +325,21 @@ export default function AppShell() {
   // and through the SAME ranker the deck uses — so "cheap italian" picks the
   // same places whichever surface you said it on. Seeded constant: the order
   // rankPlaces returns is irrelevant to pins, only its membership is.
-  const visible = useMemo(() => {
+  //
+  // narrowToAsk, not a filter: it degrades to near-matches rather than handing
+  // back an empty map when nothing can be positively confirmed. See lib/decide.ts.
+  // One pass, two answers: the pins, and whether the ask could be CONFIRMED
+  // against what we know about them or whether these are merely the nearest
+  // things to it. Both have to come from the SAME call over the SAME rail-
+  // filtered set — deriving them separately let the line claim a confident
+  // match while the map showed near-misses from a different pool.
+  const asked = useMemo(() => {
     const byRail = filter === "all" ? places : places.filter((p) => displayState(p) === filter);
-    if (!askQuery) return byRail;
-    return rankPlaces(byRail, askQuery, 1)
-      .map((r) => r.place)
-      .filter((pl) => matchesAskedFacets(pl, askQuery));
+    if (!askQuery) return { places: byRail, confident: true };
+    return narrowToAsk(byRail, askQuery, 1);
   }, [places, filter, askQuery]);
+  const visible = asked.places;
+  const askConfident = asked.confident;
   const selected = useMemo(
     () => visible.find((p) => p.id === selectedId) ?? null,
     [visible, selectedId]
@@ -468,7 +476,9 @@ export default function AppShell() {
                   className="press pointer-events-auto ml-1 inline-flex max-w-[52vw] items-center gap-1 align-middle"
                   style={{ color: "#16181d" }}
                 >
-                  <span className="truncate">· “{askSaid}”</span>
+                  <span className="truncate">
+                    · {askConfident ? "" : "closest to "}“{askSaid}”
+                  </span>
                   <X size={10} strokeWidth={3} className="shrink-0" />
                 </button>
               ) : (
