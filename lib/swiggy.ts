@@ -315,6 +315,17 @@ export function mergeRestaurantDetails(base: SwiggyRestaurant, detail: unknown):
     ...base,
     ...(parsed ?? {}),
     id: base.id,
+    // Coordinates come from `base` and ONLY from base. get_restaurant_details
+    // TAKES latitude/longitude as input ("use same as search" — the user's
+    // position), so anything coordinate-shaped in its answer is an echo of
+    // where the phone is, not where the restaurant is. Swiggy publishes no
+    // restaurant coordinates at all (see SwiggyRestaurant), which is why
+    // saveNew treats non-null lat/lng as "exact, no lookup needed": it stores
+    // the pin as-is, clears `approxLocation`, and skips fixSwiggyPosition. Let
+    // the echo through and a card enriched before the swipe is saved at YOUR
+    // location, marked confidently correct, with nothing left to fix it.
+    lat: base.lat,
+    lng: base.lng,
     name: parsed?.name ?? base.name,
     cuisines: (parsed?.cuisines.length ? parsed.cuisines : base.cuisines) ?? [],
     area: parsed?.area || base.area,
@@ -745,6 +756,22 @@ export async function searchDineoutRestaurants(
     .map((r) => r.value);
   const searched = used.filter((_, i) => settled[i].status === "fulfilled");
 
+  // The two searches below are OPTIONAL widenings of an answer we already have.
+  // A bare `await` on either put them outside the partial-failure handling
+  // above: one flaky top-up rejected the whole call, the route turned that into
+  // a 502, and the deck said "Swiggy didn't answer" while discarding pages that
+  // had already come back fine. A reauth still has to surface — that is a state
+  // the user must act on — but nothing else here is worth losing results over.
+  const optionalPage = async (args: Record<string, unknown>): Promise<SearchPage | null> => {
+    try {
+      return await searchPage(args);
+    } catch (err) {
+      if (err instanceof SwiggyAuthError) throw err;
+      console.warn("[swiggy] optional follow-up search failed; keeping the pages we have", err);
+      return null;
+    }
+  };
+
   // Did the concepts actually land near the area that was asked for? If not,
   // the locality earns a search of its own — the difference between an empty
   // deck and a usable one on "biryani near koramangala". It is still a call, so
@@ -763,14 +790,18 @@ export async function searchDineoutRestaurants(
       ])
       .filter((a) => a && areaMatches(a, area)).length;
     if (inArea < AREA_TOPUP_BELOW && !used.some((t) => areaMatches(t, area))) {
-      searched.push(area);
-      pages.push(await searchPage(buildSearchArgs({ term: area }, centre)));
+      const topUp = await optionalPage(buildSearchArgs({ term: area }, centre));
+      if (topUp) {
+        searched.push(area);
+        pages.push(topUp);
+      }
     }
   }
 
   const offset = EXTRA_SEARCH_PAGE ? nextOffset(pages[0]?.text ?? "") : null;
   if (offset != null && pages[0]) {
-    pages.push(await searchPage({ ...pages[0].search, offset }));
+    const next = await optionalPage({ ...pages[0].search, offset });
+    if (next) pages.push(next);
   }
 
   // The original bug was an unreadable answer being reported as an empty deck.

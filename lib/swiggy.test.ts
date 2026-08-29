@@ -105,6 +105,38 @@ describe("buildSearchArgs — Swiggy New source search shape", () => {
   });
 });
 
+describe("mergeRestaurantDetails — coordinates are never taken from a details answer", () => {
+  const base: SwiggyRestaurant = {
+    id: "42", name: "Toit", cuisines: ["european"], area: "Indiranagar",
+    address: "100 Feet Road", lat: null, lng: null, rating: 4.6,
+    priceForTwo: 1600, photo: null,
+  };
+
+  it("keeps lat/lng null when the details answer echoes the user's position", () => {
+    // get_restaurant_details takes latitude/longitude as INPUT ("use same as
+    // search"). Swiggy echoing them back is the phone's position, not the
+    // restaurant's — and saveNew reads non-null coords as "exact, don't look
+    // it up", so letting the echo through pins the place on the user.
+    const merged = mergeRestaurantDetails(base, {
+      name: "Toit",
+      latitude: 12.972,
+      longitude: 77.61,
+      description: "Multi-level brewpub with a rooftop terrace.",
+    });
+    expect(merged.lat).toBeNull();
+    expect(merged.lng).toBeNull();
+    // Everything else still merges — this drops the coordinates, not the call.
+    expect(merged.description).toBe("Multi-level brewpub with a rooftop terrace.");
+  });
+
+  it("does not overwrite real coordinates the base card already had", () => {
+    const located = { ...base, lat: 12.9784, lng: 77.6408 };
+    const merged = mergeRestaurantDetails(located, { latitude: 12.972, longitude: 77.61 });
+    expect(merged.lat).toBe(12.9784);
+    expect(merged.lng).toBe(77.6408);
+  });
+});
+
 describe("mergeRestaurantDetails — active Swiggy card enrichment", () => {
   const base: SwiggyRestaurant = {
     id: "42",

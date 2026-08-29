@@ -411,7 +411,17 @@ export default function SwipeMode({
     let cancelled = false;
     detailRequested.current.add(currentNew.id);
     getDineoutDetails(currentNew, { lat: coords.lat, lng: coords.lng }).then(({ restaurant, error }) => {
-      if (cancelled || error || !restaurant) return;
+      // The marker is claimed BEFORE the request so two renders of the same
+      // card can't both fire it. That made it a permanent suppression on any
+      // path that stored nothing: swipe away mid-flight, change the lens, or
+      // get an error back, and the id stayed claimed with no details behind
+      // it — so undoing to that card, or meeting the same restaurant again
+      // later in the session, silently never enriched. Release it on every
+      // path that does not store.
+      if (cancelled || error || !restaurant) {
+        detailRequested.current.delete(currentNew.id);
+        return;
+      }
       setNewDetails((prev) => (prev[currentNew.id] ? prev : { ...prev, [currentNew.id]: restaurant }));
       setDetailNew((open) => (open?.id === currentNew.id ? restaurant : open));
     });
