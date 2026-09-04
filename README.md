@@ -1,70 +1,128 @@
 # wheredoigokeerthan
 
-Personal, single-user, $0-infra PWA: a map-first second brain for going out.
-Every place you've been or want to go is a pin; the two loops are **capture**
-(search / paste a Maps link / pin where you are → auto-enriched from Google)
-and **decide** ("date night, something new, near jayanagar, under 1500" → a
-ranked pick from your own list).
+Multi-user going-out PWA: a map and swipe deck for places people have been,
+want to try, love, or want to skip.
 
-- **Scope & data model:** `V1-SCOPE.md`
-- **Design system (as shipped):** `DESIGN_SYSTEM.md`
+The app has two main surfaces:
 
-## Run
+- `/` is the private app. It is local-first, installable, and works without an
+  account system.
+- `/go` is the read-only share view. It is server-rendered from the synced
+  library and publishes only the allowlisted fields in `lib/public.ts`.
+
+## What It Does Now
+
+- **Capture:** add a place by Google search, pasted Maps link, nearby GPS lookup,
+  or manual pin. Google enrichment caches rating, price, hours, area, city,
+  summary, and one cover photo when configured.
+- **Organize:** each place has lifecycle state, favorite/skip flags, tags, visits,
+  notes, spend per person, ratings, photos, and optional source/reel links.
+- **Decide:** Ask turns a sentence into a structured `DecideQuery`; local ranking
+  then chooses from saved places. Without an Anthropic key, the app falls back to
+  the offline parser.
+- **Swipe deck:** double-tap or flick the wordmark to switch from map to deck.
+  The deck can rank saved places, discover new Swiggy Dineout places, or combine
+  both.
+- **Sync:** passphrase-based sync mirrors records through Neon and own photo
+  bytes through private Vercel Blob. Local data remains usable without sync.
+- **Backup:** export/import still exists as the full JSON backup path.
+
+## Run Locally
 
 ```bash
 npm install
-npm run dev        # boots with zero credentials (capture degrades to manual)
+npm run dev
 ```
 
-`.env.local` (all optional):
+The app boots with zero credentials. Missing integrations degrade by feature:
+manual/local use still works, Google-backed capture is unavailable, Ask uses the
+fallback parser, Swiggy serves mock discovery data, and sync/share routes report
+disabled.
 
-```
-GOOGLE_PLACES_API_KEY=…            # live search/enrich/nearby/photo
-GOOGLE_GENERATIVE_AI_API_KEY=…     # Decide's natural-language parsing (Gemini)
-SWIGGY_MCP_TOKEN=…                 # Dineout: the deck's "New" source + booking
-```
+## Environment
 
-### Swiggy Dineout
+All env vars are optional for local boot.
 
-The deck's **New** source and **Book a table** run on Swiggy's Builders Club MCP
-server (`mcp.swiggy.com/dineout`). Without `SWIGGY_MCP_TOKEN` both fall back to
-mock data, so the app is fully usable with no credentials.
+| Variable | Used For |
+| --- | --- |
+| `GOOGLE_PLACES_API_KEY` | Place search, nearby lookup, Maps-link resolution, details refresh, and Google photos. |
+| `ANTHROPIC_API_KEY` | Ask's live natural-language parser in `app/api/decide/route.ts`. |
+| `SWIGGY_MCP_TOKEN` | Live Swiggy Dineout search, details, slots, and free table booking. |
+| `SWIGGY_MCP_URL` | Optional Swiggy MCP endpoint override. Defaults to `https://mcp.swiggy.com/dineout`. |
+| `SYNC_DATABASE_URL` | Neon database for cross-device record sync. |
+| `BLOB_READ_WRITE_TOKEN` | Private Vercel Blob storage for synced own photos and `/go` photo serving. |
+| `PUBLIC_OWNER_HASH` | 64-char sha256 passphrase hash for the public `/go` library owner. |
+
+Swiggy search debugging toggles:
+
+| Variable | Used For |
+| --- | --- |
+| `SWIGGY_MEDIA_BASE` | Optional Swiggy media base override. |
+| `SWIGGY_WIDE_SEARCH=1` | Expands Swiggy search behavior in `lib/swiggy.ts`. |
+| `SWIGGY_EXTRA_SEARCH_PAGE=1` | Pulls an extra Swiggy search page in `lib/swiggy.ts`. |
+
+## Swiggy Dineout
+
+Live Swiggy discovery and booking use Swiggy's Builders Club MCP server.
 
 ```bash
-npm run swiggy:auth   # browser consent (phone + OTP) → prints the env lines
+npm run swiggy:auth
 ```
 
-Swiggy's access tokens last **5 days** and there is no way to renew one without
-redoing consent, so this is a recurring chore: when the deck says *"Swiggy needs
-reconnecting"*, re-run the command above and update the env vars (locally and on
-Vercel).
+That opens browser consent for phone + OTP and prints env lines. Swiggy access
+tokens last 5 days. `npm run swiggy:refresh` exists, but Swiggy does not
+currently issue refresh tokens to this flow, so routine renewal is re-running
+`npm run swiggy:auth`.
 
-Their server metadata advertises a `refresh_token` grant and the token endpoint
-does implement it — but no refresh token is ever issued, because Dynamic Client
-Registration is a stub that hands every caller the same `client_id` and stores
-nothing. `scripts/swiggy-oauth.ts` documents the probes. `npm run swiggy:refresh`
-exists and is correct; it simply has nothing to work with until Swiggy starts
-issuing refresh tokens.
+## Data And Sync
+
+- Records live in `localStorage` under `wheredoigokeerthan.places.v1`.
+- Photo bytes live in IndexedDB through `lib/photoStore.ts`.
+- `lib/store.ts` exposes a hydrated in-memory mirror through
+  `useSyncExternalStore`.
+- `lib/sync/client.ts` hashes the passphrase in the browser and sends only the
+  sha256 owner token.
+- `app/api/sync/route.ts` reads/writes Neon rows with last-write-wins guards and
+  soft-delete tombstones.
+- `app/api/photo/route.ts` proxies private Blob photo uploads/downloads for
+  connected devices.
+- `/go` reads the configured owner's live records server-side, strips private
+  fields, and serves photos through `app/api/go/photo/[place]/[photo]/route.ts`.
 
 ## Checks
 
 ```bash
-npm test                    # unit tests for the pure logic (ranking, hours, dupes, sanitizer)
+npm test
+npm run lint
 npm run build
-npm run eval:decide         # NL-parser eval against live Gemini (paced for free tier)
-npm run eval:decide -- --offline   # same dataset against the local fallback parser
 ```
 
-## Architecture notes
+Decide parser evals:
 
-- **Local-first:** place records in `localStorage`, photo bytes in IndexedDB,
-  fully-hydrated in-memory mirror via `useSyncExternalStore` (`lib/store.ts`).
-  Backup = one JSON file (⋯ menu → Export/Import). v2 (Supabase sync) swaps the
-  persistence layer without changing call sites.
-- **Google spend:** enrich-once-then-cache; the only metered calls are text
-  search (typed queries), one details refresh per place per ~30 days, and one
-  photo per saved place. Keep the Cloud billing alert on.
-- **Decide:** Gemini translates free text into a constrained `DecideQuery`
-  (schema + sanitizer in `lib/decide-prompt.ts`, offline fallback in
-  `lib/decide-fallback.ts`); ranking is local and deterministic
-  (`lib/decide.ts`). Deploys on Vercel; pushing `main` deploys.
+```bash
+npm run eval:decide                 # live Anthropic parser, first 10 cases
+npm run eval:decide -- --limit 20   # live parser, bounded sample
+npm run eval:decide -- --full       # live parser, full paid sweep
+npm run eval:decide -- --offline    # local fallback parser, no API spend
+```
+
+## Main Paths
+
+| Path | Purpose |
+| --- | --- |
+| `components/AppShell.tsx` | Private app shell, map/deck mode toggle, docks, sheets. |
+| `components/SwipeMode.tsx` | Saved/new/both swipe deck and Swiggy save flow. |
+| `components/AddPlaceSheet.tsx` | Search/link/nearby/manual capture. |
+| `components/MenuSheet.tsx` | Browse, sync, export/import, attribution. |
+| `lib/decide.ts` | Local ranking and ask narrowing. |
+| `lib/decide-prompt.ts` | Ask schema, model prompt, sanitizer. |
+| `lib/deck.ts` | Deck construction and saved/new merge logic. |
+| `lib/swiggy.ts` / `lib/swiggyMcp.ts` | Swiggy parsing and MCP transport. |
+| `lib/store.ts` | Local-first persistence and mutation API. |
+| `lib/sync/*` | Optional cross-device sync. |
+| `lib/public.ts` | `/go` public projection allowlist. |
+
+Scope references:
+
+- `V1-SCOPE.md`
+- `DESIGN_SYSTEM.md`
