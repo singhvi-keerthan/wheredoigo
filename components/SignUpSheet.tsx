@@ -177,7 +177,11 @@ export default function SignUpSheet({
     <div className="fixed inset-0 z-50" style={{ background: "rgba(10,8,12,0.64)" }} onClick={onClose}>
       <div
         ref={sheetRef}
-        className="absolute inset-x-0 bottom-0 px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-2"
+        // Same cap as every other sheet. This one is short enough to fit today,
+        // but "short enough" is a property of the current copy and the current
+        // phone — large text settings or a landscape keyboard would clip its
+        // header off the top exactly the way MenuSheet's was.
+        className="scroll-quiet absolute inset-x-0 bottom-0 max-h-[92dvh] overflow-y-auto overscroll-contain px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-2"
         style={{
           background: "var(--bg-raised)",
           borderTopLeftRadius: "var(--radius-lg)",

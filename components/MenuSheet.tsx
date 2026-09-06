@@ -70,7 +70,18 @@ export default function MenuSheet({
     <div className="fixed inset-0 z-50" style={{ background: "rgba(10,8,12,0.64)" }} onClick={onClose}>
       <div
         ref={sheetRef}
-        className="absolute inset-x-0 bottom-0 px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-2"
+        // Capped and scrollable, which it never was. Bottom-anchored with no
+        // ceiling, a sheet taller than the viewport grows UPWARD off the top of
+        // the screen: the "Menu" heading and its close button were sliced in
+        // half above the first pixel, with no way to scroll to them. It took
+        // Safari's bottom chrome plus a fifth Browse tile to become visible,
+        // and the Recommendations row added here would have made it worse.
+        // Every other sheet in the app already does this — AddPlaceSheet
+        // (94dvh), PlaceDetail (92dvh), AskSheet (82vh); this one was the
+        // exception, not a new idea. dvh, not vh, so the cap tracks Safari's
+        // bar collapsing rather than measuring a viewport the phone isn't
+        // showing.
+        className="scroll-quiet absolute inset-x-0 bottom-0 max-h-[92dvh] overflow-y-auto overscroll-contain px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-2"
         style={{
           background: "var(--bg-raised)",
           borderTopLeftRadius: "var(--radius-lg)",
