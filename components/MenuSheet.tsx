@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { X, Images, Store, UtensilsCrossed, MapPinned, Pizza, Download, Upload, ChevronRight } from "lucide-react";
+import { X, Images, Store, UtensilsCrossed, MapPinned, Pizza, Download, Upload, ChevronRight, Compass } from "lucide-react";
 import { usePlaces, downloadBackup, importData } from "@/lib/store";
 import type { TagNamespace } from "@/lib/types";
 import type { BrowseMode } from "./BrowseSheet";
@@ -98,6 +98,33 @@ export default function MenuSheet({
             <X size={14} strokeWidth={2.25} />
           </button>
         </div>
+
+        {/* The way back to the map they arrived from.
+            Until now this was a one-way door: the share view offered "Your map"
+            and the app offered nothing in return, so anyone who followed that
+            link was stranded on their own empty map with no route back to the
+            recommendations they came for. It sits first because that is what a
+            newcomer opens this sheet looking for, and it names whose map it is
+            — which is the entire distinction between the two screens. */}
+        <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--text-tertiary)" }}>
+          Recommendations
+        </p>
+        <a
+          href="/"
+          className="press mb-5 flex w-full items-center gap-3 rounded-[var(--radius)] px-3.5 py-3 text-left no-underline"
+          style={{ background: "var(--bg-elevated)", border: "1px solid var(--ink-line)" }}
+        >
+          <Compass size={18} style={{ color: "var(--text-secondary)" }} />
+          <span className="min-w-0 flex-1">
+            <span className="block text-[15px] font-semibold" style={{ color: "var(--text-primary)" }}>
+              Keerthan’s map
+            </span>
+            <span className="block text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>
+              Been, rated, and the ones he’d skip
+            </span>
+          </span>
+          <ChevronRight size={17} style={{ color: "var(--text-tertiary)" }} />
+        </a>
 
         {/* browse — four lenses */}
         <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--text-tertiary)" }}>

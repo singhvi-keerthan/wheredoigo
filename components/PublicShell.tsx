@@ -129,7 +129,8 @@ export default function PublicShell({ places, updatedAgo }: { places: Place[]; u
               fontFamily: "var(--font-display)",
               color: "#16181d",
               // Same measured fit as the app's masthead, minus the controls this
-              // screen doesn't have — the page padding and the "Your own" pill.
+              // screen doesn't have — the page padding and the "Your map" pill
+              // (same 8 characters the old label had, so the reserve is unchanged).
               fontSize: "min(26px, calc((100vw - 132px) / 10.2))",
             }}
           >
@@ -166,9 +167,12 @@ export default function PublicShell({ places, updatedAgo }: { places: Place[]; u
           </p>
         </div>
 
-        {/* The only way off this screen. The app moved to /app and nothing else
-            points at it, so without this the share view is a dead end for
-            everyone who isn't Keerthan — his own PWA opens /app directly.
+        {/* The only way off this screen, and it has to say where it goes.
+            It read "Your own" first, which is a dangling modifier: your own
+            WHAT, on a screen that is somebody else's map? "Your map" names the
+            noun, is true before you have one (it is what you'd get) and after
+            (it is where yours lives), and sits opposite "Keerthan's map" in the
+            app's menu so the two doors describe each other.
             Deliberately quiet: this is a map someone asked him for, not a
             signup page, so it reads as a door rather than a call to action. */}
         <a
@@ -182,7 +186,7 @@ export default function PublicShell({ places, updatedAgo }: { places: Place[]; u
             WebkitBackdropFilter: "blur(12px)",
           }}
         >
-          Your own
+          Your map
         </a>
       </header>
 
