@@ -77,25 +77,46 @@ export default function PublicShell({ places, updatedAgo }: { places: Place[]; u
         style={{ background: "linear-gradient(180deg, rgba(243,243,240,0.95), rgba(243,243,240,0))" }}
       />
 
-      <header className="fixed inset-x-0 top-0 z-10 px-5 pt-[max(0.9rem,env(safe-area-inset-top))]">
-        <h1
-          className="font-medium leading-none tracking-[-0.015em]"
+      <header className="fixed inset-x-0 top-0 z-10 flex items-start gap-3 px-5 pt-[max(0.9rem,env(safe-area-inset-top))]">
+        <div className="min-w-0 flex-1">
+          <h1
+            className="font-medium leading-none tracking-[-0.015em]"
+            style={{
+              fontFamily: "var(--font-display)",
+              color: "#16181d",
+              // Same measured fit as the app's masthead, minus the controls this
+              // screen doesn't have — the page padding and the "Your own" pill.
+              fontSize: "min(26px, calc((100vw - 132px) / 10.2))",
+            }}
+          >
+            wheredoigokeerthan
+          </h1>
+          <p className="mt-1.5 text-[11px]" style={{ color: "#5b6470" }}>
+            <span style={{ fontFamily: "var(--font-mono)", color: "#16181d", fontWeight: 500 }}>{places.length}</span>{" "}
+            {places.length === 1 ? "place" : "places"}
+            {where && ` · ${where}`}
+            {updatedAgo && ` · updated ${updatedAgo}`}
+          </p>
+        </div>
+
+        {/* The only way off this screen. The app moved to /app and nothing else
+            points at it, so without this the share view is a dead end for
+            everyone who isn't Keerthan — his own PWA opens /app directly.
+            Deliberately quiet: this is a map someone asked him for, not a
+            signup page, so it reads as a door rather than a call to action. */}
+        <a
+          href="/app"
+          className="press mt-[3px] shrink-0 whitespace-nowrap rounded-full px-3 py-1.5 text-[12px] font-semibold no-underline"
           style={{
-            fontFamily: "var(--font-display)",
             color: "#16181d",
-            // Same measured fit as the app's masthead, minus the 164px of
-            // controls this screen doesn't have — only the page padding.
-            fontSize: "min(26px, calc((100vw - 40px) / 10.2))",
+            background: "rgba(255,255,255,0.72)",
+            border: "1px solid rgba(22,24,29,0.12)",
+            backdropFilter: "blur(12px)",
+            WebkitBackdropFilter: "blur(12px)",
           }}
         >
-          wheredoigokeerthan
-        </h1>
-        <p className="mt-1.5 text-[11px]" style={{ color: "#5b6470" }}>
-          <span style={{ fontFamily: "var(--font-mono)", color: "#16181d", fontWeight: 500 }}>{places.length}</span>{" "}
-          {places.length === 1 ? "place" : "places"}
-          {where && ` · ${where}`}
-          {updatedAgo && ` · updated ${updatedAgo}`}
-        </p>
+          Your own
+        </a>
       </header>
 
       {places.length === 0 && (

@@ -19,10 +19,24 @@ import {
   type RemotePlaceRow,
 } from "@/lib/store";
 import { idbGetAllPhotos, idbPutPhoto } from "@/lib/photoStore";
+import { normalizePhrase } from "@/lib/phrase";
 
-const OWNER_KEY = "wheredoigokeerthan.sync.owner"; // sha256(passphrase) — the capability token
+const OWNER_KEY = "wheredoigokeerthan.sync.owner"; // sha256(phrase) — the capability token
 const CURSOR_KEY = "wheredoigokeerthan.sync.cursor"; // max updated_at pulled so far
 const DIRTY_KEY = "wheredoigokeerthan.sync.dirty"; // ids changed locally but not yet pushed
+
+// The phrase itself, in plain text, on this device only.
+//
+// The original design refused to keep it ("the plaintext never persists"), and
+// that is what made the feature so easy to get lost in: a phrase you cannot
+// look up is a phrase you cannot use to set up your second device, and the app
+// gave you exactly one chance to write it down. It buys no security either —
+// anyone holding this unlocked phone can already read every place in the
+// library the phrase protects, so withholding it defends nothing.
+//
+// It stays local. It is never sent anywhere, never synced, and never logged;
+// only the hash leaves the device, exactly as before.
+const PHRASE_KEY = "wheredoigokeerthan.sync.phrase";
 
 export type SyncState = "disabled" | "idle" | "syncing" | "error" | "offline";
 export interface SyncStatus {
@@ -96,10 +110,62 @@ function saveDirty() {
 }
 
 // ---- hashing ---------------------------------------------------------------
-export async function hashPassphrase(passphrase: string): Promise<string> {
-  const bytes = new TextEncoder().encode(passphrase.normalize("NFKC"));
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+async function sha256Hex(input: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// What shipped first: trim + NFKC, and nothing else. Case and inner spacing were
+// part of the secret, so "Amber Pine" and "amber  pine" opened three different
+// libraries. Kept, because every owner key already in the database was computed
+// this way and PUBLIC_OWNER_HASH is one of them — see resolveOwner.
+export async function hashPassphrase(passphrase: string): Promise<string> {
+  return sha256Hex(passphrase.trim().normalize("NFKC"));
+}
+
+// The canonical hash for anything connected from here on: case-folded, inner
+// whitespace collapsed. Someone reading six words off another phone's screen
+// will capitalise the first one or double-tap a space, and that must not select
+// a different library.
+export async function hashPhrase(phrase: string): Promise<string> {
+  return sha256Hex(normalizePhrase(phrase).normalize("NFKC"));
+}
+
+export interface PhraseProbe {
+  owner: string;
+  exists: boolean;
+  places: number;
+  updatedAt: string | null;
+  legacy: boolean; // matched only under the pre-normalisation hash
+}
+
+// Ask the server what a phrase opens, WITHOUT connecting to it. Returns counts
+// only — the probe endpoint never returns records.
+async function probeOwner(owner: string): Promise<{ exists: boolean; places: number; updatedAt: string | null }> {
+  const res = await fetchT("/api/sync?probe=1", { headers: { Authorization: `Bearer ${owner}` } });
+  if (!res.ok) throw new Error(`probe failed (${res.status})`);
+  return (await res.json()) as { exists: boolean; places: number; updatedAt: string | null };
+}
+
+// Which owner key a typed phrase should use.
+//
+// Canonical first. If that opens nothing, try the legacy hash before concluding
+// the phrase is new — otherwise everyone who connected before this change would
+// be told their own phrase was unrecognised the next time they typed it on a
+// new device, and would cheerfully "create" a second empty library beside the
+// real one. A library found under the legacy hash keeps using it; re-keying its
+// rows is not worth the risk of a half-finished migration.
+export async function resolveOwner(phrase: string): Promise<PhraseProbe> {
+  const canonical = await hashPhrase(phrase);
+  const fresh = await probeOwner(canonical);
+  if (fresh.exists) return { owner: canonical, ...fresh, legacy: false };
+
+  const legacy = await hashPassphrase(phrase);
+  if (legacy !== canonical) {
+    const old = await probeOwner(legacy);
+    if (old.exists) return { owner: legacy, ...old, legacy: true };
+  }
+  return { owner: canonical, exists: false, places: 0, updatedAt: null, legacy: false };
 }
 
 // ---- push / pull -----------------------------------------------------------
@@ -291,18 +357,40 @@ export function startSync(): void {
   if (owner) void sync();
 }
 
-// Connect this device: hash the passphrase, mark all local records for push
-// (first-run migration), and reset the pull cursor so we fetch the full remote
-// library, then merge. Any passphrase is valid — it simply selects a namespace.
-export async function connect(passphrase: string): Promise<void> {
-  const token = await hashPassphrase(passphrase.trim());
-  owner = token;
-  lsSet(OWNER_KEY, token);
+// Connect this device to an owner key already resolved by resolveOwner(): mark
+// all local records for push (first-run migration), reset the pull cursor so we
+// fetch the full remote library, then merge.
+//
+// Takes the resolved key rather than the phrase on purpose. The old connect()
+// hashed whatever it was handed and reported success either way, so a typo
+// selected an empty namespace, showed a green "Synced", and pushed the whole
+// local library into it — into a stranger's library, if the typo collided with
+// their phrase. Resolving and CONFIRMING is now the caller's job (see
+// SyncSection), and this function can no longer be reached without it.
+export async function connectAs(ownerKey: string, phrase: string): Promise<void> {
+  owner = ownerKey;
+  lsSet(OWNER_KEY, ownerKey);
+  lsSet(PHRASE_KEY, normalizePhrase(phrase));
   dirty = new Set(snapshotForSync().map((p) => p.id));
   saveDirty();
   lsDel(CURSOR_KEY);
   setStatus({ connected: true, state: "idle", pending: dirty.size, error: null });
   await sync();
+}
+
+// The phrase for this device, for showing the user when they set up another one.
+export function savedPhrase(): string | null {
+  return lsGet(PHRASE_KEY);
+}
+
+// The owner key this device is connected as, or null. Read by lib/swiggyClient
+// to prove which library is calling — the Swiggy routes are Keerthan's alone.
+//
+// Falls back to localStorage because the module-level `owner` is only populated
+// by startSync(), and a caller that runs before the boot component mounts would
+// otherwise read null and be told it is not the owner.
+export function ownerToken(): string | null {
+  return owner ?? lsGet(OWNER_KEY);
 }
 
 // Stop syncing on this device. Local data is untouched; server data remains.
@@ -312,5 +400,6 @@ export function disconnect(): void {
   lsDel(OWNER_KEY);
   lsDel(CURSOR_KEY);
   lsDel(DIRTY_KEY);
+  lsDel(PHRASE_KEY);
   setStatus({ connected: false, state: "disabled", pending: 0, error: null, lastSyncedAt: null });
 }

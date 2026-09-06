@@ -1,6 +1,7 @@
 "use client";
 
 import type { SwiggyRestaurant, SwiggySlot, SwiggyBooking, UserCoords } from "./swiggy";
+import { ownerToken } from "./sync/client";
 
 export type { SwiggyRestaurant, SwiggySlot, SwiggyBooking, UserCoords };
 
@@ -28,13 +29,23 @@ export function swiggyDirectionsUrl(r: SwiggyRestaurant): string {
 // The access token lasts 5 days, and renewing it is a chore someone has to run
 // (`npm run swiggy:refresh`) — nothing in the request path renews it — so
 // "reconnect" is a normal state the UI has to be able to say out loud.
-export type SwiggyError = "swiggy_reauth" | "swiggy_unavailable" | "fetch_failed";
+// `owner_only` is not a failure to retry — it is the honest answer that Swiggy
+// runs on Keerthan's single consent and this device is not his. See
+// lib/swiggy-gate.ts for why that is a contract position, not a policy choice.
+export type SwiggyError = "swiggy_reauth" | "swiggy_unavailable" | "fetch_failed" | "owner_only";
 
 async function post<T>(path: string, body: unknown): Promise<{ data: T | null; error?: SwiggyError }> {
   try {
+    // The owner key proves which library is asking. The route compares it
+    // against PUBLIC_OWNER_HASH server-side; an unconnected device sends
+    // nothing and is refused, which is intended.
+    const own = ownerToken();
     const res = await fetch(path, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(own ? { Authorization: `Bearer ${own}` } : {}),
+      },
       body: JSON.stringify(body),
     });
     const data = await res.json();

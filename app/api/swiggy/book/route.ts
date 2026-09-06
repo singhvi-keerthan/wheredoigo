@@ -1,11 +1,12 @@
 import { bookTable, SwiggyAuthError } from "@/lib/swiggy";
-import { crossOrigin, forbidden } from "@/lib/api-guard";
+import { swiggyGate } from "@/lib/swiggy-gate";
 
 // book_table — free reservations only. The whole slot is required, not just an
 // id: Swiggy wants slotId + itemId + reservationTime together, plus the same
 // coordinates used for the search.
 export async function POST(request: Request) {
-  if (crossOrigin(request)) return forbidden();
+  const gate = await swiggyGate(request, "swiggy/book");
+  if (gate) return gate;
 
   let body: {
     restaurantId?: string;

@@ -2,8 +2,10 @@
 // offline. Network-first for navigations (always get the latest build),
 // cache-first for static assets. Never touches /api or cross-origin (map tiles,
 // Google) — those always hit the network.
-const CACHE = "wheredoigokeerthan-v3";
-const SHELL = ["/", "/manifest.webmanifest", "/icon.svg"];
+const CACHE = "wheredoigokeerthan-v4";
+// "/" is the share view and "/app" is the app; both are real navigations that
+// have to work offline, and before the move only one of them existed.
+const SHELL = ["/", "/app", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(
@@ -42,7 +44,16 @@ self.addEventListener("fetch", (e) => {
           caches.open(CACHE).then((c) => c.put(request, copy));
           return r;
         })
-        .catch(() => caches.match(request).then((cached) => cached || caches.match("/")))
+        .catch(() =>
+          caches.match(request).then((cached) => {
+            if (cached) return cached;
+            // Offline and this exact url was never cached. Fall back WITHIN the
+            // half of the app the person was in: an /app navigation must not
+            // land on the share view, which is a different library (Keerthan's)
+            // and cannot write anything.
+            return caches.match(url.pathname.startsWith("/app") ? "/app" : "/");
+          })
+        )
     );
     return;
   }

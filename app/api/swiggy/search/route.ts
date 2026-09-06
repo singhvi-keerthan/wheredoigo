@@ -1,5 +1,5 @@
 import { searchDineoutRestaurants, SwiggyAuthError, type DineoutSearchQuery } from "@/lib/swiggy";
-import { crossOrigin, forbidden } from "@/lib/api-guard";
+import { swiggyGate } from "@/lib/swiggy-gate";
 
 // Decide's "Swiggy" mode — browse Swiggy Dineout's own catalog, independent of
 // anything you've saved. Backed by search_restaurants_dineout when
@@ -10,7 +10,8 @@ import { crossOrigin, forbidden } from "@/lib/api-guard";
 // areaLat/areaLng are the geocoded centre of the asked locality, when there is
 // one — the concept searches run there instead.
 export async function POST(request: Request) {
-  if (crossOrigin(request)) return forbidden();
+  const gate = await swiggyGate(request, "swiggy/search");
+  if (gate) return gate;
 
   let body: Partial<DineoutSearchQuery>;
   try {

@@ -1,10 +1,11 @@
 import { getDineoutRestaurantDetails, SwiggyAuthError, type SwiggyRestaurant } from "@/lib/swiggy";
-import { crossOrigin, forbidden } from "@/lib/api-guard";
+import { swiggyGate } from "@/lib/swiggy-gate";
 
 // Active-card enrichment for Swipe Mode. Search stays one cheap catalog call;
 // details are fetched only for the Swiggy card the user is actually looking at.
 export async function POST(request: Request) {
-  if (crossOrigin(request)) return forbidden();
+  const gate = await swiggyGate(request, "swiggy/details");
+  if (gate) return gate;
 
   let body: { restaurant?: SwiggyRestaurant; lat?: number; lng?: number };
   try {

@@ -122,6 +122,38 @@ export async function pushTags(owner: string, rows: TagRow[]): Promise<void> {
   );
 }
 
+// How many live places this owner has. Used by the connect probe (does this
+// phrase open anything?) and by the quota check, neither of which wants the
+// records themselves.
+export async function countLive(owner: string): Promise<number> {
+  const s = db();
+  const rows = (await s`select count(*)::int as n from places
+                        where owner = ${owner} and deleted_at is null`) as { n: number }[];
+  return rows[0]?.n ?? 0;
+}
+
+// When this library was last written to, or null if it has never been.
+export async function latestUpdate(owner: string): Promise<string | null> {
+  const s = db();
+  const rows = (await s`select to_char(max(updated_at) at time zone 'UTC', ${ISO}) as updated_at
+                        from places where owner = ${owner} and deleted_at is null`) as {
+    updated_at: string | null;
+  }[];
+  return rows[0]?.updated_at ?? null;
+}
+
+// Which of `ids` this owner already stores — live rows and tombstones both,
+// because re-pushing a previously deleted place reuses its id rather than
+// consuming a new slot. Lets the quota count only genuinely NEW places, so a
+// library sitting at the ceiling can still be edited and pruned.
+export async function existingIds(owner: string, ids: string[]): Promise<Set<string>> {
+  if (!ids.length) return new Set();
+  const s = db();
+  const rows = (await s`select id from places
+                        where owner = ${owner} and id = any(${ids})`) as { id: string }[];
+  return new Set(rows.map((r) => r.id));
+}
+
 // Every LIVE record for an owner (tombstones excluded), newest write first.
 // The share view's read (lib/public.ts) — it wants the current library, not a
 // sync delta, so it takes no cursor and never sees a deleted place.

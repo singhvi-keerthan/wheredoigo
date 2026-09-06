@@ -1,10 +1,11 @@
 import { getAvailableSlots, SwiggyAuthError } from "@/lib/swiggy";
-import { crossOrigin, forbidden } from "@/lib/api-guard";
+import { swiggyGate } from "@/lib/swiggy-gate";
 
 // get_available_slots — same-day tables by default. `date` is optional and
 // defaults to today in IST inside lib/swiggy (the server runs UTC).
 export async function POST(request: Request) {
-  if (crossOrigin(request)) return forbidden();
+  const gate = await swiggyGate(request, "swiggy/slots");
+  if (gate) return gate;
 
   let body: {
     restaurantId?: string;
