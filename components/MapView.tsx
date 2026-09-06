@@ -7,7 +7,7 @@ import type { Place } from "@/lib/types";
 import { displayState } from "@/lib/types";
 import { DEFAULT_VIEW } from "@/lib/seed";
 import { cityOf } from "@/lib/city";
-import { noteGpsFix, noteMapCenter, onGeoGranted } from "@/lib/bias";
+import { noteGpsFix, noteMapCenter, onGeoGranted, noteGeoStatus } from "@/lib/bias";
 import Pin, { type PinVariant } from "./Pin";
 import PlaceGlyph from "./PlaceGlyph";
 import { useIsSiteOwner } from "@/lib/sync/client";
@@ -89,7 +89,10 @@ export default function MapView({
   const isSiteOwner = useIsSiteOwner();
   const [me, setMe] = useState<{ lat: number; lng: number } | null>(null);
   useEffect(() => {
-    if (typeof navigator === "undefined" || !("geolocation" in navigator)) return;
+    if (typeof navigator === "undefined" || !("geolocation" in navigator)) {
+      noteGeoStatus("unavailable");
+      return;
+    }
 
     let cancelled = false;
     let permission: PermissionStatus | null = null;
@@ -106,11 +109,13 @@ export default function MapView({
 
     const startWatch = () => {
       if (watchId != null) return;
+      noteGeoStatus("locating");
       watchId = navigator.geolocation.watchPosition(
         (pos) => {
           const c = { lat: pos.coords.latitude, lng: pos.coords.longitude };
           setMe(c);
           noteGpsFix(c); // doubles as the search bias — see lib/bias.ts
+          noteGeoStatus("granted");
         },
         (err) => {
           // A geolocation watch is NOT cancelled by an error — the browser
@@ -122,11 +127,13 @@ export default function MapView({
           // bad session. Drop the stale marker either way — a "you are here"
           // pin we can no longer confirm is worse than none.
           if (err.code === err.PERMISSION_DENIED) {
+            noteGeoStatus("denied");
             clearWatch();
             return;
           }
           setMe(null);
           noteGpsFix(null);
+          noteGeoStatus("unavailable");
         },
         { enableHighAccuracy: true, maximumAge: 15_000, timeout: 20_000 }
       );
@@ -142,8 +149,10 @@ export default function MapView({
     const syncPermission = () => {
       if (cancelled || !permission) return;
       // "prompt" starts the watch too — that IS the ask. Only a denial is a no.
-      if (permission.state === "denied") clearWatch();
-      else startWatch();
+      if (permission.state === "denied") {
+        noteGeoStatus("denied");
+        clearWatch();
+      } else startWatch();
     };
 
     // No Permissions API (Safari) — we cannot ask what the state is, so we ask
@@ -183,15 +192,33 @@ export default function MapView({
   // simply slow — and DEFAULT_VIEW is the last resort behind both. Whichever
   // resolves first wins, and only once.
   const viewSet = useRef(false);
+  // Whether the camera has ever actually been put on the user. Tracked apart
+  // from viewSet because the two used to be the same flag, and that conflation
+  // is why granting location changed nothing: the saved-places fallback sets
+  // viewSet after its grace window, so a fix arriving even a second later — or
+  // minutes later, when someone finally turns the permission on — found the
+  // view already "claimed" and returned early. The map would sit on a fit of
+  // your pins for the rest of the session, having never once shown you where
+  // you were.
+  const centeredOnMe = useRef(false);
 
-  // 1. Your location, the moment there is a fix. Never on the shared view —
+  // 1. Your location, the first time there is a fix. Never on the shared view —
   //    there, the places ARE the subject and the viewer is incidental.
   useEffect(() => {
-    if (shared || viewSet.current || !ready || !me) return;
+    if (shared || centeredOnMe.current || !ready || !me) return;
     const map = mapRef.current?.getMap();
     if (!map) return;
+    // Whether anything has framed the map yet decides how we move, not whether.
+    // At startup nothing has, so jump — an animation from a default view is
+    // motion with no meaning. If the fallback (or a later grant) got there
+    // first, fly: the camera is leaving a view the person can see, and a cut
+    // would read as the map losing its place rather than finding them.
+    const alreadyFramed = viewSet.current;
     viewSet.current = true;
-    map.jumpTo({ center: [me.lng, me.lat], zoom: ME_ZOOM });
+    centeredOnMe.current = true;
+    const target = { center: [me.lng, me.lat] as [number, number], zoom: ME_ZOOM };
+    if (alreadyFramed) map.flyTo({ ...target, duration: 900 });
+    else map.jumpTo(target);
     setBand(bandFor(ME_ZOOM));
   }, [ready, me, shared]);
 

@@ -86,3 +86,64 @@ export function geoEverGranted(): boolean {
     return false;
   }
 }
+
+// ---- location status, shared -----------------------------------------------
+//
+// MapView owns the geolocation watch, but it is not the only thing that needs to
+// know how that watch is doing. Without location the map cannot open where you
+// are, "Pin where I am" cannot work, and Swiggy has no coordinates to search
+// from — so the app has to be able to SAY that, out loud, instead of quietly
+// rendering a map of nowhere in particular. This is the one place that fact
+// lives, so the map and the prompt can never disagree about it.
+//
+//   locating    — the watch is running and has not produced a fix yet
+//   granted     — we have a position
+//   denied      — the person said no, or said no once in the past. The browser
+//                 will not ask again; only Settings can undo it.
+//   unavailable — no geolocation API, or the fix failed/timed out. Retryable.
+export type GeoStatus = "locating" | "granted" | "denied" | "unavailable";
+
+let geoStatus: GeoStatus = "locating";
+const geoListeners = new Set<() => void>();
+
+export function noteGeoStatus(s: GeoStatus) {
+  if (s === geoStatus) return;
+  geoStatus = s;
+  geoListeners.forEach((l) => l());
+}
+
+export function getGeoStatus(): GeoStatus {
+  return geoStatus;
+}
+
+export function subscribeGeoStatus(cb: () => void): () => void {
+  geoListeners.add(cb);
+  return () => geoListeners.delete(cb);
+}
+
+// Ask again, from a user gesture.
+//
+// Worth being precise about what this can and cannot do: where the state is
+// still "prompt", this is what makes the browser show its dialog, and it works.
+// Where the person has already refused, NOTHING in a page can re-open that
+// dialog — the only route back is the browser's own settings, which is why the
+// nudge explains that case instead of offering a button that would do nothing.
+export function requestLocation(): void {
+  if (typeof navigator === "undefined" || !("geolocation" in navigator)) {
+    noteGeoStatus("unavailable");
+    return;
+  }
+  noteGeoStatus("locating");
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      noteGpsFix({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      noteGeoStatus("granted");
+      // Tells MapView's watch to start now rather than on the next reload.
+      noteGeoGranted();
+    },
+    (err) => {
+      noteGeoStatus(err.code === err.PERMISSION_DENIED ? "denied" : "unavailable");
+    },
+    { enableHighAccuracy: true, timeout: 20_000 }
+  );
+}

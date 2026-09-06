@@ -19,6 +19,7 @@ import { narrowToAsk, type DecideQuery } from "@/lib/decide";
 import BrowseSheet, { type BrowseMode } from "./BrowseSheet";
 import ModeReveal, { BEATS, type RevealSpec } from "./ModeReveal";
 import SignUpSheet, { type SignUpReason } from "./SignUpSheet";
+import LocationNudge from "./LocationNudge";
 import { useSyncStatus } from "@/lib/sync/client";
 
 // The app's two ways of looking at the same places. There is no control for
@@ -601,6 +602,12 @@ export default function AppShell() {
         </div>
       ) : (
         <div ref={dockRef} className="fixed inset-x-0 bottom-0 z-10">
+          {/* Says so when there is no location, rather than leaving a map of
+              nowhere in particular and no explanation. Sits at the top of the
+              dock so it is in the same column as everything else here, and only
+              on the map: in swipe mode there is nothing on screen that a
+              position would change. */}
+          <LocationNudge />
           {/* filter rail — Decide (white action) + a dark-glass underline tray.
               Same horizontal padding, gap, corner radius and 36px row height
               as the search dock below it, so the two rows read as one dock

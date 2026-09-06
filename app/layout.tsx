@@ -24,7 +24,24 @@ export const metadata: Metadata = {
   title: "wheredoigokeerthan — where are we eating?",
   description: "A private map of every place you've been and want to go.",
   manifest: "/manifest.webmanifest",
-  icons: { icon: "/icon.png", apple: "/apple-touch-icon.png" },
+  // Every size iOS and Android actually ask for, each carrying its `sizes`
+  // attribute. There used to be exactly one apple-touch-icon and it declared no
+  // size at all, which leaves the installer guessing from a single unlabelled
+  // candidate — and a guess is all it takes to land a blank tile on the home
+  // screen. 120/152/167/180 are the iPhone and iPad home-screen sizes, 192 is
+  // what Android and Chrome look for, 512 is the splash/store size.
+  icons: {
+    icon: [
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: [
+      { url: "/icon-120.png", sizes: "120x120", type: "image/png" },
+      { url: "/icon-152.png", sizes: "152x152", type: "image/png" },
+      { url: "/icon-167.png", sizes: "167x167", type: "image/png" },
+      { url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" },
+    ],
+  },
   appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "wheredoigo" },
 };
 
