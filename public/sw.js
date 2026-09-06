@@ -40,8 +40,15 @@ self.addEventListener("fetch", (e) => {
     e.respondWith(
       fetch(request)
         .then((r) => {
+          // A navigation FetchEvent has redirect mode "manual", so /go (a 308)
+          // resolves to an opaqueredirect response that cache.put rejects.
+          // Without the catch that is an unhandled rejection in the worker on
+          // every hit of an old link. The redirect itself is unaffected.
           const copy = r.clone();
-          caches.open(CACHE).then((c) => c.put(request, copy));
+          caches
+            .open(CACHE)
+            .then((c) => c.put(request, copy))
+            .catch(() => {});
           return r;
         })
         .catch(() =>

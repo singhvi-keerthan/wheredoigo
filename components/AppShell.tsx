@@ -18,6 +18,8 @@ import AskSheet from "./AskSheet";
 import { narrowToAsk, type DecideQuery } from "@/lib/decide";
 import BrowseSheet, { type BrowseMode } from "./BrowseSheet";
 import ModeReveal, { BEATS, type RevealSpec } from "./ModeReveal";
+import SignUpSheet, { type SignUpReason } from "./SignUpSheet";
+import { useSyncStatus } from "@/lib/sync/client";
 
 // The app's two ways of looking at the same places. There is no control for
 // this any more: the wordmark IS the toggle, in both modes. Double-tap it or
@@ -93,6 +95,22 @@ export default function AppShell() {
   // for ~1.9s and the deck mounts inside it. Coming back is a plain 190ms fade —
   // an exit should never make you wait.
   const [reveal, setReveal] = useState<RevealSpec | null>(null);
+
+  // Sign-up is asked for at the moment it starts mattering, never on arrival:
+  // reading the map is free, keeping something is not. `gate` runs the action
+  // straight through for anyone already connected, and otherwise parks it
+  // behind the sheet and replays it the instant they are.
+  const sync = useSyncStatus();
+  const [signUp, setSignUp] = useState<SignUpReason | null>(null);
+  const pendingAction = useRef<(() => void) | null>(null);
+  const gate = (reason: SignUpReason, run: () => void) => {
+    if (sync.connected) {
+      run();
+      return;
+    }
+    pendingAction.current = run;
+    setSignUp(reason);
+  };
   const headerRef = useRef<HTMLElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
@@ -168,8 +186,12 @@ export default function AppShell() {
 
   const openSwipe = (ox: number, oy: number) => {
     if (mode === "swipe" || reveal) return;
-    clearTheStage();
-    setReveal({ ox, oy, pins: capturePins() });
+    // Gated before the stage clears: the reveal animation is a one-way door and
+    // playing it behind a sign-up sheet would leave the map torn down underneath.
+    gate("swipe", () => {
+      clearTheStage();
+      setReveal({ ox, oy, pins: capturePins() });
+    });
   };
 
   // The wordmark is the toggle now, so it needs to know which way it points.
@@ -543,7 +565,7 @@ export default function AppShell() {
               Save the places you hear about — and never argue about where to go again.
             </p>
             <button
-              onClick={() => setAddOpen(true)}
+              onClick={() => gate("add", () => setAddOpen(true))}
               className="press mt-4 inline-flex items-center gap-1.5 px-4 py-2.5 text-[13.5px] font-bold"
               style={{ ...WHITE_ACTION, borderRadius: "var(--radius-chip)", cursor: "pointer" }}
             >
@@ -719,7 +741,7 @@ export default function AppShell() {
               </kbd>
             </button>
             <button
-              onClick={() => setAddOpen(true)}
+              onClick={() => gate("add", () => setAddOpen(true))}
               aria-label="Add a place"
               className="press flex shrink-0 items-center justify-center"
               style={{ ...WHITE_ACTION, width: 50, height: 50, borderRadius: 18, cursor: "pointer" }}
@@ -736,8 +758,10 @@ export default function AppShell() {
         onPick={(id) => setSelectedId(id)}
         onAddNew={(carry) => {
           setPaletteOpen(false);
-          setAddQuery(carry);
-          setAddOpen(true);
+          gate("add", () => {
+            setAddQuery(carry);
+            setAddOpen(true);
+          });
         }}
       />
 
@@ -808,6 +832,25 @@ export default function AppShell() {
             setMode("swipe");
           }}
           onDone={() => setReveal(null)}
+        />
+      )}
+
+      {signUp && (
+        <SignUpSheet
+          reason={signUp}
+          onClose={() => {
+            pendingAction.current = null;
+            setSignUp(null);
+          }}
+          onDone={() => {
+            setSignUp(null);
+            // Replay what they were trying to do, so signing up returns them to
+            // their own intent instead of dropping them back on a bare map.
+            const run = pendingAction.current;
+            pendingAction.current = null;
+            run?.();
+          }}
+          onToast={showToast}
         />
       )}
 

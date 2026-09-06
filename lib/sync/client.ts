@@ -20,6 +20,7 @@ import {
 } from "@/lib/store";
 import { idbGetAllPhotos, idbPutPhoto } from "@/lib/photoStore";
 import { normalizePhrase } from "@/lib/phrase";
+import { accountSecret, normalizePhone } from "@/lib/account";
 
 const OWNER_KEY = "wheredoigokeerthan.sync.owner"; // sha256(phrase) — the capability token
 const CURSOR_KEY = "wheredoigokeerthan.sync.cursor"; // max updated_at pulled so far
@@ -37,6 +38,11 @@ const DIRTY_KEY = "wheredoigokeerthan.sync.dirty"; // ids changed locally but no
 // It stays local. It is never sent anywhere, never synced, and never logged;
 // only the hash leaves the device, exactly as before.
 const PHRASE_KEY = "wheredoigokeerthan.sync.phrase";
+
+// The phone number of a signed-in account, digits only, on this device only.
+// Stored so the app can say WHICH account this is; the password is chosen by
+// the person and is never stored, never sent, and never recoverable.
+const ACCOUNT_KEY = "wheredoigokeerthan.sync.phone";
 
 export type SyncState = "disabled" | "idle" | "syncing" | "error" | "offline";
 export interface SyncStatus {
@@ -137,14 +143,44 @@ export interface PhraseProbe {
   places: number;
   updatedAt: string | null;
   legacy: boolean; // matched only under the pre-normalisation hash
+  ambiguous: boolean; // BOTH hashes name real libraries
 }
 
-// Ask the server what a phrase opens, WITHOUT connecting to it. Returns counts
-// only — the probe endpoint never returns records.
-async function probeOwner(owner: string): Promise<{ exists: boolean; places: number; updatedAt: string | null }> {
-  const res = await fetchT("/api/sync?probe=1", { headers: { Authorization: `Bearer ${owner}` } });
+interface ProbeReply {
+  exists: boolean;
+  owner: string;
+  places: number;
+  updatedAt: string | null;
+  ambiguous: boolean;
+}
+
+// Ask the server what a key opens, WITHOUT connecting to it. Counts only — the
+// probe endpoint never returns records.
+//
+// `alt` sends a second candidate in the SAME request. A typed phrase has two
+// possible hashes, and probing them separately cost two charges against the
+// guessing budget per attempt — which meant the users the legacy fallback
+// exists for could be locked out by their own recovery path.
+async function probeOwner(primary: string, alt?: string): Promise<ProbeReply> {
+  const qs = alt && alt !== primary ? `&alt=${encodeURIComponent(alt)}` : "";
+  const res = await fetchT(`/api/sync?probe=1${qs}`, { headers: { Authorization: `Bearer ${primary}` } });
   if (!res.ok) throw new Error(`probe failed (${res.status})`);
-  return (await res.json()) as { exists: boolean; places: number; updatedAt: string | null };
+  return (await res.json()) as ProbeReply;
+}
+
+// The owner key for a phone-and-password account. Disjoint from the phrase
+// keyspace by construction — see lib/account.ts accountSecret.
+export async function hashAccount(phone: string, password: string): Promise<string> {
+  return sha256Hex(accountSecret(phone, password).normalize("NFKC"));
+}
+
+// What a phone-and-password opens, without connecting to it. Same contract as
+// resolveOwner: the caller shows the answer and only then commits. There is no
+// legacy variant to fall back to — accounts did not exist before this.
+export async function resolveAccount(phone: string, password: string): Promise<PhraseProbe> {
+  const candidate = await hashAccount(phone, password);
+  const found = await probeOwner(candidate);
+  return { ...found, owner: found.owner || candidate, legacy: false };
 }
 
 // Which owner key a typed phrase should use.
@@ -157,15 +193,10 @@ async function probeOwner(owner: string): Promise<{ exists: boolean; places: num
 // rows is not worth the risk of a half-finished migration.
 export async function resolveOwner(phrase: string): Promise<PhraseProbe> {
   const canonical = await hashPhrase(phrase);
-  const fresh = await probeOwner(canonical);
-  if (fresh.exists) return { owner: canonical, ...fresh, legacy: false };
-
   const legacy = await hashPassphrase(phrase);
-  if (legacy !== canonical) {
-    const old = await probeOwner(legacy);
-    if (old.exists) return { owner: legacy, ...old, legacy: true };
-  }
-  return { owner: canonical, exists: false, places: 0, updatedAt: null, legacy: false };
+  const found = await probeOwner(canonical, legacy);
+  const owner = found.exists ? found.owner : canonical;
+  return { ...found, owner, legacy: found.exists && owner === legacy && legacy !== canonical };
 }
 
 // ---- push / pull -----------------------------------------------------------
@@ -187,6 +218,26 @@ function fetchT(input: string, init: RequestInit = {}, ms = 20000): Promise<Resp
   return fetch(input, { ...init, signal: ctrl.signal }).finally(() => clearTimeout(timer));
 }
 
+// Must match LIMITS.rowsPerPush on the server. A batch over it is refused with
+// a 413, and since `dirty` is only cleared on success, an oversized library
+// would retry the same rejected batch forever — permanently unsyncable, with a
+// red error and no way out. Chunking is what makes the server's cap a batch
+// size instead of a library ceiling.
+const PUSH_CHUNK = 500;
+
+async function postBatch(rows: unknown[], extra: { phone?: string | null; alias?: string | null } = {}): Promise<void> {
+  const res = await fetchT("/api/sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${owner}` },
+    body: JSON.stringify({
+      places: rows,
+      ...(extra.phone ? { phone: extra.phone } : {}),
+      ...(extra.alias ? { alias: extra.alias } : {}),
+    }),
+  });
+  if (!res.ok) throw new Error(`push failed (${res.status})`);
+}
+
 async function push(): Promise<void> {
   if (!owner || !dirty.size) return;
   const sending = new Set(dirty);
@@ -198,14 +249,28 @@ async function push(): Promise<void> {
       updated_at: p.updatedAt ?? p.createdAt,
       deleted_at: p.deletedAt ?? null,
     }));
-  const res = await fetchT("/api/sync", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${owner}` },
-    body: JSON.stringify({ places: rows }),
-  });
-  if (!res.ok) throw new Error(`push failed (${res.status})`);
-  sending.forEach((id) => dirty.delete(id)); // clear only what we sent
-  saveDirty();
+
+  // Clear each slice as it lands, not all of them at the end: a failure halfway
+  // through a large first-run migration should keep the work already accepted
+  // rather than re-sending it on the next attempt.
+  for (let i = 0; i < rows.length; i += PUSH_CHUNK) {
+    const slice = rows.slice(i, i + PUSH_CHUNK);
+    await postBatch(slice, i === 0 ? { phone: lsGet(ACCOUNT_KEY) } : {});
+    slice.forEach((r) => dirty.delete(r.id));
+    saveDirty();
+  }
+}
+
+// An empty push, which is how a device announces a library that has nothing in
+// it yet. Without this a brand-new account would not exist server-side until
+// its first place, and every sync until then would look like a wrong key.
+async function registerRemote(alias?: string | null): Promise<void> {
+  if (!owner) return;
+  try {
+    await postBatch([], { phone: lsGet(ACCOUNT_KEY), alias });
+  } catch {
+    /* the next sync registers it — never block connecting on this */
+  }
 }
 
 async function pull(): Promise<void> {
@@ -367,20 +432,47 @@ export function startSync(): void {
 // local library into it — into a stranger's library, if the typo collided with
 // their phrase. Resolving and CONFIRMING is now the caller's job (see
 // SyncSection), and this function can no longer be reached without it.
-export async function connectAs(ownerKey: string, phrase: string): Promise<void> {
+export async function connectAs(
+  ownerKey: string,
+  id: { phrase?: string; phone?: string; legacy?: boolean; recovery?: string }
+): Promise<void> {
   owner = ownerKey;
   lsSet(OWNER_KEY, ownerKey);
-  lsSet(PHRASE_KEY, normalizePhrase(phrase));
+  // Exactly one of these. A generated phrase is kept because nobody can be
+  // expected to remember it; an account keeps only the phone, because the
+  // password is the person's own and storing it would be storing a password.
+  //
+  // A LEGACY phrase is stored exactly as typed, not normalised. Its owner key
+  // is sha256 of the raw string, so the normalised form hashes to something
+  // else — showing that on "Show phrase for another device" would hand the next
+  // device a phrase that opens nothing, and the "use it anyway" escape would
+  // fork an empty library beside the real one. The precise bug this flow
+  // exists to prevent.
+  if (id.phrase) lsSet(PHRASE_KEY, id.legacy ? id.phrase.trim() : normalizePhrase(id.phrase));
+  if (id.phone) lsSet(ACCOUNT_KEY, normalizePhone(id.phone));
+  // An account's recovery phrase: a SECOND key registered against this same
+  // owner, so forgetting the password is survivable. Kept locally too, because
+  // it was generated here and nobody can be expected to have memorised it.
+  if (id.recovery) lsSet(PHRASE_KEY, normalizePhrase(id.recovery));
   dirty = new Set(snapshotForSync().map((p) => p.id));
   saveDirty();
   lsDel(CURSOR_KEY);
   setStatus({ connected: true, state: "idle", pending: dirty.size, error: null });
+  // Exist server-side even with nothing to push yet, and register the recovery
+  // phrase in the same call that creates the library.
+  await registerRemote(id.recovery ? await hashPhrase(id.recovery) : null);
   await sync();
 }
 
 // The phrase for this device, for showing the user when they set up another one.
 export function savedPhrase(): string | null {
   return lsGet(PHRASE_KEY);
+}
+
+// The phone number this device is signed in as, or null when it was connected
+// with a recovery phrase instead.
+export function savedPhone(): string | null {
+  return lsGet(ACCOUNT_KEY);
 }
 
 // The owner key this device is connected as, or null. Read by lib/swiggyClient
@@ -401,5 +493,6 @@ export function disconnect(): void {
   lsDel(CURSOR_KEY);
   lsDel(DIRTY_KEY);
   lsDel(PHRASE_KEY);
+  lsDel(ACCOUNT_KEY);
   setStatus({ connected: false, state: "disabled", pending: 0, error: null, lastSyncedAt: null });
 }

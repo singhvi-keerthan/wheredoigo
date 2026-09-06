@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { getPublicLibrary, publicConfigured } from "@/lib/public";
 import PublicShell from "@/components/PublicShell";
+import InstalledAppRedirect from "@/components/InstalledAppRedirect";
 
 // The root — the map Keerthan sends when someone asks him where to go.
 //
@@ -44,5 +45,11 @@ export default async function SharePage() {
   }
 
   const { places, updatedAgo } = await getPublicLibrary();
-  return <PublicShell places={places} updatedAgo={updatedAgo} />;
+  return (
+    <>
+      {/* Old home-screen installs still open "/" — send those to the app. */}
+      <InstalledAppRedirect />
+      <PublicShell places={places} updatedAgo={updatedAgo} />
+    </>
+  );
 }

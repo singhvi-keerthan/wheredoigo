@@ -126,12 +126,14 @@ export default function SyncSection({ onToast }: { onToast: (m: string) => void 
 
   // Check what the typed phrase opens, WITHOUT connecting to it. This is the
   // whole fix for the silent typo: the answer comes back before any data moves.
+  //
+  // NO strength check here. The floor rose (12 chars, 3 distinct words) and the
+  // old one was 4 characters, so screening the input before the lookup would
+  // refuse every library made under the old rules — telling their actual owners
+  // their own phrase was invalid and putting the legacy fallback permanently
+  // out of reach of the exact people it was written for. Strength is checked
+  // when a phrase CREATES something, below.
   const check = async () => {
-    const weak = phraseWeak(typed);
-    if (weak) {
-      onToast(weak);
-      return;
-    }
     setBusy(true);
     try {
       setProbe(await resolveOwner(typed));
@@ -144,10 +146,10 @@ export default function SyncSection({ onToast }: { onToast: (m: string) => void 
 
   // `ownerKey` empty means "derive it from the phrase" — the create path, where
   // the phrase was generated here and there is nothing to resolve against.
-  const commit = async (ownerKey: string, phrase: string, joined: boolean) => {
+  const commit = async (ownerKey: string, phrase: string, joined: boolean, legacy = false) => {
     setBusy(true);
     try {
-      await connectAs(ownerKey || (await hashPhrase(phrase)), phrase);
+      await connectAs(ownerKey || (await hashPhrase(phrase)), { phrase, legacy });
       reset();
       onToast(joined ? "Connected — merging that library in" : "This device is now syncing");
     } catch {
@@ -368,7 +370,7 @@ export default function SyncSection({ onToast }: { onToast: (m: string) => void 
               </p>
               <div className="mt-2.5 flex gap-2">
                 <button
-                  onClick={() => void commit(probe.owner, typed, true)}
+                  onClick={() => void commit(probe.owner, typed, true, probe.legacy)}
                   disabled={busy}
                   className="press flex-1 rounded-[10px] px-3 py-2 text-[14px] font-semibold disabled:opacity-60"
                   style={primaryBtn}
@@ -395,7 +397,16 @@ export default function SyncSection({ onToast }: { onToast: (m: string) => void 
                   Try again
                 </button>
                 <button
-                  onClick={() => void commit(probe.owner, typed, false)}
+                  onClick={() => {
+                    // The one place a typed phrase becomes a NEW library, so the
+                    // one place the strength floor belongs.
+                    const weak = phraseWeak(typed);
+                    if (weak) {
+                      onToast(weak);
+                      return;
+                    }
+                    void commit(probe.owner, typed, false);
+                  }}
                   disabled={busy}
                   className="press rounded-[10px] px-3 py-2 text-[14px] font-semibold disabled:opacity-60"
                   style={quietBtn}

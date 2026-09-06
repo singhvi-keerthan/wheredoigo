@@ -18,8 +18,14 @@ const sql = url ? neon(url) : null;
 
 export const LIMITS = {
   placesPerOwner: 1000, // Keerthan has 29; a heavy user lands in the low hundreds
-  rowsPerPush: 500, // one sync batch — a first-run migration of a full library
-  syncBodyBytes: 8 * 1024 * 1024, // the records themselves are small; photos go elsewhere
+  // One sync batch. The CLIENT chunks to this (lib/sync/client.ts pushes in
+  // slices), so it is a batch size rather than a library ceiling — a 900-place
+  // first connect goes up as two requests instead of being refused forever.
+  rowsPerPush: 500,
+  // Under Vercel's own ~4.5 MB request ceiling, so an oversized push fails with
+  // this app's error rather than the platform's opaque one. At 8 MB the check
+  // could never fire: the request died upstream first.
+  syncBodyBytes: 4 * 1024 * 1024,
   photoBytes: 8 * 1024 * 1024, // one photo, after base64 decode
   photoBytesPerOwner: 250 * 1024 * 1024,
 } as const;

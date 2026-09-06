@@ -783,12 +783,20 @@ export default function SwipeMode({
         ) : newFailed ? (
           <Centered>
             <p className="text-[15px] font-semibold" style={{ color: "var(--text-secondary)" }}>
-              {newError === "swiggy_reauth" ? "Swiggy needs reconnecting" : "Swiggy didn’t answer"}
+              {newError === "owner_only"
+                ? "Swiggy is Keerthan’s only"
+                : newError === "swiggy_reauth"
+                  ? "Swiggy needs reconnecting"
+                  : "Swiggy didn’t answer"}
             </p>
             <p className="mt-1 text-[12.5px] leading-snug" style={{ color: "var(--text-tertiary)" }}>
-              {newError === "swiggy_reauth"
-                ? "Access tokens last 5 days. Run npm run swiggy:auth to sign in again."
-                : "Dineout is unreachable right now — your saved places still work."}
+              {/* owner_only is a 403 that will never change on this device, so it
+                  must not read like an outage — that invites retrying forever. */}
+              {newError === "owner_only"
+                ? "Discovering new restaurants runs on his Swiggy account, so it only works there. Your own saved places work normally."
+                : newError === "swiggy_reauth"
+                  ? "Access tokens last 5 days. Run npm run swiggy:auth to sign in again."
+                  : "Dineout is unreachable right now — your saved places still work."}
             </p>
           </Centered>
         ) : empty ? (

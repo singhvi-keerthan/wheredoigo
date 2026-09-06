@@ -39,7 +39,80 @@ export async function ensureSchema(): Promise<void> {
   await s`create table if not exists tag_vocab (
     owner text not null, ns text not null, vals jsonb not null,
     updated_at timestamptz not null, primary key (owner, ns))`;
+  // Which owner keys are REAL, independent of whether they hold any places.
+  //
+  // Existence used to be inferred from the place count, and that was wrong in
+  // both directions: a just-created library and a library whose places were all
+  // deleted both reported "nothing opens with this", which told the truthful
+  // owner their own key was wrong AND charged them the anti-guessing budget on
+  // every sync. `phone` is null unless the person signed up with one.
+  await s`create table if not exists owners (
+    owner text primary key,
+    phone text,
+    created_at timestamptz not null default now(),
+    last_seen timestamptz not null default now())`;
+  await s`create index if not exists owners_phone_idx on owners (phone)`;
+  // A second key to the SAME library.
+  //
+  // An account's owner key is sha256 of phone-and-password, so a recovery
+  // phrase cannot derive the same key — it would name a different library. This
+  // maps the phrase's hash onto the owner it rescues, which is what makes it
+  // actual recovery rather than a second empty map. Without it "there is no
+  // password reset" is the whole story, and the first person to forget theirs
+  // loses everything they saved.
+  //
+  // Only the HASH of the phrase is stored, so this table cannot be read back
+  // into a phrase any more than the owner column can be read back into a
+  // password.
+  await s`create table if not exists owner_alias (
+    alias text primary key,
+    owner text not null,
+    created_at timestamptz not null default now())`;
   schemaReady = true;
+}
+
+// Point a recovery phrase's hash at an existing owner key. Idempotent, and it
+// will not silently re-point an alias that already names a different library —
+// that would hand someone else's map to whoever registered the collision.
+export async function registerAlias(alias: string, owner: string): Promise<void> {
+  const s = db();
+  await s`insert into owner_alias (alias, owner) values (${alias}, ${owner})
+          on conflict (alias) do nothing`;
+}
+
+// The owner key a recovery phrase opens, or null if it opens nothing.
+export async function resolveAlias(alias: string): Promise<string | null> {
+  const s = db();
+  const rows = (await s`select owner from owner_alias where alias = ${alias} limit 1`) as { owner: string }[];
+  return rows[0]?.owner ?? null;
+}
+
+// Record that this owner key belongs to somebody, and stamp the visit. Called on
+// every authenticated push, so a library registers itself the first time a
+// device connects — before it has a single place in it.
+//
+// `phone` is stored in the clear, deliberately: Keerthan asked to be able to see
+// who is using the app, and a hash cannot answer that. It is written only when
+// the sign-up supplied one, never derived, and never returned to any browser.
+export async function registerOwner(owner: string, phone: string | null): Promise<void> {
+  const s = db();
+  await s`insert into owners (owner, phone) values (${owner}, ${phone})
+          on conflict (owner) do update set
+            last_seen = now(),
+            phone = coalesce(excluded.phone, owners.phone)`;
+}
+
+// Does this owner key name a real library? The honest answer to "does my phrase
+// open anything", and the thing the guessing budget is charged against.
+export async function ownerExists(owner: string): Promise<boolean> {
+  const s = db();
+  const rows = (await s`select 1 from owners where owner = ${owner} limit 1`) as unknown[];
+  if (rows.length) return true;
+  // Libraries that predate the owners table have places but no row. Falling back
+  // to the place count keeps them recognised, tombstones included so a library
+  // someone emptied still counts as theirs.
+  const legacy = (await s`select 1 from places where owner = ${owner} limit 1`) as unknown[];
+  return legacy.length > 0;
 }
 
 export interface PlaceRow {
