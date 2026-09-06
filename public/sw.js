@@ -2,16 +2,27 @@
 // offline. Network-first for navigations (always get the latest build),
 // cache-first for static assets. Never touches /api or cross-origin (map tiles,
 // Google) — those always hit the network.
-const CACHE = "wheredoigokeerthan-v4";
+const CACHE = "wheredoigokeerthan-v5";
 // "/" is the share view and "/app" is the app; both are real navigations that
 // have to work offline, and before the move only one of them existed.
-const SHELL = ["/", "/app", "/manifest.webmanifest", "/icon.svg"];
+//
+// "/icon.svg" used to be in this list and does not exist — it 404s, and there
+// is no such file anywhere in the repo. That one dead entry meant this worker
+// NEVER INSTALLED: cache.addAll() rejects the whole batch if a single request
+// fails, so install's waitUntil rejected, skipWaiting() never ran, and every
+// cache-version bump since was a fix that could not land. The offline shell was
+// not degraded, it was absent.
+const SHELL = ["/", "/app", "/manifest.webmanifest", "/icon.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(
     caches
       .open(CACHE)
-      .then((c) => c.addAll(SHELL))
+      // Individually, not addAll(). Precaching is an optimisation; installing is
+      // not. One asset that 404s should cost us that asset's offline copy, not
+      // the entire service worker — which is exactly what it cost before, in
+      // silence, for as long as the list held a name that wasn't there.
+      .then((c) => Promise.all(SHELL.map((u) => c.add(u).catch(() => {}))))
       .then(() => self.skipWaiting())
   );
 });

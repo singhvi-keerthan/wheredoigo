@@ -454,6 +454,7 @@ export async function connectAs(
   // owner, so forgetting the password is survivable. Kept locally too, because
   // it was generated here and nobody can be expected to have memorised it.
   if (id.recovery) lsSet(PHRASE_KEY, normalizePhrase(id.recovery));
+  siteOwner = null; // a different key may be a different person — re-ask
   dirty = new Set(snapshotForSync().map((p) => p.id));
   saveDirty();
   lsDel(CURSOR_KEY);
@@ -462,6 +463,52 @@ export async function connectAs(
   // phrase in the same call that creates the library.
   await registerRemote(id.recovery ? await hashPhrase(id.recovery) : null);
   await sync();
+}
+
+// ---- "is this Keerthan's own device?" --------------------------------------
+//
+// Asked once per page load and cached, because the answer cannot change without
+// a reconnect. Defaults to FALSE and only ever upgrades: the thing it gates is
+// whether to draw Keerthan's face on the map, and a stranger seeing it for a
+// moment while a fetch resolves is the one outcome worth designing against.
+let siteOwner: boolean | null = null;
+const siteOwnerListeners = new Set<() => void>();
+
+export function useIsSiteOwner(): boolean {
+  return useSyncExternalStore(
+    (cb) => {
+      siteOwnerListeners.add(cb);
+      void resolveSiteOwner();
+      return () => siteOwnerListeners.delete(cb);
+    },
+    () => siteOwner === true,
+    () => false // server render: never the owner, so the generic marker is what hydrates
+  );
+}
+
+let siteOwnerInFlight: Promise<void> | null = null;
+function resolveSiteOwner(): Promise<void> {
+  if (siteOwner !== null) return Promise.resolve();
+  if (siteOwnerInFlight) return siteOwnerInFlight;
+  const key = ownerToken();
+  if (!key) {
+    // No key at all — not connected, so certainly not the owner. Left as null
+    // rather than false so connecting later re-asks.
+    return Promise.resolve();
+  }
+  siteOwnerInFlight = fetchT("/api/me", { headers: { Authorization: `Bearer ${key}` } })
+    .then((r) => (r.ok ? r.json() : { owner: false }))
+    .then((body: { owner?: boolean }) => {
+      siteOwner = Boolean(body.owner);
+      siteOwnerListeners.forEach((l) => l());
+    })
+    .catch(() => {
+      /* leave null so a later render retries */
+    })
+    .finally(() => {
+      siteOwnerInFlight = null;
+    });
+  return siteOwnerInFlight;
 }
 
 // The phrase for this device, for showing the user when they set up another one.
@@ -494,5 +541,6 @@ export function disconnect(): void {
   lsDel(DIRTY_KEY);
   lsDel(PHRASE_KEY);
   lsDel(ACCOUNT_KEY);
+  siteOwner = null;
   setStatus({ connected: false, state: "disabled", pending: 0, error: null, lastSyncedAt: null });
 }

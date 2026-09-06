@@ -10,6 +10,7 @@ import { cityOf } from "@/lib/city";
 import { noteGpsFix, noteMapCenter, onGeoGranted } from "@/lib/bias";
 import Pin, { type PinVariant } from "./Pin";
 import PlaceGlyph from "./PlaceGlyph";
+import { useIsSiteOwner } from "@/lib/sync/client";
 
 // Keyless light vector style (CARTO positron), retuned to warm ivory/paper.
 const MAP_STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
@@ -85,6 +86,7 @@ export default function MapView({
   // already-granted permission to avoid a startup prompt — that silently
   // removed the marker for anyone who had never been asked.) Only an outright
   // denial stops the watch; the location is used to draw you, never stored.
+  const isSiteOwner = useIsSiteOwner();
   const [me, setMe] = useState<{ lat: number; lng: number } | null>(null);
   useEffect(() => {
     if (typeof navigator === "undefined" || !("geolocation" in navigator)) return;
@@ -362,7 +364,22 @@ export default function MapView({
           <div className="me-marker light-on" aria-label="You are here">
             <span className="me-pulse" />
             <span className="me-shadow" />
-            {shared ? (
+            {/* The avatar is a picture of Keerthan, so only Keerthan gets it.
+                Until the /app move this was safe by accident: the app had one
+                user, and `shared` alone told the two apart. Now other people
+                keep libraries at /app, and every one of them was being drawn on
+                their OWN map as him.
+
+                `isSiteOwner` is a boolean fetched from /api/me — the comparison
+                happens server-side because PUBLIC_OWNER_HASH is a write bearer
+                and cannot be shipped to a browser to be compared here.
+
+                Everyone else gets the standard blue dot, which is not a
+                consolation prize: it is the convention every map app uses for
+                "you are here", and it is what the share view already showed.
+                The share view keeps it even for Keerthan — there the places are
+                the subject and the viewer is incidental. */}
+            {shared || !isSiteOwner ? (
               <span
                 className="block rounded-full"
                 style={{ width: 16, height: 16, background: "#2b6df6", border: "2.5px solid #fff", boxShadow: "0 2px 8px rgba(0,0,0,0.35)" }}
