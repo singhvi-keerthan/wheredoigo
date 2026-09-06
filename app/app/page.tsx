@@ -12,7 +12,10 @@ import AppShell from "@/components/AppShell";
 // ORIGIN, not the path, so every place, photo and sync connection survives the
 // move untouched — a device that was connected before is still connected.
 export const metadata: Metadata = {
-  title: "wheredoigokeerthan — where are we eating?",
+  // The app is whoever's map it is, so it carries nobody's name — the share
+  // view at "/" is the one that is Keerthan's, and it keeps the full wordmark.
+  // The URL is untouched either way.
+  title: "wheredoigo — where are we eating?",
   description: "A private map of every place you've been and want to go.",
   robots: { index: false, follow: false }, // someone's private library, never a search result
 };

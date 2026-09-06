@@ -451,16 +451,23 @@ export default function AppShell() {
                 // with the world rather than ahead of it.
                 color: inDeck ? "#f4f0ee" : "#16181d",
                 transition: "color 0.42s ease 0.12s",
-                // Scales so the full 18-char name never clips against whatever
-                // shares its row. The 18 characters measure 10.15em wide in
-                // Zodiak (measured, not guessed). The reserve is everything else
-                // on the row: both side paddings, the gap, and the control — the
-                // 36px menu button on the map, the wider lens chip in the deck,
-                // which is capped at 128px and truncates inside that.
-                fontSize: "min(26px, calc((100vw - 86px) / 10.2))",
+                // Scales so the name never clips against whatever shares its
+                // row. "wheredoigo" measures 5.70em wide in Zodiak at this
+                // weight — measured, not guessed, and re-measured when the name
+                // shortened rather than left describing the old string: canvas
+                // gives 5.846em raw, less 0.015em/char of the -0.39px tracking
+                // over 10 characters. (The old 18-char name was 10.15em by the
+                // same method, which is where that number came from.) The
+                // reserve is everything else on the row: both side paddings, the
+                // gap, and the control — the 36px menu button on the map, the
+                // wider lens chip in the deck, capped at 128px and truncating
+                // inside that. At this length the clamp is slack on any phone,
+                // so the name simply sits at 26px; it still holds if the
+                // reserve ever grows.
+                fontSize: "min(26px, calc((100vw - 86px) / 5.7))",
               }}
             >
-              wheredoigokeerthan
+              wheredoigo
             </h1>
           </div>
           {onMap && (
