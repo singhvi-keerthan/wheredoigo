@@ -405,10 +405,18 @@ export default function AddPlaceSheet({
                 </span>
               </div>
 
-              {/* Once searching, the results live in a constant-height panel so the
-                  field above stays put no matter how many matches stream in (the
-                  sheet is bottom-anchored, so a growing list would push it up). */}
-              <div className={`mt-2 flex flex-col gap-1.5 ${showResults ? "scroll-quiet h-[42vh] overflow-y-auto" : ""}`}>
+              {/* The panel holds its height from the moment this screen opens,
+                  not from the first result. The sheet is bottom-anchored, so a
+                  panel that only appears on the second keystroke shoves the
+                  field — and the thumb already resting on it — a third of the
+                  screen upward mid-word. Reserved up front, only the CONTENTS
+                  switch as you type. CommandPalette's list does the same. */}
+              <div className="scroll-quiet mt-2 flex h-[42vh] flex-col gap-1.5 overflow-y-auto">
+                {!showResults && (
+                  <p className="px-1 py-4 text-center text-[13px]" style={{ color: "var(--text-tertiary)" }}>
+                    Type a couple of letters — matches show up here.
+                  </p>
+                )}
                 {showResults && gResults.map((r) => (
                   <ResultRow key={r.placeId} r={r} onPick={() => addGoogle(r, "search")} />
                 ))}

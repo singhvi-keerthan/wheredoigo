@@ -173,8 +173,14 @@ body {
    app actually has. :focus-visible rather than :focus, so it answers the
    keyboard and stays out of the way of a thumb; .press already confirms a tap
    by scaling. Applied at :where() specificity so any component can override it
-   without an !important. */
-:where(a, button, input, textarea, select, summary, [tabindex]):focus-visible {
+   without an !important.
+
+   Text fields are deliberately NOT in this list. Every field in the app is a
+   bare transparent input inside a rounded shell, so a ring drawn on the input's
+   own box lands INSIDE the shell — an amber band that cuts across the field the
+   moment you tap it and stays there the whole time you type. The caret already
+   says a text field has focus; the ring only said it louder, and wrong. */
+:where(a, button, select, summary, [tabindex]):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
