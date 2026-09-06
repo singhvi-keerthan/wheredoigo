@@ -26,11 +26,12 @@ export const metadata: Metadata = {
     description: "Where Keerthan has actually been — rated, priced, and the ones to skip.",
     images: ["/icon.png"],
   },
-  // A link he hands out — on a story, in a DM — not a page he publishes. Still
-  // one line to flip if he ever wants it in search results; leaving it here
-  // means an Instagram link does not also make his library permanently
-  // Google-cacheable.
-  robots: { index: false, follow: false },
+  // Indexable, deliberately, as of 2026-09-07. It was noindex while this was a
+  // link handed to individuals; it is now posted publicly and the point is for
+  // strangers to find it, which a link on a story cannot compound into and a
+  // search result can. Flipping this back is one line, but note that Google
+  // keeps what it has already cached for a while after.
+  robots: { index: true, follow: true },
 };
 
 export default async function SharePage() {

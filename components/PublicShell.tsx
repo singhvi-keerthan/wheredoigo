@@ -1,12 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { Search, MapPin } from "lucide-react";
+import Image from "next/image";
+import { Search, MapPin, X } from "lucide-react";
 import { displayState, type DisplayState, type Place } from "@/lib/types";
 import { cityLabel } from "@/lib/city";
+import { narrowToAsk, type DecideQuery } from "@/lib/decide";
+import { useSyncStatus } from "@/lib/sync/client";
 import MapView from "./MapView";
 import PublicPlaceCard from "./PublicPlaceCard";
 import PublicSearch from "./PublicSearch";
+import AskSheet from "./AskSheet";
+import SignUpSheet from "./SignUpSheet";
 
 // The share view: AppShell's map, with everything that writes taken out.
 //
@@ -18,6 +23,18 @@ import PublicSearch from "./PublicSearch";
 //
 // The one thing this screen has that the app doesn't is the stamp: how fresh
 // what you're looking at actually is.
+//
+// Ask is here too, and it is the whole point of the page rather than a feature
+// on it: it stands in for the phone call. Someone who would have texted "where
+// should I go for a birthday dinner under 1500" types that instead, and gets
+// back the places Keerthan has actually been, with what he paid and what he
+// rated them. It is scoped to THIS map and nothing else — no Swiggy, no
+// discovery, no library of their own — because swipe and the New/Both decks
+// live in the app, and answering as him is the only job this one has.
+//
+// It runs the same AskSheet the app runs, so the two can never drift into
+// meaning different things by the same name, and narrowToAsk does the
+// narrowing exactly as it does on the owner's map.
 
 type FilterKey = "all" | DisplayState;
 
@@ -50,6 +67,27 @@ export default function PublicShell({ places, updatedAgo }: { places: Place[]; u
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterKey>("all");
   const [searchOpen, setSearchOpen] = useState(false);
+  const [askOpen, setAskOpen] = useState(false);
+  const [askQuery, setAskQuery] = useState<DecideQuery | null>(null);
+  const [askSaid, setAskSaid] = useState("");
+  const [signUpOpen, setSignUpOpen] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  // Reading the map is free; asking it costs a model call on Keerthan's key, so
+  // Ask is the one thing on this screen that wants a name against it. Sign-up
+  // opens instead, and the ask opens the moment they're through it.
+  const sync = useSyncStatus();
+  // SignUpSheet reports every refusal through onToast — a short password, an
+  // unreachable server. Without somewhere to put them the form would just fail
+  // silently, so this screen needs the one piece of chrome the app already has.
+  const showToast = (m: string) => {
+    setToast(m);
+    window.setTimeout(() => setToast(null), 2800);
+  };
+  const openAsk = () => {
+    if (sync.connected) setAskOpen(true);
+    else setSignUpOpen(true);
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -62,10 +100,16 @@ export default function PublicShell({ places, updatedAgo }: { places: Place[]; u
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const visible = useMemo(
-    () => (filter === "all" ? places : places.filter((p) => displayState(p) === filter)),
-    [places, filter]
-  );
+  // One pass, two answers — the pins, and whether the ask could actually be
+  // CONFIRMED against these places or whether they are merely the nearest
+  // things to it. Both have to come from the SAME call over the SAME
+  // rail-filtered set, exactly as AppShell does it.
+  const asked = useMemo(() => {
+    const byRail = filter === "all" ? places : places.filter((p) => displayState(p) === filter);
+    if (!askQuery) return { places: byRail, confident: true };
+    return narrowToAsk(byRail, askQuery, 1);
+  }, [places, filter, askQuery]);
+  const visible = asked.places;
   const selected = useMemo(() => visible.find((p) => p.id === selectedId) ?? null, [visible, selectedId]);
 
   return (
@@ -92,10 +136,33 @@ export default function PublicShell({ places, updatedAgo }: { places: Place[]; u
             wheredoigokeerthan
           </h1>
           <p className="mt-1.5 text-[11px]" style={{ color: "#5b6470" }}>
-            <span style={{ fontFamily: "var(--font-mono)", color: "#16181d", fontWeight: 500 }}>{places.length}</span>{" "}
-            {places.length === 1 ? "place" : "places"}
-            {where && ` · ${where}`}
-            {updatedAgo && ` · updated ${updatedAgo}`}
+            <span style={{ fontFamily: "var(--font-mono)", color: "#16181d", fontWeight: 500 }}>
+              {askQuery ? visible.length : places.length}
+            </span>{" "}
+            {(askQuery ? visible.length : places.length) === 1 ? "place" : "places"}
+            {askQuery ? (
+              /* An ask is hiding pins, so the line that says what you are
+                 looking at has to admit it — and be the way back. Same shape
+                 the app uses; no new chrome for the same job. */
+              <button
+                onClick={() => {
+                  setAskQuery(null);
+                  setAskSaid("");
+                }}
+                className="press ml-1 inline-flex max-w-[52vw] items-center gap-1 align-middle"
+                style={{ color: "#16181d" }}
+              >
+                <span className="truncate">
+                  · {asked.confident ? "" : "closest to "}“{askSaid}”
+                </span>
+                <X size={10} strokeWidth={3} className="shrink-0" />
+              </button>
+            ) : (
+              <>
+                {where && ` · ${where}`}
+                {updatedAgo && ` · updated ${updatedAgo}`}
+              </>
+            )}
           </p>
         </div>
 
@@ -140,6 +207,30 @@ export default function PublicShell({ places, updatedAgo }: { places: Place[]; u
       ) : (
         <div className="fixed inset-x-0 bottom-0 z-10">
           <div className="relative flex items-center gap-2.5 px-[18px] pb-2">
+            {/* Ask sits where it sits in the app — left of the filter tray — so
+                the two screens don't teach different muscle memory. */}
+            <button
+              onClick={openAsk}
+              aria-label="Ask Keerthan"
+              className="press grid shrink-0 place-items-center overflow-hidden"
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: "50%",
+                background: askQuery ? "var(--accent)" : "oklch(0.97 0 0)",
+                border: "1px solid rgba(255,255,255,0.48)",
+                boxShadow: "0 8px 22px -8px rgba(0,0,0,0.5)",
+              }}
+            >
+              <Image
+                src="/decide-mascot.png"
+                alt=""
+                width={36}
+                height={36}
+                className="h-full w-full object-cover"
+                draggable={false}
+              />
+            </button>
             <div
               className="min-w-0 flex-1"
               style={{ ...GLASS, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1px 3px", borderRadius: 18 }}
@@ -206,7 +297,40 @@ export default function PublicShell({ places, updatedAgo }: { places: Place[]; u
         </div>
       )}
 
+      {toast && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-[max(6.5rem,env(safe-area-inset-bottom))] z-[60] flex justify-center px-6">
+          <p
+            className="max-w-[320px] rounded-full px-4 py-2 text-center text-[13px] font-medium"
+            style={{ ...GLASS, color: "oklch(0.96 0 0)" }}
+          >
+            {toast}
+          </p>
+        </div>
+      )}
+
       <PublicSearch open={searchOpen} places={places} onClose={() => setSearchOpen(false)} onPick={(id) => setSelectedId(id)} />
+
+      <AskSheet
+        open={askOpen}
+        onClose={() => setAskOpen(false)}
+        onApply={(q, said) => {
+          setAskQuery(q);
+          setAskSaid(said);
+          setSelectedId(null);
+        }}
+      />
+
+      {signUpOpen && (
+        <SignUpSheet
+          reason="ask"
+          onClose={() => setSignUpOpen(false)}
+          onDone={() => {
+            setSignUpOpen(false);
+            setAskOpen(true); // straight into what they came for
+          }}
+          onToast={showToast}
+        />
+      )}
     </main>
   );
 }

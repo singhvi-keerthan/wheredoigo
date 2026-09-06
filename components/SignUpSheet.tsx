@@ -40,9 +40,12 @@ const WHY: Record<SignUpReason, { title: string; line: string }> = {
     title: "Swipe needs a map",
     line: "Swipe mode keeps what you like and drops what you don’t, so it needs somewhere to keep it.",
   },
+  // Not "sign up to use a feature" — this is the thing they actually came for.
+  // Ask on the share view answers AS Keerthan, out of the places he has been,
+  // which is the text message it replaces.
   ask: {
-    title: "Ask your own map",
-    line: "Ask searches places you’ve saved. Make a map first and it has something to search.",
+    title: "Ask Keerthan",
+    line: "Say what you’re after and this answers from his map — where he’s actually been, what he paid, what he’d skip. Takes a phone number and a password.",
   },
 };
 
@@ -238,8 +241,8 @@ export default function SignUpSheet({
             <p className="mt-2 flex gap-1.5 text-[12px] leading-snug" style={{ color: "var(--text-tertiary)" }}>
               <AlertTriangle size={13} className="mt-[1px] shrink-0" style={{ color: "oklch(0.75 0.15 85)" }} />
               <span>
-                No code is sent and your number isn’t verified — it just names your map. There’s no password reset, so pick one
-                you’ll remember.
+                No code is sent and your number isn’t verified — it names your map, and Keerthan can see that you signed up.
+                Pick a password you’ll remember; we’ll show you a recovery phrase next.
               </span>
             </p>
             <button
