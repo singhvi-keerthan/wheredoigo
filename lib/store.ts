@@ -651,7 +651,13 @@ export function restorePlaces(found: Place[]): number {
     // original stamp may predate rows already up there. Without it the push
     // would land behind the server-side last-write-wins guard and be dropped in
     // silence — the same silence that lost it the first time.
-    byId.set(p.id, { ...p, updatedAt: now, deletedAt: undefined });
+    //
+    // deletedAt is carried through rather than blanked. Blanking it made this
+    // function a resurrection primitive: hand it a tombstone and it returns a
+    // live place and pushes it everywhere. The caller already filters tombstones
+    // out (scanForLostData), so this changes nothing today and means the damage
+    // is not one bad call away tomorrow.
+    byId.set(p.id, { ...p, updatedAt: now });
     restored++;
   }
 

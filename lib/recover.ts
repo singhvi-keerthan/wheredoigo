@@ -307,6 +307,16 @@ export async function scanForLostData(live: Place[]): Promise<RecoveryReport> {
   for (const store of stores) {
     for (const p of store.places) {
       if (liveIds.has(p.id)) continue;
+      // A tombstone is a decision, not a loss.
+      //
+      // `live` carries tombstones, so a place deleted on THIS device is already
+      // excluded by the line above. This catches the other shape: a place whose
+      // only surviving copy is inside a set-aside store, carrying its own
+      // deletedAt. Without this it reads as missing, gets offered back, and
+      // restorePlaces would push it out to every device with a fresh timestamp
+      // — recovery quietly undoing a deletion, which is the one thing a
+      // recovery screen must never do.
+      if (p.deletedAt) continue;
       const seen = byId.get(p.id);
       const ts = (x: Place) => x.updatedAt ?? x.createdAt ?? "";
       if (!seen || ts(p) > ts(seen)) byId.set(p.id, p);
