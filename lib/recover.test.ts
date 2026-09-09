@@ -90,8 +90,10 @@ describe("salvagePlaces", () => {
       photos: [
         { id: "ph1", dataUrl: "", source: "mine", scope: "place", visitId: null, createdAt: "2026-01-01T00:00:00.000Z" },
       ],
-      visits: [{ id: "v1", at: "2026-01-01T00:00:00.000Z", createdAt: "2026-01-01T00:00:00.000Z" }],
-    } as Partial<Place>);
+      visits: [
+        { id: "v1", visitedOn: "2026-01-01", whoWith: "", notes: "", rating: null, createdAt: "2026-01-01T00:00:00.000Z" },
+      ],
+    });
     const raw = arrayOf(JSON.stringify(withNested), '{"hello":"world"}');
     const out = salvagePlaces(raw);
     expect(out.map((p) => p.id)).toEqual(["a"]);

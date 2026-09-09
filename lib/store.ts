@@ -215,11 +215,26 @@ function persistLS(places: Place[]) {
       )
     );
 
+  // Only a quota failure gets the drop-the-photos retry. Anything else — a
+  // malformed record blowing up in serialise(), say — is not a space problem,
+  // and telling someone to free space for it sends them to fix the wrong thing
+  // while their records genuinely are not saved. Safari reports quota as
+  // QuotaExceededError; older WebKit uses the legacy code 22 under a different
+  // name, which is why both are checked.
+  const isQuota = (e: unknown) =>
+    e instanceof DOMException && (e.name === "QuotaExceededError" || e.code === 22);
+
   try {
     window.localStorage.setItem(KEY, serialise(false));
     setPersistError(null);
     return;
-  } catch {
+  } catch (e) {
+    if (!isQuota(e)) {
+      setPersistError(
+        "Couldn’t save — something in your library wouldn’t write. Export a backup now, before adding anything else."
+      );
+      return;
+    }
     /* too big — fall through and try again without any photo bytes */
   }
 
@@ -644,7 +659,24 @@ export function restorePlaces(found: Place[]): number {
   const now = new Date().toISOString();
   let restored = 0;
 
-  for (const p of found) {
+  // These records come out of a store that FAILED to parse, salvaged one object
+  // at a time and accepted on four fields (id/name/lat/lng). Everything else may
+  // be missing, and commit() iterates `p.photos` while persistLS reads
+  // `p.photos.length` — both unguarded. A record with no photos array therefore
+  // throws inside commit's async block, so persistLS never runs: the merge lives
+  // only in memory, the screen has already said "N put back", the ids are in the
+  // dirty queue, and after a reload they are queued ids with no record behind
+  // them. The recovery tool would manufacture the exact state it exists to
+  // diagnose. Normalised here, at the one door these records come through.
+  const whole = (p: Place): Place => ({
+    ...p,
+    photos: Array.isArray(p.photos) ? p.photos : [],
+    visits: Array.isArray(p.visits) ? p.visits : [],
+    tags: Array.isArray(p.tags) ? p.tags : [],
+  });
+
+  for (const raw of found) {
+    const p = whole(raw);
     const existing = byId.get(p.id);
     if (existing && ts(existing) >= ts(p)) continue;
     // A fresh updatedAt, because the server has never seen this record and the

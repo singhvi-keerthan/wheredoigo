@@ -23,6 +23,7 @@
 // is the separate, explicit step.
 
 import type { Place } from "./types";
+import { SEED_PLACES } from "./seed";
 
 const PREFIX = "wheredoigokeerthan.";
 const LEGACY_PREFIX = "imhungry."; // pre-rename keys, deliberately left behind by lib/migrate.ts
@@ -227,25 +228,28 @@ async function openExisting(name: string): Promise<IDBDatabase | null> {
   }
   return new Promise((resolve) => {
     // No version: an open without one never triggers onupgradeneeded on an
-    // existing DB, and for a DB that does not exist we catch the creation and
-    // undo it.
+    // existing DB. On a DB that does NOT exist it fires, and the fix is to
+    // abort the version-change transaction rather than create-then-delete.
+    //
+    // Create-then-delete was a real hazard, not a tidiness point. It left an
+    // empty "wheredoigokeerthan" DB at version 1 with no `photos` store for as
+    // long as the unawaited deleteDatabase took — and photoStore.openDb() opens
+    // that exact name AT version 1, so a call landing in the window would find
+    // the version already satisfied, never fire onupgradeneeded, never create
+    // the store, and throw NotFoundError on every photo read and write for the
+    // rest of the session. Photos would then stay embedded in localStorage,
+    // which is precisely the quota pressure the rest of this work exists to
+    // relieve. A blocked delete leaves the empty DB permanently.
+    //
+    // Aborting the upgrade means the database is never created at all, and it
+    // does not depend on indexedDB.databases() being present.
     const req = indexedDB.open(name);
-    let created = false;
     req.onupgradeneeded = () => {
-      created = true;
+      req.transaction?.abort(); // → onerror; nothing is left behind
     };
     req.onerror = () => resolve(null);
     req.onblocked = () => resolve(null);
-    req.onsuccess = () => {
-      const db = req.result;
-      if (created) {
-        db.close();
-        indexedDB.deleteDatabase(name);
-        resolve(null);
-        return;
-      }
-      resolve(db);
-    };
+    req.onsuccess = () => resolve(req.result);
   });
 }
 
@@ -303,10 +307,25 @@ export async function scanForLostData(live: Place[]): Promise<RecoveryReport> {
   // Everything any store holds that the map does not. Deduped by id, newest
   // copy of a duplicate kept — two stores can hold the same place at different
   // ages, and the later edit is the one worth offering back.
+  // Shipped sample places, as read() would drop them.
+  //
+  // read() runs stripUntouchedSeeds, so a seed still identical to its fixture is
+  // absent from `live` — deliberately, it is not real data. But lib/migrate.ts
+  // leaves `imhungry.places.v1` on disk forever, and on a device old enough to
+  // have it that key still holds all six. Diffed against a stripped live set
+  // they look exactly like six lost places, and restoring them would stamp
+  // updatedAt — after which they no longer match a fixture, stripUntouchedSeeds
+  // can never remove them again, and they get pushed to the server as real.
+  // Offering someone their own sample data back as a recovery is a lie in both
+  // directions.
+  const fixtures = new Map(SEED_PLACES.map((s) => [s.id, JSON.stringify(s)]));
+  const untouchedSeed = (p: Place) => fixtures.get(p.id) === JSON.stringify(p);
+
   const byId = new Map<string, Place>();
   for (const store of stores) {
     for (const p of store.places) {
       if (liveIds.has(p.id)) continue;
+      if (untouchedSeed(p)) continue;
       // A tombstone is a decision, not a loss.
       //
       // `live` carries tombstones, so a place deleted on THIS device is already

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, RotateCcw, Download, HardDriveDownload, Check } from "lucide-react";
 import { snapshotForSync, restorePlaces } from "@/lib/store";
@@ -124,40 +124,77 @@ export default function RecoverShell() {
     }
   }, []);
 
-  // No state written before the first await, and nothing written after the
-  // screen is gone: an unmounted scan resolving into setState is a cascade the
-  // component can neither see nor use. Same shape as SwipeMode's deck load —
-  // the async work is declared inside the effect and only awaited results
-  // reach setState.
+  // One liveness flag for BOTH entry points, in a ref.
+  //
+  // The mount effect threaded its own `cancelled` and Scan again passed
+  // `() => true`, so a rescan still in flight when the screen closed resolved
+  // into setState on an unmounted component — the exact thing the effect's
+  // flag was written to prevent, reintroduced by the other caller. Shared, it
+  // holds for both.
+  const alive = useRef(true);
   useEffect(() => {
-    let cancelled = false;
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  // No state written before the first await, and nothing written after the
+  // screen is gone. Same shape as SwipeMode's deck load — the async work is
+  // declared inside the effect and only awaited results reach setState.
+  useEffect(() => {
     const first = async () => {
-      await scan(() => !cancelled);
+      await scan(() => alive.current);
     };
     void first();
-    return () => {
-      cancelled = true;
-    };
   }, [scan]);
 
-  // The Scan again button — an event handler, so the flip to "scanning" here is
-  // a response to a press rather than a render-time write.
+  // Scan again — an event handler, so the flip here is a response to a press
+  // rather than a render-time write. It deliberately does NOT set `scanning`:
+  // the whole report renders behind `report && !scanning`, so raising it would
+  // blank the screen back to its header and hide the result being refreshed.
   const run = useCallback(async () => {
-    setScanning(true);
     setFailed(null);
-    await scan(() => true);
+    await scan(() => alive.current);
   }, [scan]);
 
+  // Guarded, because the count is the entire answer this screen gives.
+  //
+  // putBack is async and IndexedDB-bound, and the button stayed live throughout.
+  // A second tap ran a second restore, which found everything already merged,
+  // returned 0, and overwrote the real count with "Nothing needed putting back"
+  // — the most alarming possible wrong answer on the one screen where the
+  // number matters. A rejection in hydratePhotos was unhandled and simply did
+  // nothing at all.
+  // The gate is the REF, not the state. Two taps inside one frame both run
+  // before React has re-rendered, so each reads `restoring === false` out of its
+  // own stale closure and `disabled` has not been applied to the button yet —
+  // measured, not assumed: with the state-only guard, a double click still
+  // restored 8 places and then reported "Nothing needed putting back". A ref
+  // updates synchronously, so the second tap sees the first. The state exists
+  // only to drive the label and the disabled attribute.
+  const restoringRef = useRef(false);
+  const [restoring, setRestoring] = useState(false);
   const putBack = async () => {
-    if (!report?.missing.length) return;
-    // Photo bytes come back with the record. They are in IndexedDB keyed by
-    // photo id and the recovered record still names them, so a restore without
-    // this step would return a set of empty frames.
-    const withPhotos = await hydratePhotos(report.missing);
-    const n = restorePlaces(withPhotos);
-    setRestored(n);
-    void sync(); // these never reached the server — send them now
-    await run();
+    if (restoringRef.current || !report?.missing.length) return;
+    restoringRef.current = true;
+    setRestoring(true);
+    try {
+      // Photo bytes come back with the record. They are in IndexedDB keyed by
+      // photo id and the recovered record still names them, so a restore without
+      // this step would return a set of empty frames.
+      const withPhotos = await hydratePhotos(report.missing);
+      const n = restorePlaces(withPhotos);
+      if (!alive.current) return;
+      setRestored(n);
+      void sync(); // these never reached the server — send them now
+      await run();
+    } catch (e) {
+      if (alive.current) setFailed(e instanceof Error ? e.message : String(e));
+    } finally {
+      restoringRef.current = false;
+      if (alive.current) setRestoring(false);
+    }
   };
 
   const downloadFound = () => {
@@ -168,7 +205,12 @@ export default function RecoverShell() {
       scannedAt: new Date().toISOString(),
       missing: report.missing,
       danglingDirty: report.danglingDirty,
-      orphanPhotos: report.photos.orphans,
+      // Ids and sizes, NOT the bytes. Every orphan's base64 is already held in
+      // state to render the grid; stringifying it again here builds a second
+      // full copy in memory to hand to the Blob, on a phone, at the moment the
+      // person is already in trouble. The photos have their own way out — tap
+      // one, press and hold, save — and this file is for the records.
+      orphanPhotos: report.photos.orphans.map((o) => ({ id: o.id, db: o.db, bytes: o.bytes })),
       stores: report.stores.map((s) => ({
         key: s.key,
         kind: s.kind,
@@ -190,9 +232,22 @@ export default function RecoverShell() {
     report && !report.missing.length && !report.photos.orphans.length && !report.danglingDirty.length;
 
   return (
+    // Its own scroll container, because body has none.
+    //
+    // globals.css sets `body { margin: 0; overflow: hidden }` over `html, body
+    // { height: 100% }`, so nothing scrolls the document — every full-screen
+    // surface in the app brings its own scroller (MenuSheet and PlaceDetail
+    // cap at 92dvh with overflow-y-auto; PublicShell pins 100dvh). This screen
+    // shipped with `min-h-full` and no scroller, which on a phone clipped it at
+    // one viewport with no way to reach the rest: past about three found
+    // places the "Put N back" button itself was off-screen, and the photo grid,
+    // the audit list and both footer buttons were unreachable in every case.
+    //
+    // It survived review because a full-page screenshot renders the whole
+    // document regardless of overflow — the one check that could not see this.
     <main
-      className="min-h-full w-full"
-      style={{ background: "var(--bg-base)", color: "var(--text-primary)" }}
+      className="scroll-quiet w-full overflow-y-auto overscroll-contain"
+      style={{ height: "100dvh", background: "var(--bg-base)", color: "var(--text-primary)" }}
     >
       <div className="mx-auto w-full max-w-[560px] px-5 pb-24 pt-[max(1rem,env(safe-area-inset-top))]">
         <Link
@@ -268,16 +323,19 @@ export default function RecoverShell() {
                 </div>
                 <button
                   onClick={putBack}
+                  disabled={restoring}
                   className="press mt-3 inline-flex w-full items-center justify-center gap-2 py-3 text-[14px] font-bold"
                   style={{
                     background: "oklch(0.97 0 0)",
                     color: "oklch(0.16 0.006 260)",
                     border: "none",
                     borderRadius: "var(--radius-chip)",
-                    cursor: "pointer",
+                    cursor: restoring ? "default" : "pointer",
+                    opacity: restoring ? 0.6 : 1,
                   }}
                 >
-                  <RotateCcw size={15} /> Put {report.missing.length} back on the map
+                  <RotateCcw size={15} />{" "}
+                  {restoring ? "Putting them back…" : `Put ${report.missing.length} back on the map`}
                 </button>
               </section>
             )}
@@ -311,6 +369,8 @@ export default function RecoverShell() {
                       <img
                         src={ph.dataUrl}
                         alt=""
+                        loading="lazy"
+                        decoding="async"
                         className="h-full w-full object-cover"
                         draggable={false}
                       />
