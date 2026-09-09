@@ -15,10 +15,12 @@ import type { Place } from "@/lib/types";
 // provably clean and the phone had no interface for its own leftovers, so the
 // honest answer was "gone" without anyone ever having looked.
 //
-// It is deliberately a whole screen at a typed URL rather than a Menu row: this
-// is a thing you reach for on a bad day, from a phone, possibly reading the URL
-// off another screen — and it should not cost a row in a menu everyone else
-// sees on a good day.
+// It is a whole screen rather than a sheet because it reports rather than asks:
+// several findings, each needing room to be read before anything is decided.
+// It is reached from the Menu (Backup → Find missing places) rather than by
+// typing the URL, because the device that most needs it is an installed PWA —
+// which has no address bar, and whose storage container iOS keeps separate from
+// Safari's. See app/app/recover/page.tsx.
 //
 // Nothing here writes until you press Put back. The scan is read-only.
 

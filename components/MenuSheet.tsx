@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { X, Images, Store, UtensilsCrossed, MapPinned, Pizza, Download, Upload, ChevronRight, Compass } from "lucide-react";
+import Link from "next/link";
+import { X, Images, Store, UtensilsCrossed, MapPinned, Pizza, Download, Upload, ChevronRight, Compass, LifeBuoy } from "lucide-react";
 import { usePlaces, downloadBackup, importData } from "@/lib/store";
 import type { TagNamespace } from "@/lib/types";
 import type { BrowseMode } from "./BrowseSheet";
@@ -209,6 +210,43 @@ export default function MenuSheet({
             </span>
             <ChevronRight size={17} style={{ color: "var(--text-tertiary)" }} />
           </button>
+
+          {/* Recovery has to be reachable from IN HERE, and the reason is iOS.
+              It shipped as a typed URL on the theory that a screen for a bad day
+              should not take a row on a good one. That theory only works in a
+              browser. A home-screen web clip runs in standalone display mode
+              with no address bar, so from the installed app the URL cannot be
+              typed at all — and the phone is exactly where someone is standing
+              when they need this.
+
+              Worse than unreachable: reachable and WRONG. iOS gives a web clip
+              its own storage container, separate from Safari's — the isolation
+              behind every "my PWA won't stay logged in" complaint. The scan
+              reads localStorage and IndexedDB, so run from Safari it reads a
+              different, near-empty container and truthfully reports finding
+              nothing. A false negative on the one question being asked, dressed
+              in the honest empty state. It has to run where the data lives.
+
+              A Link, not an <a>: same-origin and inside the manifest's "/"
+              scope, so it navigates within the installed app instead of kicking
+              the person out to Safari — which would land them right back in the
+              wrong container. */}
+          <Link
+            href="/app/recover"
+            className="press flex w-full items-center gap-3 rounded-[var(--radius)] px-3.5 py-3 text-left no-underline"
+            style={{ background: "var(--bg-elevated)", border: "1px solid var(--ink-line)" }}
+          >
+            <LifeBuoy size={18} style={{ color: "var(--text-secondary)" }} />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[15px] font-semibold" style={{ color: "var(--text-primary)" }}>
+                Find missing places
+              </span>
+              <span className="block text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>
+                Looks for places this device still has but isn’t showing
+              </span>
+            </span>
+            <ChevronRight size={17} style={{ color: "var(--text-tertiary)" }} />
+          </Link>
         </div>
 
         {/* Dining attribution — same reason as the map one below: Cl. 3.4(ii) of
