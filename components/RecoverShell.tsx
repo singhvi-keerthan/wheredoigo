@@ -245,9 +245,19 @@ export default function RecoverShell() {
     //
     // It survived review because a full-page screenshot renders the whole
     // document regardless of overflow — the one check that could not see this.
+    // Height comes from --app-viewport-h, not a raw 100dvh. The app pins that
+    // token to 100lvh under display-mode: standalone, and that override was not
+    // free — it is what earlier rounds landed on after iOS measured the deck
+    // against the wrong viewport and sliced a status bar off it. This screen is
+    // opened from the installed app more than anywhere else, so it is the last
+    // place to answer "how tall is the visible area" differently from the rest.
     <main
       className="scroll-quiet w-full overflow-y-auto overscroll-contain"
-      style={{ height: "100dvh", background: "var(--bg-base)", color: "var(--text-primary)" }}
+      style={{
+        height: "var(--app-viewport-h)",
+        background: "var(--bg-base)",
+        color: "var(--text-primary)",
+      }}
     >
       <div className="mx-auto w-full max-w-[560px] px-5 pb-24 pt-[max(1rem,env(safe-area-inset-top))]">
         <Link
