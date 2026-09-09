@@ -486,6 +486,24 @@ export function setPhotoBlobUrl(placeId: string, photoId: string, blobUrl: strin
 // in-memory cache for display. Not persisted or dirtied — the bytes live in IDB
 // (written by the caller) and re-hydrate from there on next boot.
 export function applyRemotePhoto(photoId: string, dataUrl: string): void {
+  // Register the id FIRST, and before the `found` check.
+  //
+  // The caller (downloadPhotos in lib/sync/client.ts) has already written these
+  // bytes to IndexedDB — it is the only idbPutPhoto call outside this file, and
+  // it could not reach `idbStored`, which is module-private here. So a photo
+  // pulled from Blob was safely in the photo store and still looked unconfirmed
+  // to persistLS, which therefore kept its FULL base64 in the localStorage copy
+  // for the rest of the session. Every downloaded photo silently added
+  // 200–500KB to a snapshot with a ~5MB ceiling, for no benefit: the bytes were
+  // already stored. It corrected itself on the next boot, when scheduleInit
+  // reads every key out of IndexedDB — which is exactly why it never showed up
+  // as a reproducible bug, only as a device that ran out of room mid-session.
+  //
+  // Before the `found` check because the bytes are in IndexedDB either way; a
+  // photo whose place is missing is precisely the case that must not leave the
+  // set stale.
+  idbStored.add(photoId);
+
   let found = false;
   const next = read().map((p) => {
     if (!p.photos.some((ph) => ph.id === photoId && !ph.dataUrl)) return p;
