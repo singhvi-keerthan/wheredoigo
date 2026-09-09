@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ArrowLeft, RotateCcw, Download, HardDriveDownload, Check } from "lucide-react";
 import { snapshotForSync, restorePlaces } from "@/lib/store";
 import { scanForLostData, hydratePhotos, type RecoveryReport, type OrphanPhoto } from "@/lib/recover";
-import { sync } from "@/lib/sync/client";
+import { sync, serverSummary, type ServerSummary } from "@/lib/sync/client";
 import type { Place } from "@/lib/types";
 
 // The screen that looks in the places the app writes to and never reads back.
@@ -110,6 +110,15 @@ export default function RecoverShell() {
   const [viewing, setViewing] = useState<OrphanPhoto | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
 
+  // The server's own count, asked separately and never blocking the local scan.
+  //
+  // "checking" is a real state worth rendering: it is the only part of this
+  // screen that takes long enough to see, and seeing it is what tells someone
+  // the screen went and looked rather than shrugging instantly.
+  const [server, setServer] = useState<
+    { state: "checking" | "off" | "ok" | "error"; data?: ServerSummary; error?: string }
+  >({ state: "checking" });
+
   // Measured against the FULL local set, tombstones included — a place deleted
   // on purpose is not a place that went missing, and offering to put it back
   // would undo a decision.
@@ -149,14 +158,41 @@ export default function RecoverShell() {
     void first();
   }, [scan]);
 
+  // Deliberately its own effect, not awaited inside the scan: a slow or failed
+  // network call must never delay or break the local read, which is the part
+  // that actually answers the question.
+  // No synchronous setState before the first await — the state already starts
+  // at "checking", so the mount path has nothing to set. Raising it again is
+  // only meaningful when Scan again re-asks, and that runs from a press.
+  const askServer = useCallback(async () => {
+    try {
+      const data = await serverSummary();
+      if (!alive.current) return;
+      setServer(data ? { state: "ok", data } : { state: "off" });
+    } catch (e) {
+      if (alive.current) setServer({ state: "error", error: e instanceof Error ? e.message : String(e) });
+    }
+  }, []);
+
+  useEffect(() => {
+    const ask = async () => {
+      await askServer();
+    };
+    void ask();
+  }, [askServer]);
+
   // Scan again — an event handler, so the flip here is a response to a press
   // rather than a render-time write. It deliberately does NOT set `scanning`:
   // the whole report renders behind `report && !scanning`, so raising it would
   // blank the screen back to its header and hide the result being refreshed.
   const run = useCallback(async () => {
     setFailed(null);
+    // Both halves again, so "Scan again" refreshes the whole receipt rather
+    // than leaving a stale server count beside a fresh local one.
+    setServer({ state: "checking" });
+    void askServer();
     await scan(() => alive.current);
-  }, [scan]);
+  }, [scan, askServer]);
 
   // Guarded, because the count is the entire answer this screen gives.
   //
@@ -275,9 +311,11 @@ export default function RecoverShell() {
           Recovery
         </h1>
         <p className="mt-2 text-[13.5px] leading-snug" style={{ color: "var(--text-secondary)" }}>
-          Looks in the places this app writes to and never reads back — set-aside copies of an
-          unreadable library, photos whose place is gone, and anything queued to sync that has
-          nothing behind it. Nothing is changed until you press Put back.
+          Looks on <strong style={{ color: "var(--text-primary)", fontWeight: 600 }}>this device</strong>,
+          in the places the app writes to and never reads back — set-aside copies of an unreadable
+          library, photos whose place is gone, and anything queued to sync with nothing behind it.
+          Reading local storage takes milliseconds, so there is nothing to watch. The server is
+          counted separately at the bottom. Nothing is changed until you press Put back.
         </p>
 
         {scanning && (
@@ -433,6 +471,33 @@ export default function RecoverShell() {
                   <li className="text-[12.5px]" style={{ color: "var(--text-secondary)" }}>
                     <span style={{ fontFamily: "var(--font-mono)" }}>{report.photos.total}</span>
                     {` photo${report.photos.total === 1 ? "" : "s"} in this device’s photo store`}
+                  </li>
+                  {/* The server, asked separately. Everything above this line is
+                      read off the device with no network call at all; this is
+                      the only row that leaves it, and it says so. */}
+                  <li className="text-[12.5px] leading-snug" style={{ color: "var(--text-secondary)" }}>
+                    {server.state === "checking" && (
+                      <span style={{ color: "var(--text-tertiary)" }}>asking the server…</span>
+                    )}
+                    {server.state === "off" && (
+                      <span style={{ color: "var(--text-tertiary)" }}>
+                        not syncing on this device — nothing on a server to check
+                      </span>
+                    )}
+                    {server.state === "error" && (
+                      <span style={{ color: "oklch(0.75 0.15 60)" }}>
+                        couldn’t reach the server ({server.error}) — the scan above is unaffected
+                      </span>
+                    )}
+                    {server.state === "ok" && server.data && (
+                      <>
+                        <span style={{ fontFamily: "var(--font-mono)" }}>{server.data.places}</span>
+                        {` place${server.data.places === 1 ? "" : "s"} on the server`}
+                        <span style={{ color: "var(--text-tertiary)" }}>
+                          {server.data.updatedAt ? `, last written ${fmtDate(server.data.updatedAt)}` : ", never written"}
+                        </span>
+                      </>
+                    )}
                   </li>
                 </ul>
                 {report.errors.length > 0 && (

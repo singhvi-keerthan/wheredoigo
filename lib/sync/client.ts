@@ -561,6 +561,41 @@ export function ownerToken(): string | null {
   return owner ?? lsGet(OWNER_KEY);
 }
 
+// What the SERVER holds for this device's library — counts only, no records.
+//
+// For the recovery screen, which is otherwise entirely local: it reads
+// localStorage and IndexedDB and makes no network call at all. That is the
+// right design (the records that went missing were never on the server, so
+// asking it re-answers a settled question) but it left the screen silent about
+// the half of the system the person is most likely to be wondering about, and
+// "did this actually look anywhere?" is a fair thing to wonder when a local
+// scan finishes in a few milliseconds.
+//
+// Reuses the probe endpoint, which returns { exists, places, updatedAt } and
+// never returns records. A real owner key is not charged against the
+// anti-guessing budget — only lookups that match NOTHING are — so a library's
+// own device can ask this freely.
+export interface ServerSummary {
+  places: number;
+  updatedAt: string | null;
+}
+
+export async function serverSummary(): Promise<ServerSummary | null> {
+  // ownerToken(), NOT the bare `owner`. The module-level variable is populated
+  // by startSync(), which runs from SyncBoot — and the root layout renders
+  // {children} BEFORE <SyncBoot />, so a page's own mount effect fires first.
+  // Reading `owner` there is reading null, and this reported "not syncing on
+  // this device" to an owner who is plainly syncing. Caught in a browser, not
+  // by types: it fails silently and looks like a truthful answer, which is the
+  // worst way for a diagnostic to be wrong.
+  const key = ownerToken();
+  if (!key) return null; // genuinely not syncing — nothing on a server to ask about
+  const res = await fetchT(`/api/sync?probe=1`, { headers: { Authorization: `Bearer ${key}` } });
+  if (!res.ok) throw new Error(`server check failed (${res.status})`);
+  const body = (await res.json()) as ProbeReply;
+  return { places: body.places ?? 0, updatedAt: body.updatedAt ?? null };
+}
+
 // Stop syncing on this device. Local data is untouched; server data remains.
 export function disconnect(): void {
   owner = null;
