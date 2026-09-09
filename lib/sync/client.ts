@@ -51,6 +51,16 @@ export interface SyncStatus {
   lastSyncedAt: string | null;
   error: string | null;
   pending: number; // unpushed local changes
+  // Queued ids whose record is not on this device any more.
+  //
+  // push() sends `dirty` filtered against the records it can actually see, so
+  // an id with nothing behind it produces no row, is never accepted, and is
+  // never cleared — it just sits in the queue inflating `pending` forever.
+  // Every one of them is a place that was added and then lost before it went
+  // up, and until this counter existed that was invisible: the app knew, and
+  // said nothing. Surfaced, not silently dropped — /app/recover looks for what
+  // is left of them.
+  lost: number;
 }
 
 // ---- status (subscribable) -------------------------------------------------
@@ -60,6 +70,7 @@ let status: SyncStatus = {
   lastSyncedAt: null,
   error: null,
   pending: 0,
+  lost: 0,
 };
 const statusListeners = new Set<() => void>();
 function setStatus(patch: Partial<SyncStatus>) {
@@ -239,9 +250,27 @@ async function postBatch(rows: unknown[], extra: { phone?: string | null; alias?
 }
 
 async function push(): Promise<void> {
-  if (!owner || !dirty.size) return;
+  if (!owner) return;
+  if (!dirty.size) {
+    // An empty queue cannot be holding anything lost. Without this the warning
+    // would be sticky: cleared by nothing, it would outlive the condition it
+    // describes and go on accusing the app of a loss that had been resolved.
+    if (status.lost) setStatus({ lost: 0 });
+    return;
+  }
   const sending = new Set(dirty);
-  const rows = snapshotForSync()
+  const local = snapshotForSync();
+
+  // Queued ids with no record behind them. Counted BEFORE the send, because
+  // afterwards they are indistinguishable from ids that simply haven't landed
+  // yet — and the difference matters: one is a request in flight, the other is
+  // a place that no longer exists anywhere. They stay in the queue rather than
+  // being quietly deleted, because the id is the last trace of what was lost.
+  const known = new Set(local.map((p) => p.id));
+  const lost = [...sending].filter((id) => !known.has(id));
+  if (lost.length !== status.lost) setStatus({ lost: lost.length });
+
+  const rows = local
     .filter((p) => sending.has(p.id))
     .map((p) => ({
       id: p.id,
@@ -542,5 +571,5 @@ export function disconnect(): void {
   lsDel(PHRASE_KEY);
   lsDel(ACCOUNT_KEY);
   siteOwner = null;
-  setStatus({ connected: false, state: "disabled", pending: 0, error: null, lastSyncedAt: null });
+  setStatus({ connected: false, state: "disabled", pending: 0, lost: 0, error: null, lastSyncedAt: null });
 }

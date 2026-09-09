@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { RefreshCw, ChevronRight, Copy, Check, Eye, EyeOff, AlertTriangle } from "lucide-react";
 import {
   useSyncStatus,
@@ -195,6 +196,27 @@ export default function SyncSection({ onToast }: { onToast: (m: string) => void 
             Disconnect
           </button>
         </div>
+
+        {/* Queued changes with no record behind them any more.
+            Until this row existed the app knew and said nothing: push() drops
+            them from every batch, so they never send and never clear, and the
+            only symptom was a pending count that would not come down. Each one
+            is a place that was added and then lost before it went up. */}
+        {status.lost > 0 && (
+          <Link
+            href="/app/recover"
+            className="press flex items-center gap-2.5 border-t px-3.5 py-2.5"
+            style={{ borderColor: "var(--ink-line)" }}
+          >
+            <AlertTriangle size={15} className="shrink-0" style={{ color: "var(--s-favorite)" }} />
+            <span className="min-w-0 flex-1 text-[12.5px] leading-snug" style={{ color: "var(--text-secondary)" }}>
+              {status.lost} change{status.lost > 1 ? "s" : ""} waiting to sync{" "}
+              {status.lost > 1 ? "have" : "has"} no place left on this device. Look for what&rsquo;s
+              left of {status.lost > 1 ? "them" : "it"}.
+            </span>
+            <ChevronRight size={15} className="shrink-0" style={{ color: "var(--text-tertiary)" }} />
+          </Link>
+        )}
 
         {/* Setting up a second device is the ONLY reason anyone needs the phrase
             after connecting, and the old build made that the one thing it could

@@ -183,17 +183,73 @@ function scheduleInit(persistNeeded: boolean) {
 }
 
 // Write records to localStorage with IDB-backed photo bytes stripped out.
+//
+// Two attempts, and the second one is the whole point.
+//
+// The first writes what commit() built: records, with bytes dropped for every
+// photo IndexedDB has confirmed. A photo whose IDB write has not landed — or
+// failed — is still carrying its full base64 string here, 200–500KB of it,
+// against a ~5MB localStorage ceiling. Four of those in one sitting is enough
+// to throw, and when setItem throws NOTHING is written: the records live only
+// in memory, look completely fine until the tab reloads, and are gone after it.
+// That is how an evening of places disappears without a single error the person
+// had a chance to act on.
+//
+// So the retry drops every dataUrl, confirmed or not, and re-offers the
+// unconfirmed bytes to IndexedDB on the way past. Photo bytes are recoverable —
+// from IndexedDB, from Blob once sync uploads them, from the camera roll. A
+// place record is recoverable from nowhere. Given a forced choice between the
+// two, this one is not close.
 function persistLS(places: Place[]) {
-  try {
-    const slim = places.map((p) =>
-      p.photos.length
-        ? { ...p, photos: p.photos.map((ph) => (idbStored.has(ph.id) ? { ...ph, dataUrl: "" } : ph)) }
-        : p
+  const serialise = (stripAll: boolean) =>
+    JSON.stringify(
+      places.map((p) =>
+        p.photos.length
+          ? {
+              ...p,
+              photos: p.photos.map((ph) =>
+                stripAll || idbStored.has(ph.id) ? { ...ph, dataUrl: "" } : ph
+              ),
+            }
+          : p
+      )
     );
-    window.localStorage.setItem(KEY, JSON.stringify(slim));
+
+  try {
+    window.localStorage.setItem(KEY, serialise(false));
     setPersistError(null);
+    return;
   } catch {
-    setPersistError("Couldn’t save — device storage is full. Export a backup, then free up space.");
+    /* too big — fall through and try again without any photo bytes */
+  }
+
+  // One more chance at a home for the bytes about to be stripped. Best effort
+  // and deliberately not awaited: the records are the thing being rescued here
+  // and they must not wait on the photo store to answer.
+  if (idbAvailable()) {
+    for (const p of places) {
+      for (const ph of p.photos) {
+        if (!ph.dataUrl || idbStored.has(ph.id)) continue;
+        idbPutPhoto(ph.id, ph.dataUrl)
+          .then(() => idbStored.add(ph.id))
+          .catch(() => {});
+      }
+    }
+  }
+
+  try {
+    window.localStorage.setItem(KEY, serialise(true));
+    // Careful with this wording: the retry above re-offers the bytes to
+    // IndexedDB but cannot wait for the answer, so "your photos are safe" is a
+    // promise this line is not in a position to make. It says what is certainly
+    // true — the records are saved — and names the risk instead of soothing it.
+    setPersistError(
+      "Storage filled up. Your places are saved, but the photos you just added might not be. Sync or export a backup before closing the app."
+    );
+  } catch {
+    setPersistError(
+      "Couldn’t save — device storage is full and nothing new is being kept. Export a backup now, before adding anything else."
+    );
   }
 }
 
@@ -550,6 +606,39 @@ export function importData(text: string): number {
     commitTags({ ...EMPTY_VOCAB, ...(b.tags as Partial<TagVocab>) });
   }
   return b.places.length;
+}
+
+// Put recovered records back, MERGING rather than replacing.
+//
+// Deliberately not importData(). That one replaces the whole library, which is
+// right for restoring a backup file and catastrophic here: recovery runs on a
+// device that still holds a working map, and the found records are a handful
+// that fell out of it. Replacing would trade a small loss for a total one.
+//
+// A record already present wins if it is newer, so re-running this can't undo
+// an edit made since. Everything actually written goes through commit(), so the
+// sync engine sees it as a local change and pushes it — which is the whole
+// point: these are records that never reached the server.
+export function restorePlaces(found: Place[]): number {
+  if (!found.length) return 0;
+  const byId = new Map(read().map((p) => [p.id, p]));
+  const ts = (p: Place) => p.updatedAt ?? p.createdAt ?? "";
+  const now = new Date().toISOString();
+  let restored = 0;
+
+  for (const p of found) {
+    const existing = byId.get(p.id);
+    if (existing && ts(existing) >= ts(p)) continue;
+    // A fresh updatedAt, because the server has never seen this record and the
+    // original stamp may predate rows already up there. Without it the push
+    // would land behind the server-side last-write-wins guard and be dropped in
+    // silence — the same silence that lost it the first time.
+    byId.set(p.id, { ...p, updatedAt: now, deletedAt: undefined });
+    restored++;
+  }
+
+  if (restored) commit(Array.from(byId.values()));
+  return restored;
 }
 
 // ---- Duplicate guard ------------------------------------------------------
