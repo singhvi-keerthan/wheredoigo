@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildDeck } from "./deck";
+import { buildDeck, refreshSavedCardPhotos } from "./deck";
 import type { SwiggyRestaurant } from "./swiggy";
 import type { Place } from "./types";
 
@@ -332,6 +332,79 @@ describe("buildDeck — Both", () => {
     const seen = new Set([`saved:${s1.id}`]);
     const cards = buildDeck({ source: "both", places: [s1, s2], query: {}, swiggy: [n1, n2, n3], seed: 1, seen });
     expect(cards.map((c) => c.key)).toEqual([`saved:${s2.id}`, `new:${n1.id}`, `new:${n2.id}`, `new:${n3.id}`]);
+  });
+});
+
+describe("refreshSavedCardPhotos", () => {
+  const photo = {
+    id: "photo-1",
+    dataUrl: "",
+    source: "mine" as const,
+    scope: "place" as const,
+    visitId: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+
+  it("hydrates a Saved card without changing its rank metadata or a New card", () => {
+    const place = mk({ photos: [photo], googleRating: 4.4 });
+    const restaurant = sw({ photo: "https://example.com/new.jpg" });
+    const original = buildDeck({
+      source: "both",
+      places: [place],
+      query: {},
+      swiggy: [restaurant],
+      seed: 1,
+      seen: new Set(),
+    });
+    const hydrated = { ...place, photos: [{ ...photo, dataUrl: "data:image/jpeg;base64,aGVsbG8=" }] };
+
+    const refreshed = refreshSavedCardPhotos(original, [hydrated]);
+
+    expect(refreshed).not.toBe(original);
+    expect(refreshed.map((card) => card.key)).toEqual(original.map((card) => card.key));
+    expect(refreshed[1]).toBe(original[1]);
+    expect(refreshed[0]).toMatchObject({
+      key: original[0]?.key,
+      score: original[0]?.score,
+      reasons: original[0]?.reasons,
+      place: { photos: hydrated.photos },
+    });
+  });
+
+  it("reflects photo removal while preserving the card's frozen place snapshot", () => {
+    const place = mk({ photos: [{ ...photo, dataUrl: "data:image/jpeg;base64,aGVsbG8=" }] });
+    const [card] = buildDeck({
+      source: "saved",
+      places: [place],
+      query: {},
+      swiggy: [],
+      seed: 1,
+      seen: new Set(),
+    });
+    if (!card || card.kind !== "saved") throw new Error("expected saved card");
+    const renamed = { ...place, name: "A later name", photos: [] };
+
+    const [refreshed] = refreshSavedCardPhotos([card], [renamed]);
+
+    expect(refreshed?.kind).toBe("saved");
+    if (refreshed?.kind !== "saved") throw new Error("expected saved card");
+    expect(refreshed.place.photos).toEqual([]);
+    expect(refreshed.place.name).toBe(card.place.name);
+  });
+
+  it("returns the original deck when no photo array changed or the place is absent", () => {
+    const place = mk({ photos: [photo] });
+    const deck = buildDeck({
+      source: "saved",
+      places: [place],
+      query: {},
+      swiggy: [],
+      seed: 1,
+      seen: new Set(),
+    });
+
+    expect(refreshSavedCardPhotos(deck, [place])).toBe(deck);
+    expect(refreshSavedCardPhotos(deck, [])).toBe(deck);
   });
 });
 

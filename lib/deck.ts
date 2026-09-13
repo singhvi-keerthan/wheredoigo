@@ -71,6 +71,24 @@ export type DeckCard =
   | { key: string; kind: "saved"; place: Place; score: number; reasons: string[]; distanceKm?: number }
   | { key: string; kind: "new"; r: SwiggyRestaurant; score: number; reasons: string[] };
 
+// A deck freezes its ranking for the session, but photo bytes do not arrive on
+// that schedule: localStorage yields the records first, then IndexedDB (or the
+// sync download) fills each Photo.dataUrl. Refresh only that display payload so
+// a Saved card can gain or lose pictures without changing its place in the
+// stack, its reasons, or any swipe state held by SwipeMode.
+export function refreshSavedCardPhotos(deck: DeckCard[], places: Place[]): DeckCard[] {
+  const latest = new Map(places.map((place) => [place.id, place]));
+  let changed = false;
+  const refreshed = deck.map((card) => {
+    if (card.kind !== "saved") return card;
+    const place = latest.get(card.place.id);
+    if (!place || place.photos === card.place.photos) return card;
+    changed = true;
+    return { ...card, place: { ...card.place, photos: place.photos } };
+  });
+  return changed ? refreshed : deck;
+}
+
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 const display = (s: string) => s.replace(/-/g, " ");

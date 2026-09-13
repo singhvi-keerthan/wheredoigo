@@ -13,7 +13,7 @@ import {
 } from "@/lib/swiggyClient";
 import { biasContext, searchBias } from "@/lib/bias";
 import { searchPlaces, geocodeArea } from "@/lib/places";
-import { buildDeck, type DeckCard } from "@/lib/deck";
+import { buildDeck, refreshSavedCardPhotos, type DeckCard } from "@/lib/deck";
 import { bumpSkip, resetSkip, decSkip, peekSkip, setSkip } from "@/lib/skips";
 import { readNewSwipeMemory, recordNewSwipe, undoNewSwipe, type SwipeDir, type NewSwipeMemory } from "@/lib/swipeMemory";
 import { BENGALURU_AREA_OPTIONS } from "@/lib/areas";
@@ -601,7 +601,12 @@ export default function SwipeMode({
   const rightStamp = isNewCard ? "Watchlist" : "Yes";
   const rightAction = isNewCard ? "Add to watchlist" : "Yes, I’d go";
 
-  const stack = deck.slice(pos, pos + 3).map(enrichCard);
+  // Ranking stays frozen under the user's thumb, but photo bytes hydrate after
+  // the place records: first from IndexedDB, and on a newly synced device from
+  // Blob. Refresh only the visible Saved cards' photo arrays so those images
+  // appear without resetting pos/undo or reordering the stack.
+  const displayDeck = useMemo(() => refreshSavedCardPhotos(deck, places), [deck, places]);
+  const stack = displayDeck.slice(pos, pos + 3).map(enrichCard);
   const exhausted = deck.length > 0 && pos >= deck.length;
   const empty = deck.length === 0;
   // Busy the whole time a Swiggy fetch is in flight — not just on first load — so
