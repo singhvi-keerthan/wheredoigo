@@ -2,6 +2,7 @@ import { put } from "@vercel/blob";
 import { crossOrigin, forbidden, unauthorized, ownerFrom, ownerTag, logEvent } from "@/lib/api-guard";
 import { rateLimit, clientIp, tooMany } from "@/lib/ratelimit";
 import { LIMITS, photoQuota, recordPhoto } from "@/lib/quota";
+import { photoBlobPutOptions } from "@/lib/photoBlob";
 
 // Photo bytes for cross-device sync. The Blob store is PRIVATE, so bytes are
 // never publicly reachable — uploads and reads both go through here, gated by
@@ -72,12 +73,7 @@ export async function POST(request: Request) {
       return Response.json({ error: "quota_exceeded", used: quota.used, limit: quota.limit }, { status: 507 });
     }
 
-    const res = await put(`${own}/${id}`, bytes, {
-      access: "private",
-      token: TOKEN,
-      contentType: m[1],
-      addRandomSuffix: false, // deterministic path → re-upload overwrites, idempotent
-    });
+    const res = await put(`${own}/${id}`, bytes, photoBlobPutOptions(TOKEN, m[1]));
 
     // Accounting comes after the write lands, so a failed upload never eats
     // quota — and it gets its OWN catch, because the bytes are already stored

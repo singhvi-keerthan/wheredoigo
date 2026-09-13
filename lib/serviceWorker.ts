@@ -1,8 +1,9 @@
-// Minimal service worker so "wheredoigokeerthan" installs as a PWA and the shell works
+const SOURCE = String.raw`// Minimal service worker so "wheredoigokeerthan" installs as a PWA and the shell works
 // offline. Network-first for navigations (always get the latest build),
 // cache-first for static assets. Never touches /api or cross-origin (map tiles,
 // Google) — those always hit the network.
-const CACHE = "wheredoigokeerthan-v5";
+const REVISION = __DEPLOYMENT_REVISION__;
+const CACHE = "wheredoigokeerthan-" + REVISION;
 // "/" is the share view and "/app" is the app; both are real navigations that
 // have to work offline, and before the move only one of them existed.
 //
@@ -90,3 +91,18 @@ self.addEventListener("fetch", (e) => {
     )
   );
 });
+`;
+
+type DeploymentEnv = {
+  VERCEL_DEPLOYMENT_ID?: string;
+  VERCEL_GIT_COMMIT_SHA?: string;
+  [key: string]: string | undefined;
+};
+
+export function deploymentRevision(env: DeploymentEnv = process.env): string {
+  return env.VERCEL_DEPLOYMENT_ID ?? env.VERCEL_GIT_COMMIT_SHA ?? "development";
+}
+
+export function serviceWorkerScript(revision: string): string {
+  return SOURCE.replace("__DEPLOYMENT_REVISION__", JSON.stringify(revision));
+}
