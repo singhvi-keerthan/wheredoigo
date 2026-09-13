@@ -7,8 +7,9 @@ import {
   UNRATED_SAVED_SCORE,
   type DecideQuery,
 } from "./decide";
-import { distanceKm } from "./geo";
+import { distanceKm, parseDistanceKm } from "./geo";
 import { leadRating } from "./format";
+import { hasWord } from "./words";
 import {
   newSwipeAffinity,
   newSwipeAttributeKeys,
@@ -69,7 +70,33 @@ function newMatches(r: SwiggyRestaurant, q: DecideQuery): boolean {
 // scale — see zipper); it is for tests and never for the card.
 export type DeckCard =
   | { key: string; kind: "saved"; place: Place; score: number; reasons: string[]; distanceKm?: number }
-  | { key: string; kind: "new"; r: SwiggyRestaurant; score: number; reasons: string[] };
+  | { key: string; kind: "new"; r: SwiggyRestaurant; score: number; reasons: string[]; distanceKm?: number };
+
+// The locality to browse when the lens names none. Swiggy's search answers a
+// locality with that locality — measured 2026-09-14 at the Bengaluru centre,
+// "Ashok Nagar" returned 30 rows, 28 rated, none farther than 2.4km — where
+// its old placeholder, "restaurants", answered with the 30 places NAMED
+// Restaurant, a third of them unrated. Your own map already knows which
+// locality you are standing in: it is the area your nearest saved pins carry.
+// Pins whose position is a guess (approxLocation) are skipped — their area is
+// real but their position is not. Nothing within 3km → no locality, and the
+// search falls back to its broad term (DEFAULT_SEARCH_TERM).
+export function nearbyArea(places: Place[], at: { lat: number; lng: number }): string | undefined {
+  const NEAR_KM = 3;
+  const votes = new Map<string, { n: number; nearest: number }>();
+  for (const p of places) {
+    if (!p.area?.trim() || p.approxLocation || p.deletedAt) continue;
+    const km = distanceKm(at, p);
+    if (km > NEAR_KM) continue;
+    const v = votes.get(p.area) ?? { n: 0, nearest: Infinity };
+    votes.set(p.area, { n: v.n + 1, nearest: Math.min(v.nearest, km) });
+  }
+  let best: { area: string; n: number; nearest: number } | null = null;
+  for (const [area, v] of votes) {
+    if (!best || v.n > best.n || (v.n === best.n && v.nearest < best.nearest)) best = { area, ...v };
+  }
+  return best?.area;
+}
 
 // A deck freezes its ranking for the session, but photo bytes do not arrive on
 // that schedule: localStorage yields the records first, then IndexedDB (or the
@@ -164,49 +191,62 @@ function alreadySaved(r: SwiggyRestaurant, places: Place[]): boolean {
 
 // ---- New cards -------------------------------------------------------------
 //
-// A New card's score is a POSITION, not a point sum. Swiggy already ranked
-// these rows — its relevance for the term, searched at your coordinates — and
-// that order is the only location-aware signal a row carries before the
-// details call (no coordinates, no distance; see SwiggyRestaurant). So the
-// provider's index is the backbone, and everything local is a bounded nudge
-// measured in positions: a rating moves a card a few places, an exact ask two,
-// your swipe history one. What none of it can do is what the old point sum
-// did — let a cheap, well-photographed 3.7★ eleven kilometres out beat a 4.5★
-// down the road on cheapness, media and one prior swipe (that fixture scored
-// 61 to 41; it now scores -1 to +1, the right way round).
+// A New card scores the way a saved one does — its rating, less how far it is
+// — because a Swiggy row turns out to carry exactly those two things: a
+// rating, and a distance string from the coordinates the search ran at ("5.4
+// km", "13.9 km"), on every row of the batched render. Measured 2026-09-14 on
+// the live catalogue; no details call needed. (Search ORDER, which the version
+// before this one leaned on, turned out to be a name match for the old default
+// term, and is trusted for nothing now beyond breaking ties.)
+//
+//   score = rating × 8              unrated → 0: no synthetic quality
+//         − distancePenalty(km)     the saved deck's own table; a row with no
+//                                   readable distance is charged the pool's
+//                                   median, never nothing
+//         + 15 on a keyword hit     the most specific thing you asked for
+//         ± up to 4 on swipe history   half a star, however strong the memory
 //
 // Nothing scores for being cheap (budget is a hard filter when asked and
 // otherwise not a virtue), for photos or an offer (completeness is not
-// quality), for a random draw, or for being unrated — that was +24, "a soft
-// 3.0"; it is a penalty now, because no one has said the place is any good.
+// quality), or for a random draw. The reproduced failure — a cheap,
+// well-photographed 3.7★ eleven kilometres out with one matching swipe over a
+// 4.5★ down the road — now scores 20.8 against 36: the right way round, by a
+// margin no nudge can close.
 
-function ratingAdjustment(rating: number | null): number {
-  if (rating == null) return -6;
-  if (rating >= 4.5) return 2;
-  if (rating >= 4.2) return 1;
-  if (rating >= 4.0) return 0;
-  if (rating >= 3.7) return -2;
-  return -5;
-}
+const KEYWORD_POINTS = 15;
+const SWIPE_POINTS = 4;
 
 // Two net-positive swipes on the same cuisine or locality before a card may
 // name your history as its reason. One swipe is a data point, not a taste,
 // and a price band is too coarse to be one at all. The score still moves by
-// up to a position on any evidence; this gates only what the card SAYS.
+// up to half a star on any evidence; this gates only what the card SAYS.
 function matchesYourSwipes(memory: NewSwipeMemory, r: SwiggyRestaurant): boolean {
   return newSwipeAttributeKeys(r).some(
     (key) => (key.startsWith("cuisine:") || key.startsWith("area:")) && (memory[key] ?? 0) >= 2
   );
 }
 
+// The upper-middle element on an even count — a distance a real row in the
+// pool actually has, rather than an average of two. Only ever a stand-in
+// penalty for a row Swiggy sent without a distance; nothing else reads it.
+function median(values: number[]): number | undefined {
+  if (values.length === 0) return undefined;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
 function rankNew(
   r: SwiggyRestaurant,
-  providerIndex: number,
   q: DecideQuery,
-  memory: NewSwipeMemory
+  memory: NewSwipeMemory,
+  fallbackKm: number | undefined
 ): Extract<DeckCard, { kind: "new" }> {
   const reasons: string[] = [];
-  let score = -providerIndex;
+  let score = (r.rating ?? 0) * 8;
+
+  const km = parseDistanceKm(r.distance);
+  const charged = km ?? fallbackKm;
+  if (charged != null) score -= distancePenalty(charged);
 
   // Named, not scored: the area is a filter (newMatches) and the cuisine is
   // the search term, so both are already true of every card in the pool.
@@ -216,8 +256,10 @@ function rankNew(
 
   if (q.keywords?.length) {
     const hay = newText(r);
-    if (q.keywords.some((kw) => kw.length >= 3 && hay.includes(kw.toLowerCase()))) {
-      score += 2;
+    // Whole words, the saved deck's own matcher: `includes` let "bar" score
+    // Barbeque Nation, which was a nudge at 2 points and a decision at 15.
+    if (q.keywords.some((kw) => kw.length >= 3 && hasWord(hay, kw.toLowerCase()))) {
+      score += KEYWORD_POINTS;
       addReason(reasons, "Matches your ask");
     }
   }
@@ -226,16 +268,15 @@ function rankNew(
     addReason(reasons, `Under ₹${q.maxBudget.toLocaleString("en-IN")}/head`);
   }
 
-  score += ratingAdjustment(r.rating);
   if (r.rating != null && r.rating >= (q.minRating ?? 4.2)) {
     addReason(reasons, `${r.rating.toFixed(1)} on Swiggy`);
   }
 
-  score += Math.max(-1, Math.min(1, newSwipeAffinity(memory, r)));
+  score += Math.max(-1, Math.min(1, newSwipeAffinity(memory, r))) * SWIPE_POINTS;
   if (matchesYourSwipes(memory, r)) addReason(reasons, "Matches your swipes");
 
   if (reasons.length === 0) addReason(reasons, "New on Swiggy");
-  return { key: `new:${r.id}`, kind: "new", r, score, reasons };
+  return { key: `new:${r.id}`, kind: "new", r, score, reasons, ...(km != null ? { distanceKm: km } : {}) };
 }
 
 // ---- Saved cards -----------------------------------------------------------
@@ -350,17 +391,20 @@ export function buildDeck(opts: {
   const savedCards: DeckCard[] =
     source === "new" ? [] : rankSaved(places, query, seed, anchor).filter(unseen);
 
-  // The provider index is the row's place in what search returned, BEFORE the
-  // filters below — a row the lens drops still stood between its neighbours in
-  // Swiggy's judgment, and the gap it leaves is part of that judgment.
+  // Search order survives only as the tie-break (the sort is stable). A row
+  // Swiggy sent without a readable distance is charged the pool's median: on a
+  // locality search that is a kilometre or two, on a concept search whatever
+  // the page spans — either way not the free pass "no penalty" would be.
+  const fallbackKm = median(
+    swiggy.map((r) => parseDistanceKm(r.distance)).filter((d): d is number => d != null)
+  );
   const newCards: DeckCard[] =
     source === "saved"
       ? []
       : swiggy
-          .map((r, providerIndex) => ({ r, providerIndex }))
-          .filter(({ r }) => !alreadySaved(r, places) && newMatches(r, query))
-          .filter(({ r }) => !hasCuisine(r, query.excludeCuisines))
-          .map(({ r, providerIndex }) => rankNew(r, providerIndex, query, newMemory))
+          .filter((r) => !alreadySaved(r, places) && newMatches(r, query))
+          .filter((r) => !hasCuisine(r, query.excludeCuisines))
+          .map((r) => rankNew(r, query, newMemory, fallbackKm))
           .sort((a, b) => b.score - a.score)
           .filter(unseen);
 

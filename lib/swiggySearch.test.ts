@@ -85,6 +85,24 @@ describe("searchDineoutRestaurants — the fan-out", () => {
   });
 });
 
+describe("searchDineoutRestaurants — what a bare deck browses", () => {
+  it("searches the locality when the lens names none but the client knows one", async () => {
+    callSwiggyReply.mockResolvedValue(reply([["1", "Cahoots", "Ashok Nagar"]]));
+    const { searched } = await searchDineoutRestaurants({ terms: [], area: "Ashok Nagar" });
+    expect(searched).toEqual(["Ashok Nagar"]);
+    expect(callSwiggyReply.mock.calls[0][1]).toMatchObject({ query: "Ashok Nagar" });
+  });
+
+  it("falls back to a browsable concept, never to 'restaurants'", async () => {
+    // "restaurants" is a NAME match on this catalogue — measured 2026-09-14,
+    // all 30 rows were places called Restaurant, a third of them unrated.
+    callSwiggyReply.mockResolvedValue(reply([["1", "Ginger Tiger", "Vittal Mallya Road"]]));
+    const { searched } = await searchDineoutRestaurants({ terms: [] });
+    expect(searched).toEqual(["Dinner"]);
+    expect(String(callSwiggyReply.mock.calls[0][1].query)).not.toMatch(/restaurant/i);
+  });
+});
+
 describe("searchDineoutRestaurants — provider order", () => {
   it("puts render's records back in the order search listed them", async () => {
     // Search's order is Swiggy's relevance at the user's coordinates — the one

@@ -118,10 +118,9 @@ function newView(card: Extract<DeckCard, { kind: "new" }>): CardView {
     priceLabel: r.priceForTwo != null ? `₹${r.priceForTwo.toLocaleString("en-IN")} for two` : "—",
     area: r.area ?? null,
     approx: false,
-    // Swiggy's own distance string, when the details call has supplied one,
-    // stays in the About section below — it is the provider's claim, in the
-    // provider's words, and the deck never measured a Swiggy row itself.
-    distanceKm: null,
+    // Swiggy's own figure, parsed — from the coordinates the search ran at,
+    // which is what the deck ranked this card on.
+    distanceKm: card.distanceKm ?? null,
     chips: r.cuisines,
     reasons: card.reasons,
     open: null,
@@ -342,14 +341,9 @@ function NewBody({
         </Section>
       )}
 
-      {(r.description || r.distance) && (
+      {r.description && (
         <Section title="About">
-          {r.description && <Prose>{r.description}</Prose>}
-          {r.distance && (
-            <p className="mt-2 text-[13px] leading-snug" style={{ color: "var(--text-tertiary)" }}>
-              {r.distance}
-            </p>
-          )}
+          <Prose>{r.description}</Prose>
         </Section>
       )}
 

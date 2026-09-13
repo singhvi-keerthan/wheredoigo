@@ -489,7 +489,9 @@ function mockSearch(query: { terms?: string[]; area?: string }): {
   if (query.area) {
     results = results.filter((r) => areaMatches(r.area, query.area!));
   }
-  const terms = (query.terms ?? []).filter((t) => t && t.toLowerCase() !== "restaurants");
+  const terms = (query.terms ?? []).filter(
+    (t) => t && t.toLowerCase() !== DEFAULT_SEARCH_TERM.toLowerCase()
+  );
   const used: string[] = [];
   if (terms.length) {
     const hit = (r: SwiggyRestaurant, t: string) => {
@@ -746,7 +748,7 @@ export async function searchDineoutRestaurants(
 
   const terms = query.terms.map((t) => t.trim()).filter(Boolean);
   if (terms.length === 0 && area) terms.push(area);
-  if (terms.length === 0) terms.push("restaurants");
+  if (terms.length === 0) terms.push(DEFAULT_SEARCH_TERM);
 
   // Narrow (the default): the most specific term only — one call, one page of
   // the documented 30-row maximum. Wide: one search per concept, in parallel —
@@ -904,12 +906,23 @@ export const SEARCH_LIMIT = 30;
 // only to force a specific interpretation of an ambiguous term", and the
 // condition that used to set it (`!keyword && !area && cuisine`) could
 // essentially never be true once a keyword existed — which was every typed ask.
+// The term a lens-less deck browses with, when no locality is known either.
+// It used to be "restaurants", which this catalogue answers as a NAME match:
+// measured 2026-09-14 at the Bengaluru centre, all 30 rows were places called
+// "…Restaurant(s)", 11 of them unrated, none with a cuisine or a price.
+// "Dinner" at the same point returned 30 rows, 21 rated, every one with a
+// distance, median 4.4km. A locality name does better still (28 of 30 rated,
+// median 1.4km) — so the client sends the locality your nearest saved pins
+// stand in whenever it can (see nearbyArea in lib/deck.ts), and this is the
+// floor under that.
+export const DEFAULT_SEARCH_TERM = "Dinner";
+
 export function buildSearchArgs(
   query: { term: string; offset?: number; limit?: number },
   user: UserCoords
 ): Record<string, unknown> {
   const args: Record<string, unknown> = {
-    query: query.term.trim() || "restaurants",
+    query: query.term.trim() || DEFAULT_SEARCH_TERM,
     latitude: user.lat,
     longitude: user.lng,
     limit: query.limit ?? SEARCH_LIMIT,

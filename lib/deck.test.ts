@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildDeck, refreshSavedCardPhotos } from "./deck";
+import { buildDeck, nearbyArea, refreshSavedCardPhotos } from "./deck";
 import type { SwiggyRestaurant } from "./swiggy";
 import type { Place } from "./types";
 
@@ -97,12 +97,12 @@ describe("buildDeck — standard filters on Swiggy cards", () => {
   });
 });
 
-// A New card's score is a provider POSITION with bounded nudges — see rankNew.
+// A New card scores like a saved one — rating, less distance — see rankNew.
 describe("buildDeck — ranking Swiggy cards", () => {
-  it("does not let cheapness, media and one swipe carry a 3.7★ past a 4.5★ behind it", () => {
-    // The reproduced failure. Under the old point sum this pair scored 61 to
-    // 41 with the far card on top: ₹600/head (+8), a photo and a blurb (+5),
-    // one prior right-swipe sharing all three attributes (+15).
+  it("does not let cheapness, media and one swipe carry a 3.7★ 11km out past a 4.5★ down the road", () => {
+    // The reproduced failure. Under the original point sum this pair scored 61
+    // to 41 with the far card on top: ₹600/head (+8), a photo and a blurb
+    // (+5), one prior right-swipe sharing all three attributes (+15).
     const far = sw({
       cuisines: ["north-indian"],
       area: "Whitefield",
@@ -110,53 +110,92 @@ describe("buildDeck — ranking Swiggy cards", () => {
       priceForTwo: 1200,
       photo: "hero",
       description: "a blurb",
+      distance: "11 km",
     });
-    const near = sw({ cuisines: ["italian"], area: "Koramangala", rating: 4.5, priceForTwo: 2400 });
+    const near = sw({ cuisines: ["italian"], area: "Koramangala", rating: 4.5, priceForTwo: 2400, distance: "0.8 km" });
     const oneSwipe = { "cuisine:northindian": 1, "area:whitefield": 1, "price:budget": 1 };
-    expect(deck([far, near], {}, oneSwipe)).toEqual([`new:${near.id}`, `new:${far.id}`]);
+    const cards = fullDeck([far, near], {}, oneSwipe);
+    expect(cards.map((c) => c.key)).toEqual([`new:${near.id}`, `new:${far.id}`]);
+    expect(cards[0]?.score).toBeCloseTo(36, 5); // 4.5 × 8, nothing off
+    expect(cards[1]?.score).toBeCloseTo(3.7 * 8 - 12.8 + 4, 5); // rating, −11km, +half a star of memory
   });
 
-  it("keeps Swiggy's order when quality and intent are comparable", () => {
-    const rows = [sw({ rating: 4.4 }), sw({ rating: 4.4 }), sw({ rating: 4.3 })];
+  it("ranks on rating and distance, not on Swiggy's order", () => {
+    // The live "restaurants" pool, 2026-09-14: a 4.8 at 13.9km led the deck
+    // when search order was the backbone. It is not, so it does not.
+    const rdk = sw({ rating: 4.8, distance: "13.9 km" });
+    const narmada = sw({ rating: 4.5, distance: "5.4 km" });
+    const modest = sw({ rating: 4.0, distance: "5 km" });
+    expect(deck([rdk, narmada, modest])).toEqual([narmada, modest, rdk].map((r) => `new:${r.id}`));
+  });
+
+  it("keeps Swiggy's order only as the tie-break", () => {
+    const rows = [sw({ rating: 4.4, distance: "2 km" }), sw({ rating: 4.4, distance: "2 km" }), sw({ rating: 4.4, distance: "1 km" })];
     expect(deck(rows)).toEqual(rows.map((r) => `new:${r.id}`));
   });
 
-  it("lets a rating move a card a bounded number of positions, not any number", () => {
-    // +2 for 4.5★ and up: from one place back a 4.8 overtakes a 4.0 …
-    const [a, b] = [sw({ rating: 4.0 }), sw({ rating: 4.8 })];
-    expect(deck([a, b])[0]).toBe(`new:${b.id}`);
-    // … and from three back it does not reach the top.
-    const rows = [sw({ rating: 4.0 }), sw({ rating: 4.0 }), sw({ rating: 4.0 }), sw({ rating: 4.8 })];
-    expect(deck(rows)[0]).toBe(`new:${rows[0].id}`);
+  it("gives an unrated card no quality points and no quality reason", () => {
+    const unrated = sw({ rating: null, distance: "1 km" });
+    const [card] = fullDeck([unrated]);
+    expect(card.score).toBe(0);
+    expect(card.reasons).toEqual(["New on Swiggy"]);
+    // Under a rated card that keeps any points after distance: a 3.5 twenty
+    // kilometres out still has 28 − 20 = 8 on it. (A 2.9 at 25km does not —
+    // it goes to −0.8 — and an unknown next door outranking THAT is fine.)
+    const rated = sw({ rating: 3.5, distance: "20 km" });
+    expect(deck([unrated, rated])).toEqual([`new:${rated.id}`, `new:${unrated.id}`]);
   });
 
-  it("penalises an unrated card six positions and gives it no quality reason", () => {
-    const [card] = fullDeck([sw({ rating: null })]);
-    expect(card.score).toBe(-6);
-    expect(card.reasons).toEqual(["New on Swiggy"]);
+  it("charges a row with no readable distance the pool's median, and shows it none", () => {
+    const near = sw({ rating: 4.4, distance: "1 km" });
+    const far = sw({ rating: 4.4, distance: "9 km" });
+    const mid = sw({ rating: 4.4, distance: "5 km" });
+    const unknown = sw({ rating: 4.4, distance: null });
+    const cards = fullDeck([unknown, near, far, mid]);
+    // median of the known three is 5km → the same −4 as `mid`; they tie, and
+    // the tie-break is search order, which had `unknown` first.
+    expect(cards.map((c) => c.key)).toEqual([near, unknown, mid, far].map((r) => `new:${r.id}`));
+    expect(cards[1]?.distanceKm).toBeUndefined();
+    expect(cards[0]?.distanceKm).toBe(1);
   });
 
   it("names an area or cuisine match without scoring it", () => {
     // The area is a filter and the cuisine is the search term — every card in
     // the pool already has them, so a boost would be the same boost for all.
-    const plain = sw({ cuisines: ["thai"], area: "Indiranagar", rating: 4.4 });
-    const matched = sw({ cuisines: ["italian"], area: "Indiranagar", rating: 4.4 });
+    const plain = sw({ cuisines: ["thai"], area: "Indiranagar", rating: 4.4, distance: "2 km" });
+    const matched = sw({ cuisines: ["italian"], area: "Indiranagar", rating: 4.4, distance: "2 km" });
     const cards = fullDeck([plain, matched], { area: "Indiranagar", cuisines: ["italian"] });
     expect(cards.map((c) => c.key)).toEqual([`new:${plain.id}`, `new:${matched.id}`]);
     expect(cards[1]?.reasons).toEqual(["Near Indiranagar", "italian match", "4.4 on Swiggy"]);
-    expect((cards[0]?.score ?? 0) - (cards[1]?.score ?? 0)).toBe(1); // one provider position, nothing else
+    expect(cards[0]?.score).toBe(cards[1]?.score);
   });
 
-  it("moves a card at most one position on swipe history, however strong", () => {
-    const generic = sw({ rating: 4.4, cuisines: ["thai"], area: "Whitefield" });
-    const between = sw({ rating: 4.4, cuisines: ["mexican"], area: "Whitefield" });
-    const familiar = sw({ rating: 4.4, cuisines: ["italian"], area: "Indiranagar" });
+  it("pays a keyword hit what the saved deck pays, once, on whole words only", () => {
+    const plain = sw({ rating: 4.4, distance: "2 km", description: "" });
+    const hit = sw({ rating: 4.4, distance: "2 km", description: "rooftop with a rooftop bar" });
+    const cards = fullDeck([plain, hit], { keywords: ["rooftop"] });
+    expect(cards[0]?.key).toBe(`new:${hit.id}`);
+    expect((cards[0]?.score ?? 0) - (cards[1]?.score ?? 0)).toBe(15);
+    // "bar" is not Barbeque Nation — the same rule the saved deck applies.
+    const bbq = sw({ name: "Barbeque Nation", rating: 4.0, distance: "2 km" });
+    const bar = sw({ name: "Copitas Bar", rating: 4.0, distance: "2 km" });
+    const asked = fullDeck([bbq, bar], { keywords: ["bar"] });
+    expect(asked.map((c) => c.key)).toEqual([`new:${bar.id}`, `new:${bbq.id}`]);
+    expect(asked[1]?.reasons).not.toContain("Matches your ask");
+  });
+
+  it("moves a card by half a star at most on swipe history, however strong", () => {
     // Memory at its ceiling on BOTH of familiar's attributes (+6 each, +12
-    // affinity — the old ranker paid +18 for less). Worth one position.
+    // affinity — the original ranker paid +18 for less). Worth 4 points: past
+    // a 4.4, not past a 4.6.
     const maxed = { "cuisine:italian": 6, "area:indiranagar": 6 };
-    expect(deck([generic, between, familiar], {}, maxed)).toEqual(
-      [generic, between, familiar].map((r) => `new:${r.id}`)
-    );
+    const familiar = () => sw({ rating: 4.0, cuisines: ["italian"], area: "Indiranagar", distance: "2 km" });
+    const a = familiar();
+    const b44 = sw({ rating: 4.4, cuisines: ["thai"], area: "Whitefield", distance: "2 km" });
+    expect(deck([b44, a], {}, maxed)).toEqual([`new:${a.id}`, `new:${b44.id}`]);
+    const c = familiar();
+    const b46 = sw({ rating: 4.6, cuisines: ["thai"], area: "Whitefield", distance: "2 km" });
+    expect(deck([c, b46], {}, maxed)).toEqual([`new:${b46.id}`, `new:${c.id}`]);
   });
 
   it("says 'Matches your swipes' only after two net-positive swipes on a cuisine or locality", () => {
@@ -169,7 +208,13 @@ describe("buildDeck — ranking Swiggy cards", () => {
   });
 
   it("orders new cards identically at every seed", () => {
-    const rows = [sw({ rating: 4.1 }), sw({ rating: 4.6 }), sw({ rating: null }), sw({ rating: 3.9 }), sw({ rating: 4.4 })];
+    const rows = [
+      sw({ rating: 4.1, distance: "1 km" }),
+      sw({ rating: 4.6, distance: "7 km" }),
+      sw({ rating: null, distance: "2 km" }),
+      sw({ rating: 3.9, distance: null }),
+      sw({ rating: 4.4, distance: "3 km" }),
+    ];
     const at = (seed: number) =>
       buildDeck({ source: "new", places: [], query: {}, swiggy: rows, seed, seen: new Set() }).map((c) => c.key);
     for (const seed of [2, 3, 99]) expect(at(seed)).toEqual(at(1));
@@ -203,6 +248,30 @@ describe("buildDeck — ranking Swiggy cards", () => {
     if (card?.kind !== "new") throw new Error("expected new card");
     expect(card.score).toBeGreaterThan(0);
     expect(card.reasons).toEqual(["Near Indiranagar", "italian match", "Under ₹1,000/head"]);
+  });
+});
+
+// Which locality a lens-less deck browses — see nearbyArea.
+describe("nearbyArea — the locality your nearest pins stand in", () => {
+  const HERE = { lat: 12.9716, lng: 77.6411 };
+  const km = (n: number) => n / 111.2; // degrees of latitude per km, near enough
+
+  it("picks the most common area within 3km, nearest on a tie", () => {
+    const places = [
+      mk({ area: "Indiranagar", lat: HERE.lat + km(1) }),
+      mk({ area: "Indiranagar", lat: HERE.lat + km(2) }),
+      mk({ area: "Domlur", lat: HERE.lat + km(0.5) }),
+    ];
+    expect(nearbyArea(places, HERE)).toBe("Indiranagar");
+    expect(nearbyArea(places.slice(1), HERE)).toBe("Domlur"); // one each → the nearer
+  });
+
+  it("ignores approximate pins and anything farther than 3km", () => {
+    const places = [
+      mk({ area: "Whitefield", lat: HERE.lat + km(0.2), approxLocation: true }), // a guess at your seed
+      mk({ area: "Jayanagar", lat: HERE.lat + km(6) }),
+    ];
+    expect(nearbyArea(places, HERE)).toBeUndefined();
   });
 });
 

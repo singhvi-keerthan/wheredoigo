@@ -101,7 +101,9 @@ describe("buildSearchArgs — Swiggy New source search shape", () => {
   });
 
   it("falls back to a browsable term rather than an empty query", () => {
-    expect(buildSearchArgs({ term: "   " }, user).query).toBe("restaurants");
+    // Not "restaurants": that is a NAME match on this catalogue (see
+    // DEFAULT_SEARCH_TERM), which browses nothing.
+    expect(buildSearchArgs({ term: "   " }, user).query).toBe("Dinner");
   });
 });
 

@@ -11,9 +11,9 @@ import {
   type SwiggyError,
   type UserCoords,
 } from "@/lib/swiggyClient";
-import { biasContext, searchBias } from "@/lib/bias";
+import { biasContext, searchBias, subscribeGeoStatus } from "@/lib/bias";
 import { searchPlaces, geocodeArea } from "@/lib/places";
-import { buildDeck, refreshSavedCardPhotos, type DeckCard } from "@/lib/deck";
+import { buildDeck, nearbyArea, refreshSavedCardPhotos, type DeckCard } from "@/lib/deck";
 import { bumpSkip, resetSkip, decSkip, peekSkip, setSkip } from "@/lib/skips";
 import { readNewSwipeMemory, recordNewSwipe, undoNewSwipe, type SwipeDir, type NewSwipeMemory } from "@/lib/swipeMemory";
 import { BENGALURU_AREA_OPTIONS } from "@/lib/areas";
@@ -262,7 +262,25 @@ export default function SwipeMode({
   // coordinate pair no matter what, so the fallback is right there — but a
   // deck that measured from it would demote every Jaipur pin while you stand
   // in Jaipur with location off. No verified position, no distance term.
-  const [anchor] = useState(() => biasContext());
+  const [anchor, setAnchor] = useState(() => biasContext());
+  // A fix that lands AFTER the deck opened still counts — until you touch it.
+  // Flicking straight into the deck usually beats MapView's watch to its first
+  // fix, and a deck that ignored the answer ranked your saved places with no
+  // distance term at all (cross-city pins at 5 and 6, replayed on the live
+  // library 2026-09-14). From the first pointer-down the pile is yours and
+  // must not reorder under your finger — a rebuild mid-drag would hand the
+  // release to a card you never saw, or strand the drag on a card that lost
+  // its handlers — so a fix after that waits for the next deck. The keyboard
+  // and the booking sheet count as touches too.
+  const touchedRef = useRef(false);
+  useEffect(() => {
+    if (anchor) return;
+    return subscribeGeoStatus(() => {
+      if (touchedRef.current) return;
+      const ctx = biasContext();
+      if (ctx) setAnchor(ctx);
+    });
+  }, [anchor]);
 
   const [exiting, setExiting] = useState<{ dir: "left" | "right"; key: string } | null>(null);
   const [detailNew, setDetailNew] = useState<SwiggyRestaurant | null>(null);
@@ -334,7 +352,11 @@ export default function SwipeMode({
       const plan = JSON.parse(planKey) as { terms: string[] };
       const { results, error, searched } = await searchDineout({
         terms: plan.terms,
-        area: area ?? undefined,
+        // The lens's locality when it names one. With no lens at all, the one
+        // your nearest saved pins stand in — so a bare deck browses your
+        // neighbourhood, not the catalogue's placeholder term. Only the SEARCH
+        // sees it: it is not a filter on the deck.
+        area: area ?? (plan.terms.length === 0 ? nearbyArea(placesRef.current, coords) : undefined),
         areaLat: areaCenter?.lat,
         areaLng: areaCenter?.lng,
         lat: coords.lat,
@@ -383,7 +405,7 @@ export default function SwipeMode({
     setUndo([]);
     setExiting(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, queryKey, swiggy, seed]);
+  }, [source, queryKey, swiggy, seed, anchor]);
 
   // The localities the Area filter can offer. New discovery cannot derive this
   // only from the current Swiggy page, because that page is small and area is
@@ -440,6 +462,7 @@ export default function SwipeMode({
   // ---- actions -----------------------------------------------------------
   const commit = (dir: "left" | "right") => {
     if (!current || exiting) return;
+    touchedRef.current = true;
     const card = current;
     let entry: UndoEntry = { key: card.key, placeId: null };
     let prompt = false; // 3rd skip on a saved card → offer a permanent hide
@@ -518,6 +541,7 @@ export default function SwipeMode({
       return;
     }
     const card = current;
+    touchedRef.current = true;
     const placeId = saveNew(card.r, coords); // side effect kept out of the state updater
     newMemoryRef.current = recordNewSwipe(card.r, "right");
     setUndo((u) => [...u, { key: card.key, placeId, newSwipe: { restaurant: card.r, dir: "right" } }]);
@@ -905,6 +929,7 @@ export default function SwipeMode({
                         ...swipe.handlers,
                         onPointerDown: (e: React.PointerEvent) => {
                           endCoach(); // you touched it — the lesson is over
+                          touchedRef.current = true; // and the pile is yours — no late re-anchor
                           swipe.handlers.onPointerDown(e);
                         },
                       }
