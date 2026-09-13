@@ -85,6 +85,25 @@ describe("searchDineoutRestaurants — the fan-out", () => {
   });
 });
 
+describe("searchDineoutRestaurants — provider order", () => {
+  it("puts render's records back in the order search listed them", async () => {
+    // Search's order is Swiggy's relevance at the user's coordinates — the one
+    // location-aware ranking a row carries, and what the deck now leans on.
+    // render_restaurants_dineout answers in its own order; that must not leak.
+    callSwiggyReply.mockResolvedValueOnce(reply([["1", "A", "X"], ["2", "B", "X"], ["3", "C", "X"]]));
+    callSwiggyTool.mockResolvedValueOnce({
+      restaurants: [
+        { id: "3", name: "C" },
+        { id: "1", name: "A" },
+        { id: "9", name: "Extra" }, // never listed by search: keeps its place, after
+        { id: "2", name: "B" },
+      ],
+    });
+    const { results } = await searchDineoutRestaurants({ terms: ["Bar"] });
+    expect(results.map((r) => r.id)).toEqual(["1", "2", "3", "9"]);
+  });
+});
+
 describe("searchDineoutRestaurants — the area top-up", () => {
   it("searches the locality itself when the concept terms land elsewhere", async () => {
     callSwiggyReply

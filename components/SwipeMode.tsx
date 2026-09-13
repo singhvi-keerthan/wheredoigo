@@ -11,7 +11,7 @@ import {
   type SwiggyError,
   type UserCoords,
 } from "@/lib/swiggyClient";
-import { searchBias } from "@/lib/bias";
+import { biasContext, searchBias } from "@/lib/bias";
 import { searchPlaces, geocodeArea } from "@/lib/places";
 import { buildDeck, type DeckCard } from "@/lib/deck";
 import { bumpSkip, resetSkip, decSkip, peekSkip, setSkip } from "@/lib/skips";
@@ -257,6 +257,12 @@ export default function SwipeMode({
   // was previously granted, otherwise the map centre), then fall back. Swipe
   // mode must not trigger a browser location prompt just by opening.
   const [coords] = useState<UserCoords>(() => searchBias() ?? FALLBACK_COORDS);
+  // The same position WITHOUT the fallback, for ranking your saved places by
+  // distance. Captured apart from `coords` on purpose: Swiggy's tools need a
+  // coordinate pair no matter what, so the fallback is right there — but a
+  // deck that measured from it would demote every Jaipur pin while you stand
+  // in Jaipur with location off. No verified position, no distance term.
+  const [anchor] = useState(() => biasContext());
 
   const [exiting, setExiting] = useState<{ dir: "left" | "right"; key: string } | null>(null);
   const [detailNew, setDetailNew] = useState<SwiggyRestaurant | null>(null);
@@ -370,6 +376,7 @@ export default function SwipeMode({
         seed,
         seen: seenRef.current,
         newMemory: newMemoryRef.current ?? {},
+        anchor: anchor ? { ...anchor.coords, source: anchor.source } : undefined,
       })
     );
     setPos(0);

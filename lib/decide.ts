@@ -251,7 +251,7 @@ export function narrowToAsk(
   seed = 1,
   now: Date = new Date()
 ): { places: Place[]; confident: boolean } {
-  const ranked = rankPlaces(places, query, seed, now).map((r) => r.place);
+  const ranked = rankPlaces(places, query, seed, { now }).map((r) => r.place);
   const asked = askedNamespaces(query);
   if (Object.keys(asked).length === 0) return { places: ranked, confident: true };
 
@@ -274,12 +274,33 @@ function isExcluded(p: Place, query: DecideQuery): boolean {
   return false;
 }
 
+// What an unrated place scores in place of a rating (≈ a soft 3.5). Exported
+// because the swipe deck takes it back out: a deck card's position is a claim
+// about quality, and "no one has rated it" is not evidence of any.
+export const UNRATED_SAVED_SCORE = 28;
+
+// The variety term's ceiling, in points — about half a rating star of seeded
+// noise. It keeps "Another" lively on the map; the swipe deck passes 0 so a
+// card's position is the same at every seed.
+export const VARIETY_WEIGHT = 8;
+
+export interface RankOptions {
+  now?: Date;
+  varietyWeight?: number;
+}
+
+// What a place is called when nothing specific spoke for it. Exported because
+// it reads as an endorsement, and the swipe deck takes it off an unrated card.
+export const FALLBACK_REASON = "A solid shout";
+
 export function rankPlaces(
   places: Place[],
   query: DecideQuery,
   seed: number,
-  now: Date = new Date()
+  opts: RankOptions = {}
 ): Ranked[] {
+  const now = opts.now ?? new Date();
+  const varietyWeight = opts.varietyWeight ?? VARIETY_WEIGHT;
   const rand = mulberry32(seed);
   const out: Ranked[] = [];
 
@@ -339,7 +360,7 @@ export function rankPlaces(
         reasons.push(r.mine ? `You rated it ${r.value.toFixed(1)}` : `${r.value.toFixed(1)} on Google`);
       }
     } else {
-      score += 28; // unknown ≈ a soft 3.5
+      score += UNRATED_SAVED_SCORE;
     }
 
     // Discovery bias — a going-out brain should nudge you somewhere new.
@@ -428,9 +449,9 @@ export function rankPlaces(
 
     // Variety — keeps "Another" lively without overpowering quality (~half a
     // rating star of noise; was 16, which let a 3★ outshuffle a 5★).
-    score += rand() * 8;
+    score += rand() * varietyWeight;
 
-    if (reasons.length === 0) reasons.push("A solid shout");
+    if (reasons.length === 0) reasons.push(FALLBACK_REASON);
     out.push({ place: p, score, reasons: reasons.slice(0, 3) });
   }
 

@@ -97,11 +97,93 @@ describe("buildDeck — standard filters on Swiggy cards", () => {
   });
 });
 
+// A New card's score is a provider POSITION with bounded nudges — see rankNew.
 describe("buildDeck — ranking Swiggy cards", () => {
-  it("sorts new cards by local score rather than provider order", () => {
-    const weak = sw({ rating: 3.6, priceForTwo: 3200, photo: null });
-    const strong = sw({ rating: 4.8, priceForTwo: 1200, photo: "hero" });
-    expect(deck([weak, strong])).toEqual([`new:${strong.id}`, `new:${weak.id}`]);
+  it("does not let cheapness, media and one swipe carry a 3.7★ past a 4.5★ behind it", () => {
+    // The reproduced failure. Under the old point sum this pair scored 61 to
+    // 41 with the far card on top: ₹600/head (+8), a photo and a blurb (+5),
+    // one prior right-swipe sharing all three attributes (+15).
+    const far = sw({
+      cuisines: ["north-indian"],
+      area: "Whitefield",
+      rating: 3.7,
+      priceForTwo: 1200,
+      photo: "hero",
+      description: "a blurb",
+    });
+    const near = sw({ cuisines: ["italian"], area: "Koramangala", rating: 4.5, priceForTwo: 2400 });
+    const oneSwipe = { "cuisine:northindian": 1, "area:whitefield": 1, "price:budget": 1 };
+    expect(deck([far, near], {}, oneSwipe)).toEqual([`new:${near.id}`, `new:${far.id}`]);
+  });
+
+  it("keeps Swiggy's order when quality and intent are comparable", () => {
+    const rows = [sw({ rating: 4.4 }), sw({ rating: 4.4 }), sw({ rating: 4.3 })];
+    expect(deck(rows)).toEqual(rows.map((r) => `new:${r.id}`));
+  });
+
+  it("lets a rating move a card a bounded number of positions, not any number", () => {
+    // +2 for 4.5★ and up: from one place back a 4.8 overtakes a 4.0 …
+    const [a, b] = [sw({ rating: 4.0 }), sw({ rating: 4.8 })];
+    expect(deck([a, b])[0]).toBe(`new:${b.id}`);
+    // … and from three back it does not reach the top.
+    const rows = [sw({ rating: 4.0 }), sw({ rating: 4.0 }), sw({ rating: 4.0 }), sw({ rating: 4.8 })];
+    expect(deck(rows)[0]).toBe(`new:${rows[0].id}`);
+  });
+
+  it("penalises an unrated card six positions and gives it no quality reason", () => {
+    const [card] = fullDeck([sw({ rating: null })]);
+    expect(card.score).toBe(-6);
+    expect(card.reasons).toEqual(["New on Swiggy"]);
+  });
+
+  it("names an area or cuisine match without scoring it", () => {
+    // The area is a filter and the cuisine is the search term — every card in
+    // the pool already has them, so a boost would be the same boost for all.
+    const plain = sw({ cuisines: ["thai"], area: "Indiranagar", rating: 4.4 });
+    const matched = sw({ cuisines: ["italian"], area: "Indiranagar", rating: 4.4 });
+    const cards = fullDeck([plain, matched], { area: "Indiranagar", cuisines: ["italian"] });
+    expect(cards.map((c) => c.key)).toEqual([`new:${plain.id}`, `new:${matched.id}`]);
+    expect(cards[1]?.reasons).toEqual(["Near Indiranagar", "italian match", "4.4 on Swiggy"]);
+    expect((cards[0]?.score ?? 0) - (cards[1]?.score ?? 0)).toBe(1); // one provider position, nothing else
+  });
+
+  it("moves a card at most one position on swipe history, however strong", () => {
+    const generic = sw({ rating: 4.4, cuisines: ["thai"], area: "Whitefield" });
+    const between = sw({ rating: 4.4, cuisines: ["mexican"], area: "Whitefield" });
+    const familiar = sw({ rating: 4.4, cuisines: ["italian"], area: "Indiranagar" });
+    // Memory at its ceiling on BOTH of familiar's attributes (+6 each, +12
+    // affinity — the old ranker paid +18 for less). Worth one position.
+    const maxed = { "cuisine:italian": 6, "area:indiranagar": 6 };
+    expect(deck([generic, between, familiar], {}, maxed)).toEqual(
+      [generic, between, familiar].map((r) => `new:${r.id}`)
+    );
+  });
+
+  it("says 'Matches your swipes' only after two net-positive swipes on a cuisine or locality", () => {
+    const r = sw({ cuisines: ["italian"], area: "Indiranagar", priceForTwo: 1600 });
+    const reasonsWith = (memory: Record<string, number>) => fullDeck([r], {}, memory)[0]?.reasons ?? [];
+    expect(reasonsWith({ "cuisine:italian": 1 })).not.toContain("Matches your swipes");
+    expect(reasonsWith({ "price:mid": 3 })).not.toContain("Matches your swipes");
+    expect(reasonsWith({ "cuisine:italian": 2 })).toContain("Matches your swipes");
+    expect(reasonsWith({ "area:indiranagar": 2 })).toContain("Matches your swipes");
+  });
+
+  it("orders new cards identically at every seed", () => {
+    const rows = [sw({ rating: 4.1 }), sw({ rating: 4.6 }), sw({ rating: null }), sw({ rating: 3.9 }), sw({ rating: 4.4 })];
+    const at = (seed: number) =>
+      buildDeck({ source: "new", places: [], query: {}, swiggy: rows, seed, seen: new Set() }).map((c) => c.key);
+    for (const seed of [2, 3, 99]) expect(at(seed)).toEqual(at(1));
+  });
+
+  it("never inserts an exploration card: a neutral row stays where Swiggy put it", () => {
+    const liked = Array.from({ length: 5 }, (_, i) =>
+      sw({ id: `liked-${i}`, name: `Liked ${i}`, cuisines: ["italian"], rating: 4.4, priceForTwo: 1800 })
+    );
+    const neutral = sw({ id: "neutral", name: "Neutral", cuisines: ["thai"], rating: 4.4, priceForTwo: 1800 });
+    // The fifth slot used to be reserved for it.
+    expect(deck([...liked, neutral], {}, { "cuisine:italian": 4 })).toEqual(
+      [...liked, neutral].map((r) => `new:${r.id}`)
+    );
   });
 
   it("puts score and reasons on new cards", () => {
@@ -122,21 +204,134 @@ describe("buildDeck — ranking Swiggy cards", () => {
     expect(card.score).toBeGreaterThan(0);
     expect(card.reasons).toEqual(["Near Indiranagar", "italian match", "Under ₹1,000/head"]);
   });
+});
 
-  it("uses attribute-level swipe memory to rank shared traits", () => {
-    const familiar = sw({ rating: 4.0, cuisines: ["italian"], area: "Indiranagar", priceForTwo: 1800 });
-    const generic = sw({ rating: 4.8, cuisines: ["thai"], area: "Whitefield", priceForTwo: 1800 });
-    const cards = fullDeck([generic, familiar], {}, { "cuisine:italian": 3 });
-    expect(cards.map((c) => c.key)).toEqual([`new:${familiar.id}`, `new:${generic.id}`]);
-    expect(cards[0]?.kind === "new" ? cards[0].reasons : []).toContain("Matches your swipes");
+// Your own places, ranked for a deck: rankPlaces' order, then two corrections
+// that are true only of "where do I go NOW" — see rankSaved.
+describe("buildDeck — your saved places, from where you are", () => {
+  const HERE = { lat: 12.9716, lng: 77.6411 }; // mk()'s default position
+  const GPS = { ...HERE, source: "gps" as const };
+  const JAIPUR = { lat: 26.9124, lng: 75.7873 };
+  const savedDeck = (places: Place[], query = {}, anchor?: typeof GPS) =>
+    buildDeck({ source: "saved", places, query, swiggy: [], seed: 1, seen: new Set(), anchor });
+  const keys = (places: Place[], query = {}, anchor?: typeof GPS) =>
+    savedDeck(places, query, anchor).map((c) => c.key);
+
+  it("demotes a cross-city pin behind anything viable nearby, without dropping it", () => {
+    const jaipur = mk({ ...JAIPUR, googleRating: 4.8 });
+    const local = mk({ googleRating: 4.3 });
+    expect(keys([jaipur, local], {}, GPS)).toEqual([`saved:${local.id}`, `saved:${jaipur.id}`]);
   });
 
-  it("reserves every fifth new-card slot for neutral exploration when available", () => {
-    const liked = Array.from({ length: 5 }, (_, i) =>
-      sw({ id: `liked-${i}`, name: `Liked ${i}`, cuisines: ["italian"], rating: 4.4, priceForTwo: 1800 })
-    );
-    const neutral = sw({ id: "neutral", name: "Neutral", cuisines: ["thai"], rating: 4.4, priceForTwo: 1800 });
-    expect(deck([...liked, neutral], {}, { "cuisine:italian": 4 })[4]).toBe("new:neutral");
+  it("scores no distance at all without a verified position", () => {
+    // SwipeMode's Bengaluru fallback never reaches here: with no anchor the
+    // 4.8 in Jaipur leads on rating, exactly as it did before.
+    const jaipur = mk({ ...JAIPUR, googleRating: 4.8 });
+    const local = mk({ googleRating: 4.3 });
+    expect(keys([local, jaipur])).toEqual([`saved:${jaipur.id}`, `saved:${local.id}`]);
+  });
+
+  it("adds no second distance term when the lens already carries an area centre", () => {
+    // rankPlaces gates at 4km and pays proximity inside; the deck must not
+    // charge for the same kilometres again. Same score with and without GPS.
+    const p = mk({ lat: HERE.lat + 0.027, lng: HERE.lng, googleRating: 4.2 }); // ~3km out
+    const lens = { area: "Indiranagar", areaCenter: HERE };
+    const [withGps] = savedDeck([p], lens, GPS);
+    const [withoutGps] = savedDeck([p], lens);
+    expect(withGps?.score).toBe(withoutGps?.score);
+    // …but the anchor still measures, so the card can say how far.
+    expect(withGps?.kind === "saved" ? withGps.distanceKm : undefined).toBeCloseTo(3, 0);
+  });
+
+  it("keeps a place you love ahead of a middling one next door at a moderate distance", () => {
+    // 5★ from you, favourite, ~5km out: 40 + 12 - 4. A 4.0 watchlist place at
+    // the anchor: 32 + 14. (At 11km the same favourite scores ~39 and the
+    // watchlist place still 46 — the discovery bias wins there, by design.)
+    const loved = mk({ status: "visited", favorite: true, myRating: 5, lat: HERE.lat + 0.045, lng: HERE.lng });
+    const meh = mk({ googleRating: 4.0 });
+    expect(keys([meh, loved], {}, GPS)).toEqual([`saved:${loved.id}`, `saved:${meh.id}`]);
+  });
+
+  it("gives an unrated place no synthetic quality, while its watchlist and favourite evidence still count", () => {
+    const unrated = mk({ googleRating: null, favorite: true }); // 0 + 14 + 12
+    const modest = mk({ googleRating: 3.0 }); // 24 + 14
+    // rankPlaces alone scores the unrated one 54 (+28 for "unknown ≈ 3.5").
+    expect(keys([unrated, modest])).toEqual([`saved:${modest.id}`, `saved:${unrated.id}`]);
+    expect(savedDeck([unrated])[0]?.score).toBe(26);
+  });
+
+  it("gives an unrated place no quality reason either — not even the ranker's fallback", () => {
+    // A visited place you never rated, with nothing else to say: rankPlaces
+    // fills the empty reasons with "A solid shout", which beside "Unrated" is
+    // an endorsement out of thin air. The rated twin keeps it.
+    const unrated = mk({ status: "visited", myRating: null, googleRating: null });
+    const rated = mk({ status: "visited", myRating: null, googleRating: 4.1 });
+    expect(savedDeck([unrated])[0]?.reasons).toEqual([]);
+    expect(savedDeck([rated])[0]?.reasons).toEqual(["A solid shout"]);
+  });
+
+  // A Swiggy save is pinned at the position the search ran from until Google
+  // resolves it, and at its locality's centroid if Google can only do that
+  // much — approxLocation either way. Neither is the restaurant's street.
+  it("does not read an approximate pin seeded at your own position as 'right here'", () => {
+    const guess = mk({ approxLocation: true, googleRating: 4.0, source: "swiggy" }); // at HERE
+    const [withGps] = savedDeck([guess], {}, GPS);
+    const [withoutGps] = savedDeck([guess]);
+    expect(withGps?.score).toBe(withoutGps?.score);
+    // and the card never says "0 m" about it
+    expect(withGps?.kind === "saved" ? withGps.distanceKm : "set").toBeUndefined();
+  });
+
+  it("gives an approximate locality centroid no fine-grained distance penalty", () => {
+    const at5km = { lat: HERE.lat + 0.045, lng: HERE.lng };
+    const guess = mk({ ...at5km, approxLocation: true, googleRating: 4.0 });
+    const exact = mk({ ...at5km, googleRating: 4.0 });
+    const [g] = savedDeck([guess], {}, GPS);
+    const [e] = savedDeck([exact], {}, GPS);
+    const [unpenalised] = savedDeck([guess]);
+    expect(g?.score).toBe(unpenalised?.score); // a centroid is not a street
+    expect((unpenalised?.score ?? 0) - (e?.score ?? 0)).toBeCloseTo(4, 1); // the real pin pays (~5.0km → ~4)
+    expect(g?.kind === "saved" ? g.distanceKm : "set").toBeUndefined();
+  });
+
+  it("still demotes an approximate pin that sits in another city", () => {
+    // The seed was the city Swiggy searched — right about that much.
+    const jaipur = mk({ ...JAIPUR, approxLocation: true, googleRating: 4.8 });
+    const local = mk({ googleRating: 4.3 });
+    expect(keys([jaipur, local], {}, GPS)).toEqual([`saved:${local.id}`, `saved:${jaipur.id}`]);
+    const [card] = savedDeck([jaipur], {}, GPS);
+    expect(card?.score).toBeCloseTo(4.8 * 8 + 14 - 40, 5); // the cross-city tier, nothing finer
+    expect(card?.kind === "saved" ? card.distanceKm : "set").toBeUndefined();
+  });
+
+  it("carries the measured distance on the card only when it had an anchor", () => {
+    const p = mk({ lat: HERE.lat + 0.009, lng: HERE.lng }); // ~1km
+    const [measured] = savedDeck([p], {}, GPS);
+    const [unmeasured] = savedDeck([p]);
+    expect(measured?.kind === "saved" ? measured.distanceKm : undefined).toBeCloseTo(1, 0);
+    expect(unmeasured?.kind === "saved" ? unmeasured.distanceKm : "set").toBeUndefined();
+  });
+});
+
+describe("buildDeck — Both", () => {
+  it("alternates the two sources' own orders, saved first", () => {
+    const s1 = mk({ googleRating: 4.6 });
+    const s2 = mk({ googleRating: 4.1 });
+    const n1 = sw({ rating: 4.6 });
+    const n2 = sw({ rating: 4.1 });
+    const cards = buildDeck({ source: "both", places: [s2, s1], query: {}, swiggy: [n1, n2], seed: 1, seen: new Set() });
+    expect(cards.map((c) => c.key)).toEqual([`saved:${s1.id}`, `new:${n1.id}`, `saved:${s2.id}`, `new:${n2.id}`]);
+  });
+
+  it("skips seen cards before alternating, and collapses to one source when the other runs out", () => {
+    const s1 = mk({ googleRating: 4.6 });
+    const s2 = mk({ googleRating: 4.1 });
+    const n1 = sw({ rating: 4.6 });
+    const n2 = sw({ rating: 4.1 });
+    const n3 = sw({ rating: 4.0 });
+    const seen = new Set([`saved:${s1.id}`]);
+    const cards = buildDeck({ source: "both", places: [s1, s2], query: {}, swiggy: [n1, n2, n3], seed: 1, seen });
+    expect(cards.map((c) => c.key)).toEqual([`saved:${s2.id}`, `new:${n1.id}`, `new:${n2.id}`, `new:${n3.id}`]);
   });
 });
 

@@ -678,6 +678,27 @@ async function searchPage(search: Record<string, unknown>): Promise<SearchPage> 
   };
 }
 
+// The ids in the order search listed them, page by page — each page's own
+// order, whichever envelope it filled.
+function providerIdOrder(pages: SearchPage[]): string[] {
+  return pages.flatMap((page) =>
+    page.raw.length > 0
+      ? page.raw.map((o) => asStr(pick(o, "id", "restaurantId", "resId", "restaurant_id")) ?? "")
+      : page.rows.map((row) => row.id)
+  );
+}
+
+function inProviderOrder(results: SwiggyRestaurant[], order: string[]): SwiggyRestaurant[] {
+  const rank = new Map<string, number>();
+  order.forEach((id, i) => {
+    if (id && !rank.has(id)) rank.set(id, i);
+  });
+  return results
+    .map((r, i) => ({ r, at: rank.get(r.id) ?? order.length + i }))
+    .sort((a, b) => a.at - b.at)
+    .map((x) => x.r);
+}
+
 function uniqRestaurants(results: SwiggyRestaurant[]): SwiggyRestaurant[] {
   const seen = new Set<string>();
   const out: SwiggyRestaurant[] = [];
@@ -843,6 +864,15 @@ export async function searchDineoutRestaurants(
     );
     results = uniqRestaurants([...results, ...missing.map(fromSearchRow)]);
   }
+
+  // Search's own order is the one ranking this app gets before a details call
+  // that was made at the user's coordinates — Swiggy's relevance for the term
+  // near where they are, which is why the deck leans on it. Nothing above
+  // preserved it: structured pages came first regardless of page order, and
+  // render_restaurants_dineout answers in whatever order it likes. Put every
+  // record back where its search listed it; records search never listed keep
+  // their response order, after.
+  results = inProviderOrder(results, providerIdOrder(pages));
 
   // What search offered but nothing could turn into a card. Counted against the
   // prose rows when there are any, since that's the real denominator.

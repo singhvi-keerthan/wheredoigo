@@ -113,6 +113,27 @@ describe("rankPlaces", () => {
       expect(out[0].place.id).toBe(noted.id);
     }
   });
+
+  it("orders the same at every seed when the variety term is zero", () => {
+    // Three places a fraction of a star apart — inside the default ±8 noise,
+    // so the seed decides between them on the map. The swipe deck asks for
+    // none of that and gets rating order, every time.
+    const a = mk({ googleRating: 4.5 });
+    const b = mk({ googleRating: 4.3 });
+    const c = mk({ googleRating: 4.4 });
+    const at = (seed: number) => ids(rankPlaces([a, b, c], {}, seed, { varietyWeight: 0 }));
+    expect(at(1)).toEqual([a.id, c.id, b.id]);
+    for (const seed of [2, 3, 99]) expect(at(seed)).toEqual(at(1));
+  });
+
+  it("does not read the Google review count", () => {
+    // Captured on the record for a later confidence rule; ranking is blind to
+    // it until that rule exists, so eight reviews and eight thousand tie.
+    const few = mk({ googleRating: 4.4, googleReviewCount: 8 });
+    const many = mk({ googleRating: 4.4, googleReviewCount: 8000 });
+    const out = rankPlaces([few, many], {}, 1, { varietyWeight: 0 });
+    expect(out[0].score).toBe(out[1].score);
+  });
 });
 
 // Localities arrive spelled three different ways — Google's "Indira Nagar",

@@ -48,6 +48,21 @@ export function searchBias(): Coords | undefined {
   return lastFix ?? lastCenter ?? undefined;
 }
 
+// The same answer as searchBias(), with where it came from. The swipe deck
+// scores your saved places by distance ONLY from a position you actually
+// established — a fix, or a view tight enough to be about one place. Its
+// Bengaluru fallback is transport plumbing for Swiggy's tools, not evidence of
+// where you are, and it must never reach a ranking; this is what lets the deck
+// tell the two apart without learning the fallback exists.
+export type BiasSource = "gps" | "map";
+export type BiasContext = { coords: Coords; source: BiasSource };
+
+export function biasContext(): BiasContext | undefined {
+  if (lastFix) return { coords: lastFix, source: "gps" };
+  if (lastCenter) return { coords: lastCenter, source: "map" };
+  return undefined;
+}
+
 // Safari does not implement navigator.permissions.query() for geolocation — it
 // rejects — so the permission gate in MapView can never learn that location is
 // already allowed, and an iPhone (this app's main device) would get no GPS at

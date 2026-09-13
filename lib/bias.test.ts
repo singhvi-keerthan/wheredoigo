@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { noteGpsFix, noteMapCenter, searchBias } from "./bias";
+import { biasContext, noteGpsFix, noteMapCenter, searchBias } from "./bias";
 
 // The module holds process-wide state, so every test starts from a known floor.
 const reset = () => {
@@ -27,6 +27,25 @@ describe("searchBias", () => {
     noteGpsFix({ lat: 26.9, lng: 75.8 });
     noteGpsFix(null);
     expect(searchBias()).toEqual({ lat: 12.97, lng: 77.61 });
+  });
+});
+
+// The swipe deck scores distance only from a position that came from
+// somewhere — and needs to know where, so its fallback can never pass as one.
+describe("biasContext", () => {
+  beforeEach(reset);
+
+  it("is nothing when there is no position, not a default", async () => {
+    vi.resetModules();
+    const fresh = await import("./bias");
+    expect(fresh.biasContext()).toBeUndefined();
+  });
+
+  it("labels a tight view as map and a fix as gps, fix first", () => {
+    noteMapCenter({ lat: 12.97, lng: 77.61 }, 12);
+    expect(biasContext()).toEqual({ coords: { lat: 12.97, lng: 77.61 }, source: "map" });
+    noteGpsFix({ lat: 26.9, lng: 75.8 });
+    expect(biasContext()).toEqual({ coords: { lat: 26.9, lng: 75.8 }, source: "gps" });
   });
 });
 

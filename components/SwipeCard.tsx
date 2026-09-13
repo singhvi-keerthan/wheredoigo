@@ -73,6 +73,10 @@ type CardView = {
   // saved half can be approximate: a not-yet-saved Swiggy row isn't pinned
   // anywhere, its Directions link searches by name, so it can't mislead.
   approx: boolean;
+  // How far, from a position the deck could trust (a GPS fix or a tight map
+  // view — see DeckAnchor). Null means "not measured", never "near": a card
+  // must not imply proximity the deck never had.
+  distanceKm: number | null;
   chips: string[]; // cuisine/staple tags, or Swiggy cuisines
   reasons: string[];
   open: boolean | null;
@@ -80,7 +84,7 @@ type CardView = {
   badge: { label: string; color: string };
 };
 
-function savedView(place: Place, reasons: string[]): CardView {
+function savedView(place: Place, reasons: string[], distanceKm: number | null): CardView {
   const cover = coverPhoto(place);
   const rating = leadRating(place);
   const meta = stateMeta(place);
@@ -95,6 +99,7 @@ function savedView(place: Place, reasons: string[]): CardView {
     priceLabel: leadPrice(place).label,
     area: place.area ?? null,
     approx: place.approxLocation === true,
+    distanceKm,
     chips,
     reasons,
     open: isOpenNow(place.openingPeriods),
@@ -113,6 +118,10 @@ function newView(card: Extract<DeckCard, { kind: "new" }>): CardView {
     priceLabel: r.priceForTwo != null ? `₹${r.priceForTwo.toLocaleString("en-IN")} for two` : "—",
     area: r.area ?? null,
     approx: false,
+    // Swiggy's own distance string, when the details call has supplied one,
+    // stays in the About section below — it is the provider's claim, in the
+    // provider's words, and the deck never measured a Swiggy row itself.
+    distanceKm: null,
     chips: r.cuisines,
     reasons: card.reasons,
     open: null,
@@ -122,7 +131,17 @@ function newView(card: Extract<DeckCard, { kind: "new" }>): CardView {
 }
 
 export function cardView(card: DeckCard): CardView {
-  return card.kind === "saved" ? savedView(card.place, card.reasons) : newView(card);
+  return card.kind === "saved"
+    ? savedView(card.place, card.reasons, card.distanceKm ?? null)
+    : newView(card);
+}
+
+// "650 m" under a kilometre, one decimal to ten, whole kilometres beyond —
+// the precision a straight-line figure can honestly carry.
+function distanceLabel(km: number): string {
+  if (km < 1) return `${Math.round(km * 1000)} m`;
+  if (km < 10) return `${km.toFixed(1)} km`;
+  return `${Math.round(km)} km`;
 }
 
 // Every image the hero can page through. A saved place can genuinely have
@@ -585,7 +604,7 @@ export default function SwipeCard({
             className="mt-1.5 flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[12.5px]"
             style={{ fontFamily: "var(--font-mono)" }}
           >
-            {v.ratingValue != null && (
+            {v.ratingValue != null ? (
               <span
                 className="inline-flex items-center gap-1"
                 style={{ color: v.ratingMine ? "var(--star)" : "rgba(255,255,255,0.85)" }}
@@ -593,13 +612,19 @@ export default function SwipeCard({
                 <Star size={11} strokeWidth={0} fill="currentColor" />
                 {v.ratingValue.toFixed(1)}
               </span>
+            ) : (
+              // Said out loud, in the rating's own slot: a blank there reads as
+              // "fine", and an unrated place has earned neither that nor a
+              // quality reason below.
+              <span style={{ color: "rgba(255,255,255,0.55)" }}>Unrated</span>
             )}
             <span style={{ color: "rgba(255,255,255,0.8)" }}>{v.priceLabel}</span>
-            {(v.area || v.approx) && (
+            {(v.area || v.approx || v.distanceKm != null) && (
               <span className="inline-flex items-center gap-1" style={{ color: "rgba(255,255,255,0.7)" }}>
                 {v.approx ? <MapPinOff size={10} strokeWidth={2} /> : <MapPin size={10} strokeWidth={2} />}
                 {v.area || "Location unknown"}
                 {v.approx && v.area ? " · approx." : ""}
+                {v.distanceKm != null ? ` · ${distanceLabel(v.distanceKm)}` : ""}
               </span>
             )}
             {v.hours && (

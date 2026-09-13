@@ -20,6 +20,7 @@ export interface GooglePlace {
   lat: number;
   lng: number;
   googleRating: number | null;
+  googleReviewCount: number | null; // how many ratings sit behind googleRating
   googlePriceLevel: number | null;
   googleTypes: string[];
   openingPeriods: OpeningPeriod[];
@@ -34,10 +35,12 @@ export interface GooglePlace {
 // label + area search. `editorialSummary` (the "lowdown") is on the DETAIL mask
 // only: the details call runs once per place on save/refresh, so it doesn't
 // raise the SKU tier of the high-frequency search typeahead + geocode probes.
+// `userRatingCount` sits in the same Enterprise SKU as priceLevel and
+// regularOpeningHours (both already on both masks), so it costs no tier change.
 export const FIELD_MASK_DETAIL =
-  "id,displayName,formattedAddress,addressComponents,location,rating,priceLevel,types,regularOpeningHours,editorialSummary,photos";
+  "id,displayName,formattedAddress,addressComponents,location,rating,userRatingCount,priceLevel,types,regularOpeningHours,editorialSummary,photos";
 export const FIELD_MASK_SEARCH =
-  "places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location,places.rating,places.priceLevel,places.types,places.regularOpeningHours,places.photos";
+  "places.id,places.displayName,places.formattedAddress,places.addressComponents,places.location,places.rating,places.userRatingCount,places.priceLevel,places.types,places.regularOpeningHours,places.photos";
 
 // The address-component types that best name a "neighbourhood", best-first. For
 // Bengaluru, sublocality_level_1 is the Jayanagar/Koramangala granularity. No
@@ -72,6 +75,7 @@ export function mapGooglePlace(p: any): GooglePlace {
     lat: p.location?.latitude ?? 0,
     lng: p.location?.longitude ?? 0,
     googleRating: typeof p.rating === "number" ? p.rating : null,
+    googleReviewCount: typeof p.userRatingCount === "number" ? p.userRatingCount : null,
     googlePriceLevel:
       p.priceLevel != null && p.priceLevel in PRICE_LEVEL
         ? PRICE_LEVEL[p.priceLevel]

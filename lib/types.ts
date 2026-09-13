@@ -99,6 +99,12 @@ export interface Place {
   myRating: number | null; // 0–5, set once visited — the ONE shown rating
   ratings?: Partial<Record<RatingDimension, number>>; // 1–5 per dimension; private, assistant-only
   googleRating: number | null; // cached reference
+  // How many Google ratings sit behind googleRating. Captured on save and on
+  // the ordinary enrichment refresh, absent on older records and on Swiggy and
+  // manual saves; NOT read by any ranking yet — a confidence rule that treated
+  // "absent" as "zero" would rank an un-refreshed library on different terms
+  // from a refreshed one, so that waits on a backfill decision.
+  googleReviewCount?: number | null;
   myBudgetPerPerson: number | null; // your logged spend / person
   googlePriceLevel: number | null; // 0–4 ($ signs)
 

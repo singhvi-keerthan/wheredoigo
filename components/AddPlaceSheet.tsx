@@ -244,6 +244,7 @@ export default function AddPlaceSheet({
         status: "watchlist",
         myRating: null,
         googleRating: r.googleRating,
+        googleReviewCount: r.googleReviewCount,
         myBudgetPerPerson: null,
         googlePriceLevel: r.googlePriceLevel,
         notes,

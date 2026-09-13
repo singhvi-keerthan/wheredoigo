@@ -102,6 +102,7 @@ export async function enrichPlaceFromGoogle(placeId: string, googlePlaceId: stri
   if (!g) return;
   updatePlace(placeId, {
     googleRating: g.googleRating,
+    googleReviewCount: g.googleReviewCount,
     googlePriceLevel: g.googlePriceLevel,
     googleTypes: g.googleTypes,
     openingPeriods: g.openingPeriods,
