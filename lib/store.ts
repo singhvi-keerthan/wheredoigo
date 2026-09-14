@@ -5,6 +5,7 @@ import type { Photo, Place, Tag, TagNamespace, Visit } from "./types";
 import { SEED_PLACES } from "./seed";
 import { idbAvailable, idbDeletePhoto, idbGetAllPhotos, idbPutPhoto } from "./photoStore";
 import { mergeTags, tagsFromGoogleTypes } from "./googleTags";
+import { mergePhotoHandles } from "./photoMerge";
 import "./migrate"; // one-time imhungry.* → wheredoigokeerthan.* key copy — must eval before any read
 
 // ---------------------------------------------------------------------------
@@ -467,13 +468,26 @@ export function applyRemotePlaces(rows: RemotePlaceRow[]): void {
   for (const row of rows) {
     const local = byId.get(row.id);
     const localTs = local ? local.updatedAt ?? local.createdAt ?? "" : "";
-    if (local && localTs >= row.updated_at) continue; // local same-or-newer wins
+    if (local && localTs >= row.updated_at) {
+      // The local PLACE wins, but the remote record may know the Blob handle
+      // produced by another device. This metadata is monotonic for a photo id,
+      // so enrich matching local photos without reviving remote-only photos or
+      // emitting a local edit.
+      const photos = mergePhotoHandles(local.photos, row.data.photos ?? []);
+      if (photos !== local.photos) {
+        byId.set(row.id, { ...local, photos });
+        changed = true;
+      }
+      continue;
+    }
     byId.set(row.id, {
       ...row.data,
       id: row.id,
       updatedAt: row.updated_at,
       deletedAt: row.deleted_at ?? undefined,
-      photos: local ? local.photos : row.data.photos ?? [],
+      // The remote list is authoritative when the remote place is newer, but
+      // bytes already present on this device are still the cheapest source.
+      photos: mergePhotoHandles(row.data.photos ?? [], local?.photos ?? []),
     });
     changed = true;
   }

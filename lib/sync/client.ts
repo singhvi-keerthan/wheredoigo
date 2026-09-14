@@ -25,6 +25,10 @@ import { accountSecret, normalizePhone } from "@/lib/account";
 const OWNER_KEY = "wheredoigokeerthan.sync.owner"; // sha256(phrase) — the capability token
 const CURSOR_KEY = "wheredoigokeerthan.sync.cursor"; // max updated_at pulled so far
 const DIRTY_KEY = "wheredoigokeerthan.sync.dirty"; // ids changed locally but not yet pushed
+// One full pull after the photo-handle merge shipped. Earlier clients advanced
+// CURSOR_KEY after discarding remote blobUrls, so an ordinary incremental pull
+// can never see those rows again.
+const PHOTO_HANDLES_V2_KEY = "wheredoigokeerthan.sync.photoHandles.v2";
 
 // The phrase itself, in plain text, on this device only.
 //
@@ -302,9 +306,9 @@ async function registerRemote(alias?: string | null): Promise<void> {
   }
 }
 
-async function pull(): Promise<void> {
+async function pull(full = false): Promise<void> {
   if (!owner) return;
-  const cursor = lsGet(CURSOR_KEY);
+  const cursor = full ? null : lsGet(CURSOR_KEY);
   const res = await fetchT(cursor ? `/api/sync?since=${encodeURIComponent(cursor)}` : "/api/sync", {
     headers: { Authorization: `Bearer ${owner}` },
   });
@@ -393,6 +397,13 @@ export async function sync(): Promise<void> {
   running = true;
   setStatus({ state: "syncing", error: null });
   try {
+    // Repair first, before a stale dirty record can push its photo array back
+    // over the server's Blob handles. The marker lands only after the complete
+    // snapshot was applied; a failed request retries on the next sync.
+    if (lsGet(PHOTO_HANDLES_V2_KEY) !== "1") {
+      await pull(true);
+      lsSet(PHOTO_HANDLES_V2_KEY, "1");
+    }
     // Records first — fast, and the priority. Status flips to "Synced" here so a
     // large first-run photo migration can't keep the UI stuck on "Syncing…".
     await push();
@@ -487,6 +498,7 @@ export async function connectAs(
   dirty = new Set(snapshotForSync().map((p) => p.id));
   saveDirty();
   lsDel(CURSOR_KEY);
+  lsDel(PHOTO_HANDLES_V2_KEY);
   setStatus({ connected: true, state: "idle", pending: dirty.size, error: null });
   // Exist server-side even with nothing to push yet, and register the recovery
   // phrase in the same call that creates the library.
@@ -603,6 +615,7 @@ export function disconnect(): void {
   lsDel(OWNER_KEY);
   lsDel(CURSOR_KEY);
   lsDel(DIRTY_KEY);
+  lsDel(PHOTO_HANDLES_V2_KEY);
   lsDel(PHRASE_KEY);
   lsDel(ACCOUNT_KEY);
   siteOwner = null;

@@ -8,6 +8,7 @@
 // jsonb holds the Place record with photo dataUrls stripped.
 
 import { neon } from "@neondatabase/serverless";
+import { preserveStoredPhotoHandles } from "../photoMerge";
 
 const url = process.env.SYNC_DATABASE_URL;
 
@@ -156,8 +157,22 @@ export async function pullPlaces(owner: string, since: string | null): Promise<P
 export async function pushPlaces(owner: string, rows: PlaceRow[]): Promise<void> {
   if (!rows.length) return;
   const s = db();
+  // A stale installed client may edit a place before it has pulled the blobUrl
+  // added by another device. Preserve those already-stored handles by photo id
+  // before the whole-record LWW upsert, or that unrelated edit makes the photo
+  // permanently undiscoverable on every new device.
+  const ids = rows.map((row) => row.id);
+  const stored = (await s`select id, data from places where owner = ${owner} and id = any(${ids})`) as {
+    id: string;
+    data: unknown;
+  }[];
+  const storedById = new Map(stored.map((row) => [row.id, row.data]));
+  const safeRows = rows.map((row) => ({
+    ...row,
+    data: preserveStoredPhotoHandles(row.data, storedById.get(row.id)),
+  }));
   await s.transaction(
-    rows.map(
+    safeRows.map(
       (r) =>
         s`insert into places (owner, id, data, updated_at, deleted_at)
           values (${owner}, ${r.id}, ${JSON.stringify(r.data)}::jsonb, ${r.updated_at}, ${r.deleted_at})
