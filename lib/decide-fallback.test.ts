@@ -93,3 +93,18 @@ describe("parseFallback · standard filters", () => {
     expect(parseFallback("date night under 1.5k").maxBudget).toBe(1500);
   });
 });
+
+describe("parseFallback · the area is a gate, not a keyword", () => {
+  it("keeps the ask's own words and drops the locality it parsed", () => {
+    const q = parseFallback("museum in jayanagar");
+    expect(q.area).toBe("Jayanagar");
+    expect(q.keywords).toEqual(["museum"]);
+  });
+
+  it("drops every word of a multi-word locality", () => {
+    const q = parseFallback("dessert place near hsr layout");
+    expect(q.area?.toLowerCase()).toBe("hsr layout");
+    expect(q.keywords ?? []).not.toContain("layout");
+    expect(q.keywords).toContain("dessert");
+  });
+});

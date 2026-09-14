@@ -344,6 +344,17 @@ export default function SwipeMode({
   // as the user's own position, because slots and booking need that pair
   // unchanged.
   const planKey = JSON.stringify(searchPlan);
+  // The locality a bare deck browses: the one your nearest saved pins stand in,
+  // measured from `anchor` — a position you actually established — and never
+  // from `coords`, whose Bengaluru fallback is transport plumbing for Swiggy's
+  // tools. Read off the fallback it sent a Jaipur deck to a Bengaluru
+  // neighbourhood. Empty when the lens names a term or an area, or when no
+  // position exists yet; a fix that lands before the first touch changes it at
+  // most once, which is the one extra search it can cost.
+  const browseArea =
+    !area && searchPlan.terms.length === 0 && anchor
+      ? (nearbyArea(places, anchor.coords) ?? "")
+      : "";
   useEffect(() => {
     if (source === "saved") return; // buildDeck ignores swiggy for "saved"
     let cancelled = false;
@@ -352,11 +363,9 @@ export default function SwipeMode({
       const plan = JSON.parse(planKey) as { terms: string[] };
       const { results, error, searched } = await searchDineout({
         terms: plan.terms,
-        // The lens's locality when it names one. With no lens at all, the one
-        // your nearest saved pins stand in — so a bare deck browses your
-        // neighbourhood, not the catalogue's placeholder term. Only the SEARCH
-        // sees it: it is not a filter on the deck.
-        area: area ?? (plan.terms.length === 0 ? nearbyArea(placesRef.current, coords) : undefined),
+        // The lens's locality when it names one, else the browse locality
+        // above. Only the SEARCH sees it: it is not a filter on the deck.
+        area: area ?? (browseArea || undefined),
         areaLat: areaCenter?.lat,
         areaLng: areaCenter?.lng,
         lat: coords.lat,
@@ -373,7 +382,7 @@ export default function SwipeMode({
     return () => {
       cancelled = true;
     };
-  }, [source, planKey, area, areaCenter, coords]);
+  }, [source, planKey, area, areaCenter, coords, browseArea]);
 
   // Rebuild the ordered deck when the lens changes (results / seed). The lens
   // itself is frozen at launch, so in practice this is the Swiggy fetch landing

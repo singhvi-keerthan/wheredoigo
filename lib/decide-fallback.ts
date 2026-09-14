@@ -160,7 +160,12 @@ export function parseFallback(text: string): DecideQuery {
   if (boost.length) q.boostRatings = boost;
 
   // Distinctive free-text terms → matched against your notes by the ranker.
-  const kw = keywordsFromText(text);
+  // Never the area's own name: the area is already a hard gate on both decks,
+  // so a keyword naming it matched every surviving card (its address is in the
+  // haystack), scored each +15 and labelled each "Matches your ask" — the ask
+  // it matched was its own locality. "museum in jayanagar" kept "jayanagar".
+  const areaWords = new Set(area ? area.toLowerCase().split(/[^a-z0-9]+/) : []);
+  const kw = keywordsFromText(text).filter((w) => !areaWords.has(w));
   if (kw.length) q.keywords = kw;
 
   return q;
