@@ -180,6 +180,21 @@ describe("mergeRestaurantDetails — active Swiggy card enrichment", () => {
     expect(merged.distance).toBe("2.4 km away");
   });
 
+  it("reads the details masthead into the gallery, capped, and leaves menu photos out", () => {
+    // The shape get_restaurant_details returns (measured 2026-09-14, id 341385).
+    const masthead = Array.from({ length: 12 }, (_, i) => `https://media-assets.swiggy.com/swiggy/image/upload/DINEOUT/m${i}.JPG`);
+    const merged = mergeRestaurantDetails(base, {
+      restaurantId: "42",
+      restaurant: { id: "42", name: "Base Bistro", imageUrl: masthead[0], mastheadImageUrls: masthead },
+      menuImages: [{ imageUrl: "https://dineout-media-assets.swiggy.com/swiggy/image/upload/DINEOUT/menu1.JPG" }],
+    });
+    expect(merged.photo).toBe(base.photo); // the cover the card was dealt on
+    expect(merged.photos?.[0]).toBe(base.photo);
+    expect(merged.photos?.slice(1, 4)).toEqual(masthead.slice(0, 3));
+    expect(merged.photos).toHaveLength(8);
+    expect(merged.photos?.some((p) => p.includes("menu"))).toBe(false);
+  });
+
   it("keeps the gallery's own first photo as the cover when it differs from `photo`", () => {
     const first = "https://cdn.example/first.jpg";
     const merged = mergeRestaurantDetails(

@@ -497,6 +497,13 @@ export default function SwipeMode({
   const current = currentBase ? enrichCard(currentBase) : null;
   const currentNew = current?.kind === "new" ? current.r : null;
 
+  // The top card's gallery, warmed the moment it is on top (lib/covers.ts), so
+  // paging through it opens each photo in hand rather than a beat late.
+  const galleryKey = currentNew?.photos?.join("\n") ?? "";
+  useEffect(() => {
+    for (const url of galleryKey ? galleryKey.split("\n") : []) void warmCover(url);
+  }, [galleryKey]);
+
   useEffect(() => {
     if (!currentNew) return;
     const hasUsefulDetails =

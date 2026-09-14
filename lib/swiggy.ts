@@ -192,7 +192,12 @@ const IMAGE_KEYS = [
   "media",
 ];
 
-const GALLERY_KEYS = ["images", "photos", "gallery", "mediaFiles", "imageGallery"];
+// `mastheadImageUrls` is where get_restaurant_details actually keeps the
+// place's photos — measured 2026-09-14 on Vapour Brewpub (id 341385): 90 URLs
+// there, one `imageUrl`, and the menu cards under a separate top-level
+// `menuImages` that this deliberately never reads (they are photos of menus,
+// not of the place). uniq() caps what a card carries at eight.
+const GALLERY_KEYS = ["mastheadImageUrls", "images", "photos", "gallery", "mediaFiles", "imageGallery"];
 
 function uniq(values: string[], limit = 8): string[] {
   const seen = new Set<string>();
