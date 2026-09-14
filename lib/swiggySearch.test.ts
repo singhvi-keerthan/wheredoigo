@@ -73,6 +73,38 @@ describe("searchDineoutRestaurants — the fan-out", () => {
     );
   });
 
+  it("searches facets for evidence only: provenance on the ask's rows, no rows of their own", async () => {
+    callSwiggyReply
+      .mockResolvedValueOnce(reply([["1", "Le Cirque", "Kodihalli"], ["2", "Biergarten", "Koramangala"]])) // Romantic
+      .mockResolvedValueOnce(reply([["1", "Le Cirque", "Kodihalli"], ["3", "Yuki", "Koramangala"]])); // Fine Dining
+
+    const { results, searched, attempted } = await searchDineoutRestaurants({ terms: ["Romantic"], facets: ["Fine Dining"] });
+    expect(results.map((r) => r.id).sort()).toEqual(["1", "2"]); // Yuki was only a facet's row
+    expect(results.find((r) => r.id === "1")?.matchedTerms).toEqual(["Romantic", "Fine Dining"]);
+    expect(results.find((r) => r.id === "2")?.matchedTerms).toEqual(["Romantic"]);
+    expect(searched).toEqual(["Romantic"]);
+    expect(attempted).toEqual(["Romantic", "Fine Dining"]);
+  });
+
+  it("drops a facet page it cannot read instead of failing the search", async () => {
+    callSwiggyReply
+      .mockResolvedValueOnce(reply([["1", "Le Cirque", "Kodihalli"]]))
+      .mockResolvedValueOnce({ data: null, text: "Found 3 restaurant(s), showing 3.\n• Le Cirque · Kodihalli\n• Yuki · Koramangala" });
+    const { results, attempted } = await searchDineoutRestaurants({ terms: ["Romantic"], facets: ["Fine Dining"] });
+    expect(results.map((r) => r.id)).toEqual(["1"]);
+    expect(results[0].matchedTerms).toEqual(["Romantic"]);
+    expect(attempted).toEqual(["Romantic", "Fine Dining"]);
+  });
+
+  it("is not an outage when only a facet fails", async () => {
+    callSwiggyReply
+      .mockResolvedValueOnce(reply([["1", "Le Cirque", "Kodihalli"]]))
+      .mockRejectedValueOnce(new Error("down"));
+    const { results, attempted } = await searchDineoutRestaurants({ terms: ["Romantic"], facets: ["Fine Dining"] });
+    expect(results.map((r) => r.id)).toEqual(["1"]);
+    expect(attempted).toEqual(["Romantic", "Fine Dining"]);
+  });
+
   it("de-duplicates a restaurant that two terms both return, and does not count it as dropped", async () => {
     callSwiggyReply
       .mockResolvedValueOnce(reply([["1", "Toit", "Indiranagar"], ["2", "Skyye", "Ashok Nagar"]]))
@@ -98,7 +130,7 @@ describe("searchDineoutRestaurants — what a bare deck browses", () => {
     // all 30 rows were places called Restaurant, a third of them unrated.
     callSwiggyReply.mockResolvedValue(reply([["1", "Ginger Tiger", "Vittal Mallya Road"]]));
     const { searched } = await searchDineoutRestaurants({ terms: [] });
-    expect(searched).toEqual(["Dinner"]);
+    expect(searched).toEqual(["Casual Dining"]);
     expect(String(callSwiggyReply.mock.calls[0][1].query)).not.toMatch(/restaurant/i);
   });
 });

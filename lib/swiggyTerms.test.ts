@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildSearchPlan } from "./swiggyTerms";
+import { buildSearchPlan, facetsFor } from "./swiggyTerms";
 
 // search_restaurants_dineout's contract: "pass the single thing the user is
 // looking for, not their sentence" / "One term, not a sentence, and no location
@@ -113,5 +113,38 @@ describe("buildSearchPlan — what New mode actually asks Swiggy for", () => {
   it("de-duplicates terms two values map onto", () => {
     const { terms } = buildSearchPlan({ lifecycle: "any", staples: ["tacos", "burrito"] });
     expect(terms).toEqual(["Mexican"]);
+  });
+});
+
+describe("buildSearchPlan — facets for a vibe the catalogue tags loosely", () => {
+  it("fans romantic out to the facets that confirm it, within the four-search budget", () => {
+    const plan = buildSearchPlan({ vibes: ["romantic"], occasions: ["date"] });
+    expect(plan.terms).toEqual(["Romantic"]);
+    expect(plan.facets).toEqual(["Fine Dining", "Rooftop", "Outdoor Seating"]);
+  });
+
+  it("gives a date the same facets — it is the same Swiggy term", () => {
+    expect(buildSearchPlan({ occasions: ["date"] }).facets).toEqual(["Fine Dining", "Rooftop", "Outdoor Seating"]);
+  });
+
+  it("keeps the budget when the ask has more terms of its own", () => {
+    const plan = buildSearchPlan({ cuisines: ["italian"], vibes: ["romantic"] });
+    expect(plan.terms).toEqual(["Italian", "Romantic"]);
+    expect(plan.facets).toEqual(["Fine Dining", "Rooftop"]);
+  });
+
+  it("never repeats as a facet a term the ask already sends", () => {
+    const plan = buildSearchPlan({ vibes: ["romantic", "rooftop"] });
+    expect(plan.terms).toEqual(["Romantic", "Rooftop"]);
+    expect(plan.facets).toEqual(["Fine Dining", "Outdoor Seating"]);
+  });
+
+  it("has no facets for an ask the catalogue tags sharply", () => {
+    expect(buildSearchPlan({ cuisines: ["italian"] }).facets).toBeUndefined();
+  });
+
+  it("names what a romantic deck should keep at the back", () => {
+    expect(facetsFor(["Romantic"]).avoid).toEqual(["bar-food", "fast-food"]);
+    expect(facetsFor(["Italian"])).toEqual({ facets: [], avoid: [] });
   });
 });

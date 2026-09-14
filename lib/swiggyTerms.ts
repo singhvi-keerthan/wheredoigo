@@ -105,6 +105,36 @@ const OCCASION_TERMS: Record<string, string> = {
   friends: "Group Dining",
 };
 
+// A vibe the catalogue tags loosely. Measured 2026-09-14 for "Romantic" at
+// the Bengaluru centre: 28 rows, ten of them hotel fine dining and six of
+// them rows Swiggy itself tags bar-food or fast-food — and nothing on a row
+// says romantic, so the pool cannot be ranked on the ask alone. FACETS are
+// sibling terms the catalogue resolves sharply; a row the ask returned that a
+// facet search also lists is the core of the answer (13 of those 28: the
+// hotel rooms and the terraces), and a row carrying an AVOID cuisine tag goes
+// after every other. Facets are evidence, never eligibility: a Fine Dining
+// row Swiggy did not call romantic is not in the deck, and a Romantic row no
+// facet confirmed still is, after the confirmed ones. Keyed by the Swiggy
+// term, so `date` (→ Romantic) gets the same treatment as `romantic`.
+const VIBE_FACETS: Record<string, { facets: string[]; avoid: string[] }> = {
+  romantic: { facets: ["Fine Dining", "Rooftop", "Outdoor Seating"], avoid: ["bar-food", "fast-food"] },
+};
+
+// The facets and avoid-tags for a set of ask terms — minus any facet the ask
+// already sends as a term of its own.
+export function facetsFor(terms: string[]): { facets: string[]; avoid: string[] } {
+  const have = new Set(terms.map((t) => t.toLowerCase()));
+  const facets: string[] = [];
+  const avoid: string[] = [];
+  for (const term of terms) {
+    const entry = VIBE_FACETS[term.toLowerCase()];
+    if (!entry) continue;
+    for (const f of entry.facets) if (!have.has(f.toLowerCase()) && !facets.includes(f)) facets.push(f);
+    for (const a of entry.avoid) if (!avoid.includes(a)) avoid.push(a);
+  }
+  return { facets, avoid };
+}
+
 // Most specific first: a dish beats a cuisine beats a kind of place beats a
 // vibe. Swiggy returns ~30 rows per term whatever it is, so the ORDER decides
 // what a small deck ends up being about.
@@ -144,6 +174,10 @@ export interface SwiggySearchPlan {
   // Indiranagar — far better area coverage than a concept term at the area's
   // coordinates (`query="bar"` there returned 30 rows, 2 in Indiranagar).
   terms: string[];
+  // Evidence searches for a loosely tagged vibe (facetsFor), within the same
+  // four-search budget as the terms. lib/swiggy.ts runs them alongside and
+  // lib/deck.ts ranks the ask's rows by how many confirmed each.
+  facets?: string[];
   // Set — and `terms` empty — when the ask named only things Dineout does not
   // list (NOT_ON_DINEOUT). The deck makes no Swiggy call for it and says why
   // it is empty. Values as the lens wrote them, for that message.
@@ -204,5 +238,6 @@ export function buildSearchPlan(query: DecideQuery, keywords?: string[]): Swiggy
   // the nearest saved pins stand in, and the server falls back to a browsable
   // concept when no locality is known either.
 
-  return { terms };
+  const facets = facetsFor(terms).facets.slice(0, Math.max(0, MAX_TERMS - terms.length));
+  return facets.length ? { terms, facets } : { terms };
 }

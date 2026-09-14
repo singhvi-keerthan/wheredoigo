@@ -279,6 +279,15 @@ describe("buildDeck — coverage of the asked terms", () => {
     expect(cards[1].reasons[0]).toBe("North Indian unconfirmed");
   });
 
+  it("orders partial matches by how many of the terms they confirmed, whatever they score", () => {
+    const two = sw({ id: "two", matchedTerms: ["Rooftop", "North Indian"], rating: 3.6, distance: "8 km" });
+    const one = sw({ id: "one", matchedTerms: ["Rooftop"], rating: 4.9, distance: "0.5 km" });
+    const cards = deckFor([one, two], ["Rooftop", "North Indian", "Outdoor Seating"]);
+    expect(cards.map((c) => c.key)).toEqual(["new:two", "new:one"]);
+    expect(cards[0].reasons[0]).toBe("Outdoor Seating unconfirmed");
+    expect(cards[1].reasons[0]).toBe("North Indian & Outdoor Seating unconfirmed");
+  });
+
   it("marks every row partial when a term's own call failed — coverage is against what was tried", () => {
     // "Bar + Rooftop", Rooftop's call failed: no row can carry Rooftop
     // provenance, and none of these say rooftop themselves.
@@ -292,9 +301,27 @@ describe("buildDeck — coverage of the asked terms", () => {
     expect(deckFor([deal, named], ["Bar"]).map((c) => c.key)).toEqual(["new:named"]);
   });
 
-  it("names nothing about coverage when only one term was asked", () => {
+  it("names the ask on every card, even when only one term was asked", () => {
     const card = deckFor([sw({ matchedTerms: ["Bar"] })], ["Bar"])[0];
-    expect(card.reasons.join(" ")).not.toMatch(/unconfirmed|\+/);
+    expect(card.reasons[0]).toBe("Bar");
+  });
+
+  const deckWith = (swiggy: SwiggyRestaurant[], terms: string[], facets: string[]) =>
+    buildDeck({ source: "new", places: [], query: {}, swiggy, seed: 1, seen: new Set(), terms, facets });
+
+  it("puts the rows a facet confirmed ahead, and the rows the vibe avoids last, whatever they score", () => {
+    const bar = sw({ id: "bar", matchedTerms: ["Romantic"], cuisines: ["bar-food"], rating: 4.9, distance: "0.5 km" });
+    const plain = sw({ id: "plain", matchedTerms: ["Romantic"], rating: 4.7, distance: "1 km" });
+    const hotel = sw({ id: "hotel", matchedTerms: ["Romantic", "Fine Dining"], rating: 4.2, distance: "5 km" });
+    const cards = deckWith([bar, plain, hotel], ["Romantic"], ["Fine Dining", "Rooftop"]);
+    expect(cards.map((c) => c.key)).toEqual(["new:hotel", "new:plain", "new:bar"]);
+    expect(cards[0].reasons.slice(0, 2)).toEqual(["Romantic", "Fine dining"]);
+    expect(cards[2].reasons[0]).toBe("Romantic");
+  });
+
+  it("takes a facet from the row's own highlights too", () => {
+    const terrace = sw({ id: "t", matchedTerms: ["Romantic"], highlights: ["Outdoor seating"], rating: 4.0 });
+    expect(deckWith([terrace], ["Romantic"], ["Outdoor Seating"])[0].reasons).toContain("Outdoor seating");
   });
 
   it("ranks a browse on rating and distance alone — every row is eligible", () => {

@@ -270,6 +270,9 @@ export default function SwipeMode({
   // what was asked — a failed "Rooftop" leaves every card "Rooftop unconfirmed",
   // not a full match.
   const [searchedConcepts, setSearchedConcepts] = useState<string[]>([]);
+  // The facet searches that ran (lib/swiggyTerms.ts) — evidence for the deck's
+  // order, never for a card's place in it.
+  const [searchedFacets, setSearchedFacets] = useState<string[]>([]);
   // Every Swiggy tool takes the same coordinate pair from search through slots
   // to booking. Use whatever bias the app already has (GPS only if permission
   // was previously granted, otherwise the map centre), then fall back. Swipe
@@ -378,7 +381,7 @@ export default function SwipeMode({
     let cancelled = false;
     const run = async () => {
       setLoadingNew(true);
-      const plan = JSON.parse(planKey) as { terms: string[]; unsupported?: string[] };
+      const plan = JSON.parse(planKey) as { terms: string[]; facets?: string[]; unsupported?: string[] };
       // Dineout has no term for what was asked — a museum is not in the
       // catalogue — so there is nothing true to search. No call; the empty
       // state says why, instead of the locality's restaurants under that name.
@@ -387,11 +390,13 @@ export default function SwipeMode({
         setNewError(null);
         setSearchedTerms([]);
         setSearchedConcepts([]);
+        setSearchedFacets([]);
         setLoadingNew(false);
         return;
       }
       const { results, error, searched, attempted } = await searchDineout({
         terms: plan.terms,
+        facets: plan.facets,
         // The lens's locality when it names one, else the browse locality
         // above. Only the SEARCH sees it: it is not a filter on the deck.
         area: area ?? (browseArea || undefined),
@@ -406,6 +411,8 @@ export default function SwipeMode({
         setSearchedTerms(searched);
         const concept = new Set(plan.terms.map((t) => t.toLowerCase()));
         setSearchedConcepts(attempted.filter((t) => concept.has(t.toLowerCase())));
+        const facet = new Set((plan.facets ?? []).map((t) => t.toLowerCase()));
+        setSearchedFacets(attempted.filter((t) => facet.has(t.toLowerCase())));
         setLoadingNew(false);
       }
     };
@@ -451,6 +458,7 @@ export default function SwipeMode({
       newMemory: newMemoryRef.current ?? {},
       anchor: anchor ? { ...anchor.coords, source: anchor.source } : undefined,
       terms: searchedConcepts,
+      facets: searchedFacets,
     });
     const quiet = dealtRun.current === runKey;
     const land = () => {
@@ -472,7 +480,7 @@ export default function SwipeMode({
       if (runGen.current === gen) land();
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, queryKey, swiggy, seed, anchor, searchedConcepts]);
+  }, [source, queryKey, swiggy, seed, anchor, searchedConcepts, searchedFacets]);
 
   // The localities the Area filter can offer. New discovery cannot derive this
   // only from the current Swiggy page, because that page is small and area is

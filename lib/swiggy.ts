@@ -503,7 +503,7 @@ const MOCK_RESTAURANTS: SwiggyRestaurant[] = [
 // which is what merging several one-term searches amounts to. Keyed on `terms`
 // because `cuisine`/`keyword` no longer exist; while it still read those, dev
 // mode silently ignored the whole lens and reported terms it never applied.
-function mockSearch(query: { terms?: string[]; area?: string }): {
+function mockSearch(query: { terms?: string[]; area?: string; facets?: string[] }): {
   results: SwiggyRestaurant[];
   used: string[];
   attempted: string[];
@@ -515,6 +515,7 @@ function mockSearch(query: { terms?: string[]; area?: string }): {
   const terms = (query.terms ?? []).filter(
     (t) => t && t.toLowerCase() !== DEFAULT_SEARCH_TERM.toLowerCase()
   );
+  const facets = (query.facets ?? []).filter(Boolean);
   const used: string[] = [];
   if (terms.length) {
     const hit = (r: SwiggyRestaurant, t: string) => {
@@ -530,11 +531,11 @@ function mockSearch(query: { terms?: string[]; area?: string }): {
     // emptying it — eight fixtures cannot cover the real vocabulary.
     if (narrowed.length) {
       // The live path's provenance, in the same shape: the terms this row hit.
-      results = narrowed.map((r) => ({ ...r, matchedTerms: terms.filter((t) => hit(r, t)) }));
+      results = narrowed.map((r) => ({ ...r, matchedTerms: [...terms, ...facets].filter((t) => hit(r, t)) }));
       used.push(...terms);
     }
   }
-  return { results, used, attempted: terms };
+  return { results, used, attempted: [...terms, ...facets] };
 }
 
 // Mock slots mirror the real shape (ids + reservationTime), not just a label,
@@ -761,6 +762,10 @@ export interface DineoutSearchQuery {
   // Already-resolved Swiggy terms, most specific first. Built from the
   // structured ask by lib/swiggyTerms.ts — never raw user words.
   terms: string[];
+  // Facet terms for a loosely tagged vibe (lib/swiggyTerms.ts), searched for
+  // EVIDENCE only: a row the ask returned that a facet search also lists gets
+  // the facet on its provenance; a row only a facet returned is not a result.
+  facets?: string[];
   // The locality name. Used as its own search term when the concept searches
   // do not cover it, and as the client-side gate either way.
   area?: string;
@@ -773,6 +778,14 @@ export interface DineoutSearchQuery {
   // travel unchanged to slots and booking.
   lat?: number;
   lng?: number;
+}
+
+// The prose says it found restaurants, or still carries ids, and nothing was
+// read out of it: the answer is there and this code cannot see it.
+function unreadable(page: SearchPage): boolean {
+  const claimed = /Found\s+(\d+)\s+restaurant/i.exec(page.text);
+  const shouldHaveRows = (claimed ? Number(claimed[1]) > 0 : false) || page.text.includes("(ID:");
+  return page.data === null && page.rows.length === 0 && shouldHaveRows;
 }
 
 export async function searchDineoutRestaurants(
@@ -812,13 +825,23 @@ export async function searchDineoutRestaurants(
   // returns 0 rows where "rooftop" returns 30, and the coordinates below carry
   // the location the sentence used to.
   const used = WIDE_SEARCH ? terms.slice(0, 4) : terms.slice(0, 1);
+  // Facets ride the same fan-out and the same four-search budget; narrow mode
+  // has no budget for evidence.
+  const usedSet = new Set(used.map((t) => t.toLowerCase()));
+  const facets = WIDE_SEARCH
+    ? (query.facets ?? [])
+        .map((t) => t.trim())
+        .filter((t) => t && !usedSet.has(t.toLowerCase()))
+        .slice(0, Math.max(0, 4 - used.length))
+    : [];
+  const all = [...used, ...facets];
   // allSettled, not all: with a fan-out, `all` means one flaky term rejects the
   // whole set, the route turns that into a 502, and the deck says "reconnect
   // Swiggy" while discarding three perfectly good pages. A reauth still has to
   // reach the UI, and a total failure still has to surface — but a partial one
   // is just a smaller deck.
   const settled = await Promise.allSettled(
-    used.map((term) => searchPage(buildSearchArgs({ term }, centre)))
+    all.map((term) => searchPage(buildSearchArgs({ term }, centre)))
   );
   const authFailure = settled.find(
     (r) => r.status === "rejected" && r.reason instanceof SwiggyAuthError
@@ -835,12 +858,24 @@ export async function searchDineoutRestaurants(
   );
   if (throttled?.status === "rejected") throw throttled.reason;
   const firstFailure = settled.find((r) => r.status === "rejected");
-  if (firstFailure?.status === "rejected" && !settled.some((r) => r.status === "fulfilled")) {
-    throw firstFailure.reason; // every term failed — that IS the outage
+  const askSettled = settled.slice(0, used.length);
+  if (firstFailure?.status === "rejected" && !askSettled.some((r) => r.status === "fulfilled")) {
+    throw firstFailure.reason; // every ask term failed — that IS the outage
   }
-  const pages = settled
-    .filter((r): r is PromiseFulfilledResult<SearchPage> => r.status === "fulfilled")
-    .map((r) => r.value);
+  const fulfilled = settled.map((r) => (r.status === "fulfilled" ? r.value : null));
+  // The ask's pages are the answer; the facet pages are only read for which
+  // of the answer's rows they list — so one that reads as nothing is dropped
+  // here, where an ask page that reads as nothing is fatal (below): the facet
+  // was evidence, and losing it must not lose the answer.
+  const pages = fulfilled.slice(0, used.length).filter((p): p is SearchPage => p !== null);
+  const facetPages = fulfilled
+    .slice(used.length)
+    .filter((p): p is SearchPage => p !== null)
+    .filter((page) => {
+      if (!unreadable(page)) return true;
+      console.warn(`[swiggy] facet page parsed to zero rows; dropping it: ${page.text.slice(0, 120)}`);
+      return false;
+    });
   const searched = used.filter((_, i) => settled[i].status === "fulfilled");
 
   // The two searches below are OPTIONAL widenings of an answer we already have.
@@ -898,9 +933,7 @@ export async function searchDineoutRestaurants(
   // it found restaurants, or still carries ids we failed to read, fail loudly:
   // the route turns that into a 502 the UI can actually say something about.
   for (const page of pages) {
-    const claimed = /Found\s+(\d+)\s+restaurant/i.exec(page.text);
-    const shouldHaveRows = (claimed ? Number(claimed[1]) > 0 : false) || page.text.includes("(ID:");
-    if (page.data === null && page.rows.length === 0 && shouldHaveRows) {
+    if (unreadable(page)) {
       console.error(`[swiggy] search prose parsed to zero rows — format changed? ${page.text.slice(0, 200)}`);
       throw new Error("swiggy_unparsable_search");
     }
@@ -943,7 +976,7 @@ export async function searchDineoutRestaurants(
 
   // Keep which search listed each row. Merging without this is what let a row
   // the locality top-up swept in stand as an answer to the concept term.
-  const hits = termHits(pages);
+  const hits = termHits([...pages, ...facetPages]);
   results = results.map((r) => {
     const matched = hits.get(r.id);
     return matched ? { ...r, matchedTerms: matched } : r;
@@ -959,7 +992,7 @@ export async function searchDineoutRestaurants(
   if (dropped > 0) {
     console.warn(`[swiggy] dropped ${dropped}/${offered} results with no id or name`);
   }
-  return { results, dropped, searched, attempted: used };
+  return { results, dropped, searched, attempted: all };
 }
 
 // The tool's default page is 10 and its cap is 30. Nothing used to send this at
@@ -983,12 +1016,17 @@ export const SEARCH_LIMIT = 30;
 // It used to be "restaurants", which this catalogue answers as a NAME match:
 // measured 2026-09-14 at the Bengaluru centre, all 30 rows were places called
 // "…Restaurant(s)", 11 of them unrated, none with a cuisine or a price.
-// "Dinner" at the same point returned 30 rows, 21 rated, every one with a
-// distance, median 4.4km. A locality name does better still (28 of 30 rated,
-// median 1.4km) — so the client sends the locality your nearest saved pins
-// stand in whenever it can (see nearbyArea in lib/deck.ts), and this is the
-// floor under that.
-export const DEFAULT_SEARCH_TERM = "Dinner";
+// "Dinner" looked usable by the numbers (30 rows, 21 rated, every one with a
+// distance) and was the floor until 2026-09-14 — until the names were read:
+// Sai Krishna Snacks & Dinner, Downtown Diner, nine Donne Biryanis, six
+// Gingers and Zingers, two Disneys, Dine In. A fuzzy NAME match, no cuisines,
+// no prices: the "restaurants" hole with a different word. "Casual Dining",
+// measured the same evening: 28 rows, none a name match, all rated, 25 with
+// cuisines — Pind Balluchi, NChef, Chutney Chang, Ishaara, Bologna, Yuki. A
+// locality name does better still (28 of 30 rated, median 1.4km), so the
+// client sends the locality your nearest saved pins stand in whenever it can
+// (see nearbyArea in lib/deck.ts), and this is the floor under that.
+export const DEFAULT_SEARCH_TERM = "Casual Dining";
 
 export function buildSearchArgs(
   query: { term: string; offset?: number; limit?: number },

@@ -1,6 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { buildDecideInstruction, DECIDE_SCHEMA, sanitizeQuery } from "@/lib/decide-prompt";
+import { after } from "next/server";
 import { crossOrigin, forbidden } from "@/lib/api-guard";
+import { logAsk } from "@/lib/askLog";
 
 // The NL layer for Ask. Parses free text ("date night, something new, under
 // 1500, open now") into a structured DecideQuery using Claude with a constrained
@@ -34,8 +36,6 @@ function anthropic(key: string): Anthropic {
 
 export async function POST(request: Request) {
   if (crossOrigin(request)) return forbidden();
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) return Response.json({ error: "no_key" }, { status: 200 });
 
   let prompt = "";
   try {
@@ -44,6 +44,19 @@ export async function POST(request: Request) {
     return Response.json({ error: "bad_request" }, { status: 400 });
   }
   if (!prompt) return Response.json({ error: "empty" }, { status: 200 });
+
+  // Every answer leaves one row in the ask log (lib/askLog.ts): the prompt and
+  // what became of it, so a bad deck can be read back from what was asked.
+  // Written after the response is out — after() keeps the function alive for
+  // it — so the log costs the ask nothing.
+  const t0 = Date.now();
+  const answer = (body: Record<string, unknown>, log: { parsedBy: string; query?: unknown; error?: string }) => {
+    after(() => logAsk({ route: "decide", prompt, ms: Date.now() - t0, ...log }));
+    return Response.json(body, { status: 200 });
+  };
+
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) return answer({ error: "no_key" }, { parsedBy: "error", error: "no_key" });
 
   try {
     const message = await anthropic(key).messages.create({
@@ -65,39 +78,39 @@ export async function POST(request: Request) {
     });
 
     if (message.stop_reason === "refusal") {
-      return Response.json({ error: "refused" }, { status: 200 });
+      return answer({ error: "refused" }, { parsedBy: "error", error: "refused" });
     }
     // A too-small ceiling truncates the JSON body. Caught here it names itself;
     // left to JSON.parse it surfaced as a generic "parse failed" and pointed at
     // the wrong thing.
     if (message.stop_reason === "max_tokens") {
       console.error("[ask] hit max_tokens before finishing the JSON");
-      return Response.json({ error: "truncated" }, { status: 200 });
+      return answer({ error: "truncated" }, { parsedBy: "error", error: "truncated" });
     }
 
     const text = message.content.find((b) => b.type === "text")?.text;
-    if (!text) return Response.json({ error: "no_output" }, { status: 200 });
+    if (!text) return answer({ error: "no_output" }, { parsedBy: "error", error: "no_output" });
 
     // Sanitizer is the backstop even though the schema enforces enums.
     const query = sanitizeQuery(JSON.parse(text));
-    return Response.json({ query, parsedBy: "model" });
+    return answer({ query, parsedBy: "model" }, { parsedBy: "model", query });
   } catch (err) {
     // Every failure here is the same story for the caller — it has to fall back
     // to keyword parsing — but they are very different stories for whoever has
     // to fix it, so they are named and logged rather than flattened into one.
     if (err instanceof Anthropic.AuthenticationError) {
       console.error("[ask] ANTHROPIC_API_KEY rejected");
-      return Response.json({ error: "bad_key" }, { status: 200 });
+      return answer({ error: "bad_key" }, { parsedBy: "error", error: "bad_key" });
     }
     if (err instanceof Anthropic.RateLimitError) {
       console.warn("[ask] rate limited");
-      return Response.json({ error: "rate_limited" }, { status: 200 });
+      return answer({ error: "rate_limited" }, { parsedBy: "error", error: "rate_limited" });
     }
     if (err instanceof Anthropic.APIError) {
       console.error(`[ask] model error ${err.status}: ${err.message}`);
-      return Response.json({ error: "model_error", status: err.status }, { status: 200 });
+      return answer({ error: "model_error", status: err.status }, { parsedBy: "error", error: `model_error ${err.status}` });
     }
     console.error("[ask] parse failed", err);
-    return Response.json({ error: "fetch_failed" }, { status: 200 });
+    return answer({ error: "fetch_failed" }, { parsedBy: "error", error: err instanceof Error ? err.message : "fetch_failed" });
   }
 }

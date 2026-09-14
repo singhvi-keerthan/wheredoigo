@@ -10,6 +10,7 @@ import {
 import { distanceKm, parseDistanceKm } from "./geo";
 import { leadRating } from "./format";
 import { hasWord } from "./words";
+import { facetsFor } from "./swiggyTerms";
 import {
   newSwipeAffinity,
   newSwipeAttributeKeys,
@@ -162,6 +163,11 @@ function evidences(r: SwiggyRestaurant, term: string): boolean {
   return hasWord(evidenceText(r), t);
 }
 
+// "Fine Dining" the search term becomes "Fine dining" the reason.
+function facetLabel(facet: string): string {
+  return facet.charAt(0).toUpperCase() + facet.slice(1).toLowerCase();
+}
+
 function addReason(reasons: string[], reason: string): void {
   if (reasons.length >= 3 || reasons.includes(reason)) return;
   reasons.push(reason);
@@ -259,17 +265,21 @@ function rankNew(
   memory: NewSwipeMemory,
   fallbackKm: number | undefined,
   terms: string[],
-  hit: string[]
+  hit: string[],
+  facet: string[] = []
 ): Extract<DeckCard, { kind: "new" }> {
   const reasons: string[] = [];
-  // What the ask was, said first, when there was more than one thing to be.
-  // A full match names them all; a partial one names what is UNCONFIRMED —
-  // not "not": the Rooftop search simply did not list it, and its own text
-  // did not say North Indian either.
-  if (terms.length >= 2) {
+  // What the ask was, said first — on every card, so a bar in a romantic deck
+  // at least says why it is there. A full match names the terms; a partial one
+  // names what is UNCONFIRMED — not "not": the Rooftop search simply did not
+  // list it, and its own text did not say North Indian either.
+  if (terms.length >= 1) {
     const missing = terms.filter((t) => !hit.includes(t));
     addReason(reasons, missing.length === 0 ? terms.join(" + ") : `${missing.join(" & ")} unconfirmed`);
   }
+  // Then the facets that confirmed it (lib/swiggyTerms.ts) — the evidence the
+  // ask's own tag could not give.
+  for (const f of facet) addReason(reasons, facetLabel(f));
   let score = (r.rating ?? 0) * 8;
 
   const km = parseDistanceKm(r.distance);
@@ -415,9 +425,14 @@ export function buildDeck(opts: {
   // The concept terms Swiggy was actually searched for (the plan's terms that
   // ran — never the locality). Empty on a browse, where every row is eligible.
   terms?: string[];
+  // The facet searches that ran for those terms (lib/swiggyTerms.ts): evidence
+  // that orders the eligible rows, never a condition of being one.
+  facets?: string[];
 }): DeckCard[] {
   const { source, places, query, swiggy, seed, seen, newMemory = {}, anchor } = opts;
   const terms = (opts.terms ?? []).filter(Boolean);
+  const facets = (opts.facets ?? []).filter(Boolean);
+  const { avoid } = facetsFor(terms);
   const unseen = (c: DeckCard) => !seen.has(c.key);
 
   const savedCards: DeckCard[] =
@@ -443,13 +458,32 @@ export function buildDeck(opts: {
       : swiggy
           .filter((r) => !alreadySaved(r, places) && newMatches(r, query))
           .filter((r) => !hasCuisine(r, query.excludeCuisines))
-          .map((r) => ({ r, hit: terms.filter((t) => evidences(r, t)) }))
-          .filter(({ hit }) => terms.length === 0 || hit.length > 0)
-          .map(({ r, hit }) => ({
-            card: rankNew(r, query, newMemory, fallbackKm, terms, hit),
-            tier: hit.length === terms.length ? 0 : 1,
+          .map((r) => ({
+            r,
+            hit: terms.filter((t) => evidences(r, t)),
+            facet: facets.filter((f) => evidences(r, f)),
+            avoided: avoid.length > 0 && r.cuisines.some((c) => avoid.includes(c.toLowerCase())),
           }))
-          .sort((a, b) => a.tier - b.tier || b.card.score - a.card.score)
+          .filter(({ hit }) => terms.length === 0 || hit.length > 0)
+          .map(({ r, hit, facet, avoided }) => ({
+            card: rankNew(r, query, newMemory, fallbackKm, terms, hit, facet),
+            // How many of the asked terms it did NOT evidence: 0 is a full
+            // match; among partials, two of three confirmed beats one.
+            tier: terms.length - hit.length,
+            avoided,
+            confirmed: facet.length,
+          }))
+          // Ask coverage first. Then what the ask's own tag could not say: a
+          // row Swiggy tags with a cuisine the vibe avoids goes after every
+          // other, and among the rest the rows a facet confirmed lead. Rating
+          // and distance order only what is left equal.
+          .sort(
+            (a, b) =>
+              a.tier - b.tier ||
+              Number(a.avoided) - Number(b.avoided) ||
+              b.confirmed - a.confirmed ||
+              b.card.score - a.card.score
+          )
           .map((x) => x.card)
           .filter(unseen);
 

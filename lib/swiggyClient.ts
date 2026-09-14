@@ -82,6 +82,8 @@ async function post<T>(path: string, body: unknown): Promise<{ data: T | null; e
 export async function searchDineout(query: {
   // Swiggy-shaped terms, one concept each — see lib/swiggyTerms.ts.
   terms: string[];
+  // Evidence searches for a loosely tagged vibe — same file.
+  facets?: string[];
   area?: string;
   areaLat?: number;
   areaLng?: number;
