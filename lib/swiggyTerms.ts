@@ -162,10 +162,14 @@ export function buildSearchPlan(query: DecideQuery, keywords?: string[]): Swiggy
   // name, cuisines, description and highlights.
   void keywords;
 
-  // Nothing to go on at all: browse what's nearby rather than send an empty
-  // query, which the tool rejects (minLength 1). With an area known, an empty
-  // term list is correct — lib/swiggy.ts searches the locality itself.
-  if (terms.length === 0 && !query.area?.trim()) terms.push("restaurants");
+  // Nothing to go on at all: an EMPTY list, on purpose. It used to push
+  // "restaurants", which this catalogue answers as a NAME match (measured
+  // 2026-09-14: 30 rows all called "…Restaurant", 11 unrated) — and because the
+  // list was never empty, the locality default in components/SwipeMode.tsx
+  // (`nearbyArea`) and the "Dinner" floor in lib/swiggy.ts could never fire.
+  // An empty list is the signal that lets them: the client sends the locality
+  // the nearest saved pins stand in, and the server falls back to a browsable
+  // concept when no locality is known either.
 
   return { terms };
 }

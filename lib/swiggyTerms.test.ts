@@ -56,9 +56,15 @@ describe("buildSearchPlan — what New mode actually asks Swiggy for", () => {
   });
 
   it("drops vocabulary the catalogue cannot resolve rather than narrowing to noise", () => {
-    // No Swiggy term for these, and a museum is not on Dineout at all.
-    expect(buildSearchPlan({ lifecycle: "any", vibes: ["cozy"] }).terms).toEqual(["restaurants"]);
-    expect(buildSearchPlan({ lifecycle: "any", types: ["museum"] }).terms).toEqual(["restaurants"]);
+    // No Swiggy term for these, and a museum is not on Dineout at all. The list
+    // stays EMPTY — never "restaurants", a name match on this catalogue — so the
+    // client's locality default and the server's "Dinner" floor can take over.
+    expect(buildSearchPlan({ lifecycle: "any", vibes: ["cozy"] }).terms).toEqual([]);
+    expect(buildSearchPlan({ lifecycle: "any", types: ["museum"] }).terms).toEqual([]);
+  });
+
+  it("hands a bare lens an empty list, so the deck browses a locality instead of a placeholder", () => {
+    expect(buildSearchPlan({ lifecycle: "any" }).terms).toEqual([]);
   });
 
   it("leaves the search wide rather than empty when nothing resolves but an area is known", () => {
