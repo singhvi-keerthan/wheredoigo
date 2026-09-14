@@ -32,9 +32,27 @@ export function swiggyDirectionsUrl(r: SwiggyRestaurant): string {
 // `owner_only` is not a failure to retry — it is the honest answer that Swiggy
 // runs on Keerthan's single consent and this device is not his. See
 // lib/swiggy-gate.ts for why that is a contract position, not a policy choice.
-export type SwiggyError = "swiggy_reauth" | "swiggy_unavailable" | "fetch_failed" | "owner_only";
+// `swiggy_busy` is a 429: Swiggy, or the app's own per-minute meter, said stop.
+// Also not a failure to retry — retrying is what makes it worse.
+export type SwiggyError =
+  | "swiggy_reauth"
+  | "swiggy_unavailable"
+  | "fetch_failed"
+  | "owner_only"
+  | "swiggy_busy";
+
+// When Swiggy (or the server's own meter) said stop, it said for how long. Held
+// here so the NEXT thing the deck does — a lens change, the details call for
+// the top card — waits it out instead of being one more request during the
+// back-off. Answered locally as `swiggy_busy`, with no fetch at all.
+let busyUntil = 0;
+
+export function swiggyBusyFor(): number {
+  return Math.max(0, Math.ceil((busyUntil - Date.now()) / 1000));
+}
 
 async function post<T>(path: string, body: unknown): Promise<{ data: T | null; error?: SwiggyError }> {
+  if (swiggyBusyFor() > 0) return { data: null, error: "swiggy_busy" };
   try {
     // The owner key proves which library is asking. The route compares it
     // against PUBLIC_OWNER_HASH server-side; an unconnected device sends
@@ -49,6 +67,11 @@ async function post<T>(path: string, body: unknown): Promise<{ data: T | null; e
       body: JSON.stringify(body),
     });
     const data = await res.json();
+    if (res.status === 429) {
+      const wait = Number(data?.retryAfter) || Number(res.headers.get("retry-after")) || 60;
+      busyUntil = Math.max(busyUntil, Date.now() + wait * 1000);
+      return { data, error: "swiggy_busy" };
+    }
     if (data?.error) return { data, error: data.error as SwiggyError };
     return { data };
   } catch {
@@ -74,17 +97,22 @@ export async function searchDineout(query: {
   // The terms actually searched, so the deck can name them when it comes back
   // empty instead of blaming the user's filter.
   searched: string[];
+  // The concept terms the server TRIED, failed ones included — what the deck
+  // ranks coverage against.
+  attempted: string[];
 }> {
   const { data, error } = await post<{
     results?: SwiggyRestaurant[];
     dropped?: number;
     searched?: string[];
+    attempted?: string[];
   }>("/api/swiggy/search", query);
   return {
     results: data?.results ?? [],
     error,
     dropped: data?.dropped ?? 0,
     searched: data?.searched ?? query.terms,
+    attempted: data?.attempted ?? query.terms,
   };
 }
 

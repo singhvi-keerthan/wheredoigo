@@ -27,7 +27,7 @@ vi.stubEnv("SWIGGY_MCP_TOKEN", "test-token");
 vi.stubEnv("SWIGGY_WIDE_SEARCH", "1");
 
 const { searchDineoutRestaurants } = await import("./swiggy");
-const { SwiggyAuthError } = await import("./swiggyMcp");
+const { SwiggyAuthError, SwiggyRateLimitError } = await import("./swiggyMcp");
 
 // Swiggy's real prose shape — a numbered list with ids in parentheses.
 const prose = (rows: [string, string, string][]) =>
@@ -152,6 +152,80 @@ describe("searchDineoutRestaurants — the area top-up", () => {
     const { searched } = await searchDineoutRestaurants({ terms: ["Indiranagar"], area: "Indiranagar" });
     expect(searched).toEqual(["Indiranagar"]);
     expect(callSwiggyReply).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("searchDineoutRestaurants — provenance through the merge", () => {
+  it("says which terms returned each row, the locality top-up included", async () => {
+    callSwiggyReply
+      .mockResolvedValueOnce(reply([["1", "Toit", "Indiranagar"], ["2", "Bobs Bar", "Ashok Nagar"]])) // Bar
+      .mockResolvedValueOnce(reply([["1", "Toit", "Indiranagar"], ["3", "Skyye", "MG Road"]])) // Rooftop
+      .mockResolvedValueOnce(reply([["4", "Glen's", "Indiranagar"]])); // the top-up
+
+    const { results, searched } = await searchDineoutRestaurants({
+      terms: ["Bar", "Rooftop"],
+      area: "Indiranagar",
+    });
+    expect(searched).toEqual(["Bar", "Rooftop", "Indiranagar"]);
+    const by = Object.fromEntries(results.map((r) => [r.id, r.matchedTerms]));
+    // Merging used to dedupe this away: a row both terms listed and a row only
+    // the locality listed were indistinguishable once in one list.
+    expect(by["1"]).toEqual(["Bar", "Rooftop"]);
+    expect(by["2"]).toEqual(["Bar"]);
+    expect(by["3"]).toEqual(["Rooftop"]);
+    expect(by["4"]).toEqual(["Indiranagar"]);
+  });
+});
+
+describe("searchDineoutRestaurants — a 429 anywhere is the whole answer", () => {
+  it("throws on a throttled term even when another term answered, and spends nothing more", async () => {
+    callSwiggyReply
+      .mockResolvedValueOnce(reply([["1", "Bobs Bar", "Ashok Nagar"]]))
+      .mockRejectedValueOnce(new SwiggyRateLimitError(30));
+    // A partial 200 here would have had the deck fetch details for the card
+    // straight away — one more request during the back-off Swiggy asked for.
+    await expect(
+      searchDineoutRestaurants({ terms: ["Bar", "Rooftop"], area: "Indiranagar" })
+    ).rejects.toBeInstanceOf(SwiggyRateLimitError);
+    expect(callSwiggyReply).toHaveBeenCalledTimes(2); // no top-up
+    expect(callSwiggyTool).not.toHaveBeenCalled(); // no render
+  });
+
+  it("reports the throttle, not the outage, when a transport error came first and a 429 second", async () => {
+    callSwiggyReply
+      .mockRejectedValueOnce(new Error("transport blew up"))
+      .mockRejectedValueOnce(new SwiggyRateLimitError(20));
+    // Every term failed — but one failure names a wait, and that is the one
+    // the client can act on. A 502 here would have lost the Retry-After.
+    await expect(searchDineoutRestaurants({ terms: ["Bar", "Rooftop"] })).rejects.toBeInstanceOf(
+      SwiggyRateLimitError
+    );
+  });
+
+  it("throws when the render call is the one throttled", async () => {
+    callSwiggyReply.mockResolvedValueOnce(reply([["1", "Toit", "Indiranagar"]]));
+    callSwiggyTool.mockRejectedValueOnce(new SwiggyRateLimitError(5));
+    await expect(searchDineoutRestaurants({ terms: ["Bar"] })).rejects.toBeInstanceOf(SwiggyRateLimitError);
+  });
+
+  it("throws when the locality top-up is the one throttled", async () => {
+    callSwiggyReply
+      .mockResolvedValueOnce(reply([["1", "Bobs Bar", "Ashok Nagar"]]))
+      .mockRejectedValueOnce(new SwiggyRateLimitError(5));
+    await expect(
+      searchDineoutRestaurants({ terms: ["Bar"], area: "Indiranagar" })
+    ).rejects.toBeInstanceOf(SwiggyRateLimitError);
+  });
+});
+
+describe("searchDineoutRestaurants — what was tried versus what answered", () => {
+  it("reports a term whose call failed as attempted but not searched", async () => {
+    callSwiggyReply
+      .mockResolvedValueOnce(reply([["1", "Toit", "Indiranagar"]]))
+      .mockRejectedValueOnce(new Error("transport blew up"));
+    const { searched, attempted } = await searchDineoutRestaurants({ terms: ["Bar", "Rooftop"] });
+    expect(searched).toEqual(["Bar"]);
+    expect(attempted).toEqual(["Bar", "Rooftop"]);
   });
 });
 

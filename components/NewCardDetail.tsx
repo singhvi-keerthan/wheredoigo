@@ -21,6 +21,7 @@ function errorNote(error: SwiggyError): string {
   if (error === "owner_only") return "Swiggy discovery is only available on Keerthan’s own device.";
   if (error === "swiggy_reauth") return "Swiggy sign-in expired — run npm run swiggy:auth.";
   if (error === "fetch_failed") return "You’re offline — couldn’t reach Swiggy.";
+  if (error === "swiggy_busy") return "Swiggy is busy — give it a minute.";
   return "Swiggy Dineout is unreachable right now.";
 }
 

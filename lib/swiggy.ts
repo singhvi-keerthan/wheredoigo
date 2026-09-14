@@ -21,10 +21,16 @@
 // is that same user echo, at the root. The map pin is bought from Google at
 // save time instead — see fixSwiggyPosition in components/SwipeMode.tsx.
 
-import { callSwiggyReply, callSwiggyTool, swiggyLive, SwiggyAuthError } from "./swiggyMcp";
+import {
+  callSwiggyReply,
+  callSwiggyTool,
+  swiggyLive,
+  SwiggyAuthError,
+  SwiggyRateLimitError,
+} from "./swiggyMcp";
 import { areaMatches } from "./decide";
 
-export { SwiggyAuthError, swiggyLive } from "./swiggyMcp";
+export { SwiggyAuthError, SwiggyRateLimitError, swiggyLive } from "./swiggyMcp";
 
 export interface SwiggyRestaurant {
   id: string;
@@ -47,6 +53,12 @@ export interface SwiggyRestaurant {
   highlights?: string[];
   offers?: string[];
   distance?: string | null;
+  // The search terms whose own results included this row — provenance kept
+  // through the fan-out merge, so the deck can tell a row both "Rooftop" and
+  // "North Indian" returned from one only one of them did, and a row a concept
+  // term returned from one the locality top-up swept in. Absent on a row no
+  // search listed (a render-only record).
+  matchedTerms?: string[];
 }
 
 // A bookable slot. book_table needs slotId + itemId + reservationTime together,
@@ -484,6 +496,7 @@ const MOCK_RESTAURANTS: SwiggyRestaurant[] = [
 function mockSearch(query: { terms?: string[]; area?: string }): {
   results: SwiggyRestaurant[];
   used: string[];
+  attempted: string[];
 } {
   let results = MOCK_RESTAURANTS;
   if (query.area) {
@@ -506,11 +519,12 @@ function mockSearch(query: { terms?: string[]; area?: string }): {
     // A term the mock catalogue can't answer leaves the pool alone rather than
     // emptying it — eight fixtures cannot cover the real vocabulary.
     if (narrowed.length) {
-      results = narrowed;
+      // The live path's provenance, in the same shape: the terms this row hit.
+      results = narrowed.map((r) => ({ ...r, matchedTerms: terms.filter((t) => hit(r, t)) }));
       used.push(...terms);
     }
   }
-  return { results, used };
+  return { results, used, attempted: terms };
 }
 
 // Mock slots mirror the real shape (ids + reservationTime), not just a label,
@@ -646,6 +660,7 @@ async function renderRestaurants(ids: string[], searches: Record<string, unknown
     );
   } catch (err) {
     if (err instanceof SwiggyAuthError) throw err; // reconnect must reach the UI
+    if (err instanceof SwiggyRateLimitError) throw err; // and so must "stop for now"
     console.warn("[swiggy] render_restaurants_dineout failed; falling back to the prose rows", err);
     return [];
   }
@@ -680,14 +695,34 @@ async function searchPage(search: Record<string, unknown>): Promise<SearchPage> 
   };
 }
 
-// The ids in the order search listed them, page by page — each page's own
-// order, whichever envelope it filled.
+// The ids one page listed, in its own order, whichever envelope it filled.
+function pageIds(page: SearchPage): string[] {
+  return page.raw.length > 0
+    ? page.raw.map((o) => asStr(pick(o, "id", "restaurantId", "resId", "restaurant_id")) ?? "")
+    : page.rows.map((row) => row.id);
+}
+
+// The ids in the order search listed them, page by page.
 function providerIdOrder(pages: SearchPage[]): string[] {
-  return pages.flatMap((page) =>
-    page.raw.length > 0
-      ? page.raw.map((o) => asStr(pick(o, "id", "restaurantId", "resId", "restaurant_id")) ?? "")
-      : page.rows.map((row) => row.id)
-  );
+  return pages.flatMap(pageIds);
+}
+
+// Which search returned each id — the fan-out's provenance. Keyed on the
+// page's own `query`, so the extra page of a term counts for that term and the
+// locality top-up counts for the locality.
+function termHits(pages: SearchPage[]): Map<string, string[]> {
+  const hits = new Map<string, string[]>();
+  for (const page of pages) {
+    const term = typeof page.search.query === "string" ? page.search.query : "";
+    if (!term) continue;
+    for (const id of pageIds(page)) {
+      if (!id) continue;
+      const list = hits.get(id) ?? [];
+      if (!list.includes(term)) list.push(term);
+      hits.set(id, list);
+    }
+  }
+  return hits;
 }
 
 function inProviderOrder(results: SwiggyRestaurant[], order: string[]): SwiggyRestaurant[] {
@@ -732,10 +767,19 @@ export interface DineoutSearchQuery {
 
 export async function searchDineoutRestaurants(
   query: DineoutSearchQuery
-): Promise<{ results: SwiggyRestaurant[]; dropped: number; searched: string[] }> {
+): Promise<{
+  results: SwiggyRestaurant[];
+  dropped: number;
+  // The terms that answered, and the concept terms that were TRIED — a term
+  // whose call failed is in the second and not the first, and the deck ranks
+  // coverage against what was tried, or a failed "Rooftop" would turn every
+  // "Bar" row into a full match with nothing left unconfirmed.
+  searched: string[];
+  attempted: string[];
+}> {
   if (!swiggyLive()) {
     const mock = mockSearch(query);
-    return { results: mock.results, dropped: 0, searched: mock.used };
+    return { results: mock.results, dropped: 0, searched: mock.used, attempted: mock.attempted };
   }
 
   const user: UserCoords = { lat: query.lat ?? 12.972, lng: query.lng ?? 77.61 };
@@ -770,6 +814,16 @@ export async function searchDineoutRestaurants(
     (r) => r.status === "rejected" && r.reason instanceof SwiggyAuthError
   );
   if (authFailure && authFailure.status === "rejected") throw authFailure.reason;
+  // Swiggy said stop on ANY term: that is the whole answer, however many pages
+  // came back — and it outranks "every term failed" below, or a transport
+  // error on the first term would turn a throttle on the second into a 502
+  // with no Retry-After. Rendering the pages that did come back is another
+  // request during the back-off, and a 200 would have the deck fetch details
+  // for every card straight after. The client must hear "busy", with the wait.
+  const throttled = settled.find(
+    (r) => r.status === "rejected" && r.reason instanceof SwiggyRateLimitError
+  );
+  if (throttled?.status === "rejected") throw throttled.reason;
   const firstFailure = settled.find((r) => r.status === "rejected");
   if (firstFailure?.status === "rejected" && !settled.some((r) => r.status === "fulfilled")) {
     throw firstFailure.reason; // every term failed — that IS the outage
@@ -790,6 +844,7 @@ export async function searchDineoutRestaurants(
       return await searchPage(args);
     } catch (err) {
       if (err instanceof SwiggyAuthError) throw err;
+      if (err instanceof SwiggyRateLimitError) throw err;
       console.warn("[swiggy] optional follow-up search failed; keeping the pages we have", err);
       return null;
     }
@@ -876,6 +931,14 @@ export async function searchDineoutRestaurants(
   // their response order, after.
   results = inProviderOrder(results, providerIdOrder(pages));
 
+  // Keep which search listed each row. Merging without this is what let a row
+  // the locality top-up swept in stand as an answer to the concept term.
+  const hits = termHits(pages);
+  results = results.map((r) => {
+    const matched = hits.get(r.id);
+    return matched ? { ...r, matchedTerms: matched } : r;
+  });
+
   // What search offered but nothing could turn into a card. Counted against the
   // prose rows when there are any, since that's the real denominator.
   // Deduped denominator: `rows` is flattened across every search, so the same
@@ -886,7 +949,7 @@ export async function searchDineoutRestaurants(
   if (dropped > 0) {
     console.warn(`[swiggy] dropped ${dropped}/${offered} results with no id or name`);
   }
-  return { results, dropped, searched };
+  return { results, dropped, searched, attempted: used };
 }
 
 // The tool's default page is 10 and its cap is 30. Nothing used to send this at

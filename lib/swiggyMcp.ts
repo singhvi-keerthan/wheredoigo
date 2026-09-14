@@ -14,6 +14,7 @@
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { takeToken, type TokenOptions } from "./ratelimit";
 
 const SERVER_URL = process.env.SWIGGY_MCP_URL ?? "https://mcp.swiggy.com/dineout";
 
@@ -26,8 +27,99 @@ export class SwiggyAuthError extends Error {
   }
 }
 
+// Thrown when Swiggy answered 429, or when this app's own meter says the minute
+// is spent. The one failure whose retry makes it worse — so it is never retried
+// here, and it carries how long to wait so the route can say so (Retry-After).
+export class SwiggyRateLimitError extends Error {
+  retryAfterSec: number;
+  constructor(retryAfterSec = 60) {
+    super("swiggy_rate_limited");
+    this.name = "SwiggyRateLimitError";
+    this.retryAfterSec = retryAfterSec;
+  }
+}
+
 function token(): string | null {
   return process.env.SWIGGY_MCP_TOKEN?.trim() || null;
+}
+
+// Swiggy's ceiling, from the builders docs (operate/rate-limits, read
+// 2026-09-14): 70 requests a minute per user, a 10-second burst of twice the
+// steady rate, and — the part a count around callTool misses — the connection
+// and initialize handshakes are counted too, "the most common cause of rate
+// limit breaches in production". So the meter sits UNDER the SDK, on every
+// request it sends: one token a second (60 a minute, under the 70) from a
+// bucket of 10. The bucket is the burst bound: any ten seconds can spend at
+// most the bucket plus ten seconds of refill, 20, under their 2× steady-state
+// (~23); a cold fan-out — initialize, four terms, a top-up, a render — is 7.
+// Shared by every lambda through Neon, and fail-closed — see takeToken.
+const SWIGGY_BUCKET: TokenOptions = { rate: 1, capacity: 10, strict: true };
+
+// Swiggy said stop — a 429, or a Remaining that reached zero — until a moment
+// it named. Every request checks this first, so one such answer halts ALL
+// requests from this instance for that long, which is the docs' "stop
+// retrying immediately, apply backoff". A retry is never the fix for a 429.
+let blockedUntil = 0;
+function blockFor(sec: number): void {
+  blockedUntil = Math.max(blockedUntil, Date.now() + sec * 1000);
+}
+
+export function parseRetryAfter(value: string | null): number | null {
+  if (!value) return null;
+  const secs = Number(value);
+  if (Number.isFinite(secs)) return Math.max(1, Math.ceil(secs));
+  const at = Date.parse(value); // the HTTP-date form
+  return Number.isNaN(at) ? null : Math.max(1, Math.ceil((at - Date.now()) / 1000));
+}
+
+// The SDK folds a non-2xx answer into an error carrying the status and the
+// body but not the headers — so Retry-After, the one header a 429 is about,
+// would be lost, and X-RateLimit-Remaining on a success never seen. This fetch
+// meters the request, reads both, and turns a 429 into the typed error itself,
+// carrying its own delay, before the SDK can wrap it.
+export const notingFetch = async (url: string | URL, init?: RequestInit): Promise<Response> => {
+  const wait = Math.ceil((blockedUntil - Date.now()) / 1000);
+  if (wait > 0) throw new SwiggyRateLimitError(wait);
+  const take = await takeToken("swiggy:calls", SWIGGY_BUCKET);
+  if (!take.ok) throw new SwiggyRateLimitError(take.retryAfterSec);
+
+  const res = await fetch(url, init);
+  if (res.status === 429) {
+    const sec = parseRetryAfter(res.headers.get("retry-after")) ?? 60;
+    blockFor(sec);
+    throw new SwiggyRateLimitError(sec);
+  }
+  const remaining = res.headers.get("x-ratelimit-remaining");
+  const reset = Number(res.headers.get("x-ratelimit-reset"));
+  if (remaining !== null && Number(remaining) <= 0 && Number.isFinite(reset)) {
+    blockFor(Math.max(1, reset - Math.floor(Date.now() / 1000)));
+  }
+  return res;
+};
+
+// A throttle Swiggy phrases as a TOOL error (isError + "RATE_LIMITED" / "rate
+// limit" prose — the docs say the symbolic code is still to come), which the
+// transport cannot see as a status.
+function isRateLimited(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /RATE_LIMITED|rate.?limit|too many requests|\b429\b/i.test(message);
+}
+
+// A 429 does not invalidate the session, and reconnecting is itself a counted
+// auth event — so keep the session unless the failure was the connect itself
+// (a rejected promise would otherwise be handed to every later call).
+async function dropSessionIfDead(): Promise<void> {
+  const alive = await (cached?.client.then(
+    () => true,
+    () => false
+  ) ?? Promise.resolve(false));
+  if (!alive) cached = null;
+}
+
+// Tests only: the block is module state, and one test's 429 must not throttle
+// the next.
+export function _resetRateLimitState(): void {
+  blockedUntil = 0;
 }
 
 // No token configured → lib/swiggy.ts serves mock data instead, so the deck and
@@ -44,6 +136,7 @@ let cached: { token: string; client: Promise<Client> } | null = null;
 async function connect(bearer: string): Promise<Client> {
   const transport = new StreamableHTTPClientTransport(new URL(SERVER_URL), {
     requestInit: { headers: { Authorization: `Bearer ${bearer}` } },
+    fetch: notingFetch,
   });
   const client = new Client({ name: "wheredoigokeerthan", version: "0.1.0" });
   await client.connect(transport);
@@ -128,9 +221,19 @@ export async function callSwiggyReply<T>(
   const bearer = token();
   if (!bearer) throw new Error("swiggy_not_configured");
 
+  // A 429 is the one answer that must NOT be retried — the retry is another
+  // request against the same ceiling — and must not cost the session either.
+  const throttle = async (err: unknown): Promise<SwiggyRateLimitError> => {
+    await dropSessionIfDead();
+    if (err instanceof SwiggyRateLimitError) return err;
+    blockFor(60);
+    return new SwiggyRateLimitError(60);
+  };
+
   try {
     return unwrapReply<T>(await callOnce(bearer, name, args));
   } catch (err) {
+    if (err instanceof SwiggyRateLimitError || isRateLimited(err)) throw await throttle(err);
     // Drop the session either way: a 401 invalidates it, and a transport error
     // usually means the server expired a session this instance still holds.
     cached = null;
@@ -138,6 +241,7 @@ export async function callSwiggyReply<T>(
     try {
       return unwrapReply<T>(await callOnce(bearer, name, args));
     } catch (retryErr) {
+      if (retryErr instanceof SwiggyRateLimitError || isRateLimited(retryErr)) throw await throttle(retryErr);
       cached = null;
       if (isAuthFailure(retryErr)) throw new SwiggyAuthError();
       throw retryErr;

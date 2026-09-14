@@ -5,7 +5,7 @@ import { X, Sparkles, RefreshCw, ChevronDown, Clock, MapPin } from "lucide-react
 import { geocodeArea } from "@/lib/places";
 import { parseFallback } from "@/lib/decide-fallback";
 import { rankPlaces, type DecideQuery } from "@/lib/decide";
-import { buildSearchPlan } from "@/lib/swiggyTerms";
+import { buildSearchPlan, type SwiggySearchPlan } from "@/lib/swiggyTerms";
 import { TAG_OPTIONS } from "@/lib/types";
 import { usePlaces } from "@/lib/store";
 import type { DeckSource } from "@/lib/deck";
@@ -259,7 +259,9 @@ export function useLens() {
     // query, not from the user's leftover words: the old path joined whatever
     // keywords survived stopword-stripping into one string ("rooftop friends"),
     // which Swiggy resolves as nothing. See lib/swiggyTerms.ts.
-    searchPlan: source === "saved" ? { terms: [] } : buildSearchPlan(query, extras.keywords),
+    searchPlan: (source === "saved"
+      ? { terms: [] }
+      : buildSearchPlan(query, extras.keywords)) as SwiggySearchPlan,
     savedMatches,
     summary,
     dirty,

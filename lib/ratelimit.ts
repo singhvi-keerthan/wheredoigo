@@ -88,3 +88,89 @@ export async function rateLimit(bucket: string, limit: number, windowSec: number
 export function tooMany(): Response {
   return Response.json({ error: "rate_limited" }, { status: 429, headers: { "Retry-After": "60" } });
 }
+
+// ---- Token bucket ---------------------------------------------------------
+//
+// The fixed window above is the right shape for a guessing guard. It is the
+// wrong shape for a ceiling somebody ELSE enforces on a rolling minute with a
+// burst cap: sixty calls in the last second of one window and sixty in the
+// first second of the next read as 120 to them, and sixty inside ten seconds
+// breaks their burst rule however the minute is drawn. A bucket that refills
+// at `rate` tokens a second and holds at most `capacity` is the rule they
+// apply: sustained throughput is the rate, and no ten seconds can ever spend
+// more than the capacity.
+//
+// One row per bucket, and a take is ONE statement: refill by the time elapsed,
+// and spend a token only if a whole one is there (the DO UPDATE ... WHERE), so
+// a refused take changes nothing and every lambda agrees on the count.
+//
+// `strict` FAILS CLOSED — a database error refuses the token. That is for the
+// bucket metering calls to Swiggy, where the wrong side to err on is the one
+// that trips a termination clause; the guessing guards above stay fail-open.
+// With no database configured (dev, the test suite) an in-process bucket runs
+// the same arithmetic: a real limit per instance, not a free pass.
+
+export interface TokenOptions {
+  rate: number; // tokens a second
+  capacity: number; // the most a burst can spend
+  strict?: boolean;
+}
+
+export interface TokenResult {
+  ok: boolean;
+  retryAfterSec: number; // 0 when ok
+}
+
+export function refill(tokens: number, elapsedSec: number, o: TokenOptions): number {
+  return Math.min(o.capacity, tokens + Math.max(0, elapsedSec) * o.rate);
+}
+
+const local = new Map<string, { tokens: number; at: number }>();
+
+export function takeLocalToken(bucket: string, o: TokenOptions, now = Date.now()): TokenResult {
+  const cur = local.get(bucket) ?? { tokens: o.capacity, at: now };
+  const have = refill(cur.tokens, (now - cur.at) / 1000, o);
+  if (have >= 1) {
+    local.set(bucket, { tokens: have - 1, at: now });
+    return { ok: true, retryAfterSec: 0 };
+  }
+  local.set(bucket, { tokens: have, at: now });
+  return { ok: false, retryAfterSec: Math.max(1, Math.ceil((1 - have) / o.rate)) };
+}
+
+let bucketReady = false;
+async function ensureBucket(): Promise<void> {
+  if (bucketReady || !sql) return;
+  await sql`create table if not exists token_bucket (
+    bucket text primary key,
+    tokens double precision not null,
+    updated_at timestamptz not null)`;
+  bucketReady = true;
+}
+
+export async function takeToken(bucket: string, o: TokenOptions): Promise<TokenResult> {
+  if (!sql) return takeLocalToken(bucket, o);
+  try {
+    await ensureBucket();
+    // Refill and spend in one statement. The WHERE on the update is the whole
+    // point: with less than one token there is no update and no row comes
+    // back, and the bucket is exactly as it was.
+    const rows = (await sql`
+      insert into token_bucket as b (bucket, tokens, updated_at)
+      values (${bucket}, ${o.capacity - 1}, now())
+      on conflict (bucket) do update
+        set tokens = least(${o.capacity}::float8, b.tokens + extract(epoch from (now() - b.updated_at)) * ${o.rate}::float8) - 1,
+            updated_at = now()
+        where least(${o.capacity}::float8, b.tokens + extract(epoch from (now() - b.updated_at)) * ${o.rate}::float8) >= 1
+      returning tokens`) as { tokens: number }[];
+    if (rows.length > 0) return { ok: true, retryAfterSec: 0 };
+    return { ok: false, retryAfterSec: Math.max(1, Math.ceil(1 / o.rate)) };
+  } catch (err) {
+    if (o.strict) {
+      console.error("[ratelimit] token take failed — FAILING CLOSED", { bucket, err: String(err) });
+      return { ok: false, retryAfterSec: 5 };
+    }
+    console.error("[ratelimit] token take failed — FAILING OPEN", { bucket, err: String(err) });
+    return { ok: true, retryAfterSec: 0 };
+  }
+}

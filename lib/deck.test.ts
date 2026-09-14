@@ -252,6 +252,58 @@ describe("buildDeck — ranking Swiggy cards", () => {
 });
 
 // Which locality a lens-less deck browses — see nearbyArea.
+// The fan-out's rows are only answers to the terms that returned them — or
+// that their own text confirms. Coverage of what was asked comes before rating
+// and distance, and none of it is the deck's business on a browse.
+describe("buildDeck — coverage of the asked terms", () => {
+  const deckFor = (swiggy: SwiggyRestaurant[], terms: string[]) =>
+    buildDeck({ source: "new", places: [], query: {}, swiggy, seed: 1, seen: new Set(), terms });
+
+  it("drops a row the locality top-up swept in that evidences none of the terms", () => {
+    const dessert = sw({ id: "d", matchedTerms: ["Desserts"], rating: 4.0 });
+    const swept = sw({ id: "s", matchedTerms: ["Jayanagar"], cuisines: ["North Indian"], rating: 4.8 });
+    expect(deckFor([dessert, swept], ["Desserts"]).map((c) => c.key)).toEqual(["new:d"]);
+  });
+
+  it("keeps a top-up row whose own cuisines say the term", () => {
+    const bakery = sw({ id: "b", matchedTerms: ["Jayanagar"], cuisines: ["Bakery", "Desserts"], rating: 4.1 });
+    expect(deckFor([bakery], ["Desserts"]).map((c) => c.key)).toEqual(["new:b"]);
+  });
+
+  it("puts every full match ahead of every partial one, whatever the partial scores", () => {
+    const both = sw({ id: "both", matchedTerms: ["Rooftop", "North Indian"], rating: 4.0, distance: "6 km" });
+    const only = sw({ id: "only", matchedTerms: ["Rooftop"], rating: 4.9, distance: "0.5 km" });
+    const cards = deckFor([only, both], ["Rooftop", "North Indian"]);
+    expect(cards.map((c) => c.key)).toEqual(["new:both", "new:only"]);
+    expect(cards[0].reasons[0]).toBe("Rooftop + North Indian");
+    expect(cards[1].reasons[0]).toBe("North Indian unconfirmed");
+  });
+
+  it("marks every row partial when a term's own call failed — coverage is against what was tried", () => {
+    // "Bar + Rooftop", Rooftop's call failed: no row can carry Rooftop
+    // provenance, and none of these say rooftop themselves.
+    const card = deckFor([sw({ matchedTerms: ["Bar"] })], ["Bar", "Rooftop"])[0];
+    expect(card.reasons[0]).toBe("Rooftop unconfirmed");
+  });
+
+  it("does not take an offer or an address as evidence of what a place is", () => {
+    const deal = sw({ id: "deal", matchedTerms: ["Jayanagar"], offers: ["Happy hour at the bar"], address: "Bar Street" });
+    const named = sw({ id: "named", matchedTerms: ["Jayanagar"], highlights: ["Rooftop bar"] });
+    expect(deckFor([deal, named], ["Bar"]).map((c) => c.key)).toEqual(["new:named"]);
+  });
+
+  it("names nothing about coverage when only one term was asked", () => {
+    const card = deckFor([sw({ matchedTerms: ["Bar"] })], ["Bar"])[0];
+    expect(card.reasons.join(" ")).not.toMatch(/unconfirmed|\+/);
+  });
+
+  it("ranks a browse on rating and distance alone — every row is eligible", () => {
+    const a = sw({ id: "a", rating: 4.0 });
+    const b = sw({ id: "b", matchedTerms: ["Dinner"], rating: 4.6 });
+    expect(deckFor([a, b], []).map((c) => c.key)).toEqual(["new:b", "new:a"]);
+  });
+});
+
 describe("nearbyArea — the locality your nearest pins stand in", () => {
   const HERE = { lat: 12.9716, lng: 77.6411 };
   const km = (n: number) => n / 111.2; // degrees of latitude per km, near enough

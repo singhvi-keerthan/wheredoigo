@@ -28,6 +28,27 @@
 
 import { crossOrigin, forbidden, isSiteOwner, ownerOnly, logEvent } from "@/lib/api-guard";
 import { rateLimit, tooMany } from "@/lib/ratelimit";
+import { SwiggyAuthError, SwiggyRateLimitError } from "@/lib/swiggyMcp";
+
+// One answer for a Swiggy failure, shared by the four routes, because two of
+// its states are ones the client must ACT on and must not mistake for an
+// outage: a 401 (tokens last 5 days — reconnect), and a 429 (Swiggy, or our
+// own meter, said stop — wait, for the seconds it named, sent as Retry-After).
+// Everything else is the outage it always was.
+export function swiggyFailure(err: unknown, route: string, body: Record<string, unknown>): Response {
+  if (err instanceof SwiggyAuthError) {
+    return Response.json({ error: "swiggy_reauth", ...body }, { status: 401 });
+  }
+  if (err instanceof SwiggyRateLimitError) {
+    logEvent(route, "swiggy_rate_limited", { retryAfter: err.retryAfterSec });
+    return Response.json(
+      { error: "swiggy_busy", retryAfter: err.retryAfterSec, ...body },
+      { status: 429, headers: { "Retry-After": String(err.retryAfterSec) } }
+    );
+  }
+  console.error(`[swiggy] ${route} failed`, err);
+  return Response.json({ error: "swiggy_unavailable", ...body }, { status: 502 });
+}
 
 // Well under any plausible notified limit. Swipe Mode fetches details per card,
 // so a browsing session spends a few dozen; 300/hour leaves room for a long

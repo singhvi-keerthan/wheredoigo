@@ -64,7 +64,32 @@ describe("buildSearchPlan — what New mode actually asks Swiggy for", () => {
   });
 
   it("hands a bare lens an empty list, so the deck browses a locality instead of a placeholder", () => {
-    expect(buildSearchPlan({ lifecycle: "any" }).terms).toEqual([]);
+    const plan = buildSearchPlan({ lifecycle: "any" });
+    expect(plan.terms).toEqual([]);
+    expect(plan.unsupported).toBeUndefined();
+  });
+
+  it("marks an ask made only of things Dineout does not list, even with an area", () => {
+    // "museum in jayanagar" must not become Jayanagar's restaurants.
+    const plan = buildSearchPlan({ lifecycle: "any", types: ["museum"], area: "Jayanagar" });
+    expect(plan.terms).toEqual([]);
+    expect(plan.unsupported).toEqual(["museum"]);
+  });
+
+  it("still searches a mixed ask, dropping the part Dineout cannot answer", () => {
+    const plan = buildSearchPlan({ lifecycle: "any", types: ["museum", "café"] });
+    expect(plan.terms).toEqual(["Cafe"]);
+    expect(plan.unsupported).toBeUndefined();
+  });
+
+  it("browses a mixed ask whose other half is any restaurant", () => {
+    expect(buildSearchPlan({ lifecycle: "any", types: ["museum", "restaurant"] })).toEqual({ terms: [] });
+  });
+
+  it("browses, not refuses, on an attribute the catalogue holds but cannot index", () => {
+    // Restaurants CAN be cozy; Swiggy just has no term for it.
+    expect(buildSearchPlan({ lifecycle: "any", vibes: ["cozy"] })).toEqual({ terms: [] });
+    expect(buildSearchPlan({ lifecycle: "any", types: ["restaurant"] })).toEqual({ terms: [] });
   });
 
   it("leaves the search wide rather than empty when nothing resolves but an area is known", () => {

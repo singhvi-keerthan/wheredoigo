@@ -252,6 +252,11 @@ export default function SwipeMode({
   // The terms Swiggy was actually asked for. Only used by the empty state, so
   // it can name what came back with nothing instead of blaming your filter.
   const [searchedTerms, setSearchedTerms] = useState<string[]>([]);
+  // The lens's own concept terms the server TRIED (never the locality it
+  // added; a term whose call failed included), so the deck ranks coverage of
+  // what was asked — a failed "Rooftop" leaves every card "Rooftop unconfirmed",
+  // not a full match.
+  const [searchedConcepts, setSearchedConcepts] = useState<string[]>([]);
   // Every Swiggy tool takes the same coordinate pair from search through slots
   // to booking. Use whatever bias the app already has (GPS only if permission
   // was previously granted, otherwise the map centre), then fall back. Swipe
@@ -360,8 +365,19 @@ export default function SwipeMode({
     let cancelled = false;
     const run = async () => {
       setLoadingNew(true);
-      const plan = JSON.parse(planKey) as { terms: string[] };
-      const { results, error, searched } = await searchDineout({
+      const plan = JSON.parse(planKey) as { terms: string[]; unsupported?: string[] };
+      // Dineout has no term for what was asked — a museum is not in the
+      // catalogue — so there is nothing true to search. No call; the empty
+      // state says why, instead of the locality's restaurants under that name.
+      if (plan.unsupported?.length) {
+        setSwiggy([]);
+        setNewError(null);
+        setSearchedTerms([]);
+        setSearchedConcepts([]);
+        setLoadingNew(false);
+        return;
+      }
+      const { results, error, searched, attempted } = await searchDineout({
         terms: plan.terms,
         // The lens's locality when it names one, else the browse locality
         // above. Only the SEARCH sees it: it is not a filter on the deck.
@@ -375,6 +391,8 @@ export default function SwipeMode({
         setSwiggy(results);
         setNewError(error ?? null);
         setSearchedTerms(searched);
+        const concept = new Set(plan.terms.map((t) => t.toLowerCase()));
+        setSearchedConcepts(attempted.filter((t) => concept.has(t.toLowerCase())));
         setLoadingNew(false);
       }
     };
@@ -408,13 +426,14 @@ export default function SwipeMode({
         seen: seenRef.current,
         newMemory: newMemoryRef.current ?? {},
         anchor: anchor ? { ...anchor.coords, source: anchor.source } : undefined,
+        terms: searchedConcepts,
       })
     );
     setPos(0);
     setUndo([]);
     setExiting(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, queryKey, swiggy, seed, anchor]);
+  }, [source, queryKey, swiggy, seed, anchor, searchedConcepts]);
 
   // The localities the Area filter can offer. New discovery cannot derive this
   // only from the current Swiggy page, because that page is small and area is
@@ -657,6 +676,9 @@ export default function SwipeMode({
   // exists to avoid.
   const emptyFromSwiggy =
     source !== "saved" && !newError && swiggy.length === 0 && searchedTerms.length > 0;
+  // The ask named only things Dineout does not list (lib/swiggyTerms.ts). No
+  // search ran; the honest deck is empty and says so.
+  const unsupportedAsk = source !== "saved" && (searchPlan.unsupported?.length ?? 0) > 0;
   const showCards = !busy && !newFailed && !empty && !exhausted;
 
   // The coach runs once per RUN of the deck — opening the mode, changing the
@@ -832,7 +854,9 @@ export default function SwipeMode({
                 ? "Swiggy is Keerthan’s only"
                 : newError === "swiggy_reauth"
                   ? "Swiggy needs reconnecting"
-                  : "Swiggy didn’t answer"}
+                  : newError === "swiggy_busy"
+                    ? "Swiggy is busy"
+                    : "Swiggy didn’t answer"}
             </p>
             <p className="mt-1 text-[12.5px] leading-snug" style={{ color: "var(--text-tertiary)" }}>
               {/* owner_only is a 403 that will never change on this device, so it
@@ -841,22 +865,30 @@ export default function SwipeMode({
                 ? "Discovering new restaurants runs on his Swiggy account, so it only works there. Your own saved places work normally."
                 : newError === "swiggy_reauth"
                   ? "Access tokens last 5 days. Run npm run swiggy:auth to sign in again."
-                  : "Dineout is unreachable right now — your saved places still work."}
+                  : newError === "swiggy_busy"
+                    ? "Too many Dineout requests in the last minute. Give it a moment — your saved places still work."
+                    : "Dineout is unreachable right now — your saved places still work."}
             </p>
           </Centered>
         ) : empty ? (
           <Centered>
             <p className="text-[15px] font-semibold" style={{ color: "var(--text-secondary)" }}>
-              {emptyFromSwiggy ? "Swiggy had nothing for this" : "Nothing matches this filter"}
+              {unsupportedAsk
+                ? "Swiggy can’t search for that"
+                : emptyFromSwiggy
+                  ? "Swiggy had nothing for this"
+                  : "Nothing matches this filter"}
             </p>
             <p className="mt-1 text-[12.5px] leading-snug" style={{ color: "var(--text-tertiary)" }}>
               {/* An empty catalogue answer is not the same as an over-tight
                   filter, and telling someone to "loosen one" when the search
                   itself came back with nothing sends them to fix the one thing
                   that was never the problem. Name the term that found nothing. */}
-              {emptyFromSwiggy
-                ? `No Dineout results for ${searchedTerms.slice(0, 3).join(", ")}. Try a different word — or swipe your own saved places.`
-                : lens.dirty
+              {unsupportedAsk
+                ? `Dineout doesn’t list ${(searchPlan.unsupported ?? []).map((v) => v.replace(/-/g, " ")).join(" or ")} — it books restaurants. Your own saved places do; switch the deck to Saved.`
+                : emptyFromSwiggy
+                  ? `No Dineout results for ${searchedTerms.slice(0, 3).join(", ")}. Try a different word — or swipe your own saved places.`
+                  : lens.dirty
                   ? "Loosen one and the deck comes back."
                   : "Nothing here to swipe yet."}
             </p>

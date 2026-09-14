@@ -1,5 +1,5 @@
-import { bookTable, SwiggyAuthError } from "@/lib/swiggy";
-import { swiggyGate } from "@/lib/swiggy-gate";
+import { bookTable } from "@/lib/swiggy";
+import { swiggyFailure, swiggyGate } from "@/lib/swiggy-gate";
 
 // book_table — free reservations only. The whole slot is required, not just an
 // id: Swiggy wants slotId + itemId + reservationTime together, plus the same
@@ -41,10 +41,6 @@ export async function POST(request: Request) {
     );
     return Response.json(booking);
   } catch (err) {
-    if (err instanceof SwiggyAuthError) {
-      return Response.json({ error: "swiggy_reauth" }, { status: 401 });
-    }
-    console.error("[swiggy] book failed", err);
-    return Response.json({ error: "swiggy_unavailable" }, { status: 502 });
+    return swiggyFailure(err, "swiggy/book", {});
   }
 }

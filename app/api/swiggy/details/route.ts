@@ -1,5 +1,5 @@
-import { getDineoutRestaurantDetails, SwiggyAuthError, type SwiggyRestaurant } from "@/lib/swiggy";
-import { swiggyGate } from "@/lib/swiggy-gate";
+import { getDineoutRestaurantDetails, type SwiggyRestaurant } from "@/lib/swiggy";
+import { swiggyFailure, swiggyGate } from "@/lib/swiggy-gate";
 
 // Active-card enrichment for Swipe Mode. Search stays one cheap catalog call;
 // details are fetched only for the Swiggy card the user is actually looking at.
@@ -24,10 +24,6 @@ export async function POST(request: Request) {
     });
     return Response.json({ restaurant });
   } catch (err) {
-    if (err instanceof SwiggyAuthError) {
-      return Response.json({ error: "swiggy_reauth", restaurant: null }, { status: 401 });
-    }
-    console.error("[swiggy] details failed", err);
-    return Response.json({ error: "swiggy_unavailable", restaurant: null }, { status: 502 });
+    return swiggyFailure(err, "swiggy/details", { restaurant: null });
   }
 }

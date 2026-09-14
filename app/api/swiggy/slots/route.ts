@@ -1,5 +1,5 @@
-import { getAvailableSlots, SwiggyAuthError } from "@/lib/swiggy";
-import { swiggyGate } from "@/lib/swiggy-gate";
+import { getAvailableSlots } from "@/lib/swiggy";
+import { swiggyFailure, swiggyGate } from "@/lib/swiggy-gate";
 
 // get_available_slots — same-day tables by default. `date` is optional and
 // defaults to today in IST inside lib/swiggy (the server runs UTC).
@@ -32,10 +32,6 @@ export async function POST(request: Request) {
     });
     return Response.json({ results });
   } catch (err) {
-    if (err instanceof SwiggyAuthError) {
-      return Response.json({ error: "swiggy_reauth", results: [] }, { status: 401 });
-    }
-    console.error("[swiggy] slots failed", err);
-    return Response.json({ error: "swiggy_unavailable", results: [] }, { status: 502 });
+    return swiggyFailure(err, "swiggy/slots", { results: [] });
   }
 }

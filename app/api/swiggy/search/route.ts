@@ -1,5 +1,5 @@
-import { searchDineoutRestaurants, SwiggyAuthError, type DineoutSearchQuery } from "@/lib/swiggy";
-import { swiggyGate } from "@/lib/swiggy-gate";
+import { searchDineoutRestaurants, type DineoutSearchQuery } from "@/lib/swiggy";
+import { swiggyFailure, swiggyGate } from "@/lib/swiggy-gate";
 
 // Decide's "Swiggy" mode — browse Swiggy Dineout's own catalog, independent of
 // anything you've saved. Backed by search_restaurants_dineout when
@@ -21,7 +21,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { results, dropped, searched } = await searchDineoutRestaurants({
+    const { results, dropped, searched, attempted } = await searchDineoutRestaurants({
       ...body,
       terms: Array.isArray(body.terms) ? body.terms.filter((t) => typeof t === "string") : [],
     });
@@ -29,14 +29,10 @@ export async function POST(request: Request) {
     // WHY it is empty — "Swiggy had nothing for rooftop" is a different message
     // from "your filter hid everything", and the UI used to show the second one
     // for both.
-    return Response.json({ results, dropped, searched });
+    return Response.json({ results, dropped, searched, attempted });
   } catch (err) {
-    // Tokens last 5 days and can't be refreshed, so this is a routine state:
-    // the deck shows a "reconnect Swiggy" note rather than an error.
-    if (err instanceof SwiggyAuthError) {
-      return Response.json({ error: "swiggy_reauth", results: [] }, { status: 401 });
-    }
-    console.error("[swiggy] search failed", err);
-    return Response.json({ error: "swiggy_unavailable", results: [] }, { status: 502 });
+    // Reconnect (401) and back off (429) are routine states the deck names;
+    // anything else is the outage — see swiggyFailure.
+    return swiggyFailure(err, "swiggy/search", { results: [] });
   }
 }

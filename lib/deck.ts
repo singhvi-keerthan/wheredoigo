@@ -144,6 +144,24 @@ function newText(r: SwiggyRestaurant): string {
     .toLowerCase();
 }
 
+// A row's evidence for one of the terms Swiggy was asked: that term's own
+// search returned it (matchedTerms — provenance kept through the merge), or
+// the row says so itself in its cuisines, name or highlights. The second is
+// what lets a row the LOCALITY top-up found into a "Desserts" deck at all: it
+// is there because it is in Jayanagar, and it stays only if it is a dessert
+// place too.
+// Only the fields that SAY what a place is — never its address, description
+// or offers, where "bar" in a happy-hour deal would qualify a row as a bar.
+function evidenceText(r: SwiggyRestaurant): string {
+  return [r.name, r.area, ...r.cuisines, ...(r.highlights ?? [])].join(" ").toLowerCase();
+}
+
+function evidences(r: SwiggyRestaurant, term: string): boolean {
+  const t = term.toLowerCase();
+  if (r.matchedTerms?.some((m) => m.toLowerCase() === t)) return true;
+  return hasWord(evidenceText(r), t);
+}
+
 function addReason(reasons: string[], reason: string): void {
   if (reasons.length >= 3 || reasons.includes(reason)) return;
   reasons.push(reason);
@@ -239,9 +257,19 @@ function rankNew(
   r: SwiggyRestaurant,
   q: DecideQuery,
   memory: NewSwipeMemory,
-  fallbackKm: number | undefined
+  fallbackKm: number | undefined,
+  terms: string[],
+  hit: string[]
 ): Extract<DeckCard, { kind: "new" }> {
   const reasons: string[] = [];
+  // What the ask was, said first, when there was more than one thing to be.
+  // A full match names them all; a partial one names what is UNCONFIRMED —
+  // not "not": the Rooftop search simply did not list it, and its own text
+  // did not say North Indian either.
+  if (terms.length >= 2) {
+    const missing = terms.filter((t) => !hit.includes(t));
+    addReason(reasons, missing.length === 0 ? terms.join(" + ") : `${missing.join(" & ")} unconfirmed`);
+  }
   let score = (r.rating ?? 0) * 8;
 
   const km = parseDistanceKm(r.distance);
@@ -384,8 +412,12 @@ export function buildDeck(opts: {
   seen: Set<string>;
   newMemory?: NewSwipeMemory;
   anchor?: DeckAnchor;
+  // The concept terms Swiggy was actually searched for (the plan's terms that
+  // ran — never the locality). Empty on a browse, where every row is eligible.
+  terms?: string[];
 }): DeckCard[] {
   const { source, places, query, swiggy, seed, seen, newMemory = {}, anchor } = opts;
+  const terms = (opts.terms ?? []).filter(Boolean);
   const unseen = (c: DeckCard) => !seen.has(c.key);
 
   const savedCards: DeckCard[] =
@@ -398,14 +430,27 @@ export function buildDeck(opts: {
   const fallbackKm = median(
     swiggy.map((r) => parseDistanceKm(r.distance)).filter((d): d is number => d != null)
   );
+  // Coverage of the asked terms comes BEFORE rating and distance: with terms
+  // to check, a row that evidences none of them is not in the deck at all
+  // (it is what the locality top-up swept in, and "in Jayanagar" is not "a
+  // dessert place in Jayanagar"); a row that evidences all of them outranks
+  // every row that evidences some, however well the partial one scores; the
+  // partial ones follow, as the explicitly weaker fallback, each saying what
+  // it did not confirm. On a browse there is nothing to cover.
   const newCards: DeckCard[] =
     source === "saved"
       ? []
       : swiggy
           .filter((r) => !alreadySaved(r, places) && newMatches(r, query))
           .filter((r) => !hasCuisine(r, query.excludeCuisines))
-          .map((r) => rankNew(r, query, newMemory, fallbackKm))
-          .sort((a, b) => b.score - a.score)
+          .map((r) => ({ r, hit: terms.filter((t) => evidences(r, t)) }))
+          .filter(({ hit }) => terms.length === 0 || hit.length > 0)
+          .map(({ r, hit }) => ({
+            card: rankNew(r, query, newMemory, fallbackKm, terms, hit),
+            tier: hit.length === terms.length ? 0 : 1,
+          }))
+          .sort((a, b) => a.tier - b.tier || b.card.score - a.card.score)
+          .map((x) => x.card)
           .filter(unseen);
 
   if (source === "both") return zipper(savedCards, newCards);

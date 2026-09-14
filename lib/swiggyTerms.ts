@@ -119,6 +119,23 @@ const SOURCES: { key: keyof DecideQuery; table: Record<string, string> }[] = [
 
 const MAX_TERMS = 4;
 
+// The half of the type vocabulary that is not on Dineout at all. A museum is
+// not a restaurant Swiggy can't filter for — it is not in the catalogue — so
+// an ask made only of these has no honest Swiggy answer, and the plan says so
+// rather than browsing the locality's restaurants under a museum's name.
+// Everything else that maps to no term (cozy, quiet, celebration, parking…)
+// still browses: the catalogue HAS those places, it just can't index the
+// attribute, and your own saved places carry that half of the lens.
+const NOT_ON_DINEOUT = new Set([
+  "museum",
+  "landmark",
+  "viewpoint",
+  "park-garden",
+  "activity",
+  "theatre",
+  "shopping",
+]);
+
 export interface SwiggySearchPlan {
   // The concept searches, most specific first. Never a sentence, never a
   // location word — the locality travels separately as `area` (and its geocoded
@@ -127,6 +144,10 @@ export interface SwiggySearchPlan {
   // Indiranagar — far better area coverage than a concept term at the area's
   // coordinates (`query="bar"` there returned 30 rows, 2 in Indiranagar).
   terms: string[];
+  // Set — and `terms` empty — when the ask named only things Dineout does not
+  // list (NOT_ON_DINEOUT). The deck makes no Swiggy call for it and says why
+  // it is empty. Values as the lens wrote them, for that message.
+  unsupported?: string[];
 }
 
 export function buildSearchPlan(query: DecideQuery, keywords?: string[]): SwiggySearchPlan {
@@ -161,6 +182,18 @@ export function buildSearchPlan(query: DecideQuery, keywords?: string[]): Swiggy
   // their job locally instead — lib/deck.ts scores them against each row's own
   // name, cuisines, description and highlights.
   void keywords;
+
+  // Only things the catalogue does not hold: "museum in Jayanagar" must not
+  // become Jayanagar's restaurants. A mixed ask still browses or searches —
+  // "museum or a cafe" has a true term, "museum or a restaurant" has a
+  // browsable one — and drops the museum to the saved side. Unsupported is
+  // when EVERY type asked for is off the catalogue.
+  if (terms.length === 0) {
+    const types = query.types ?? [];
+    if (types.length > 0 && types.every((v) => NOT_ON_DINEOUT.has(v))) {
+      return { terms, unsupported: types };
+    }
+  }
 
   // Nothing to go on at all: an EMPTY list, on purpose. It used to push
   // "restaurants", which this catalogue answers as a NAME match (measured
