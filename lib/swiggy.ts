@@ -317,11 +317,16 @@ function restaurantRecord(data: unknown): Rec {
 export function mergeRestaurantDetails(base: SwiggyRestaurant, detail: unknown): SwiggyRestaurant {
   const d = restaurantRecord(payload(detail));
   const parsed = toRestaurant({ ...d, id: pick(d, "id", "restaurantId", "resId", "restaurant_id") ?? base.id, name: pick(d, "name", "restaurantName", "restaurant_name") ?? base.name });
+  // The search row's photo stays the cover. The deck deals a card on that
+  // picture — SwipeMode waits for it (lib/covers.ts) — and putting the details
+  // gallery first swapped the cover under a card already on screen: a second
+  // load after the deal, which is exactly what the wait exists to prevent.
+  // Details photos join the gallery behind it.
   const photos = uniq([
-    ...(parsed?.photos ?? []),
-    ...(parsed?.photo ? [parsed.photo] : []),
     ...(base.photos ?? []),
     ...(base.photo ? [base.photo] : []),
+    ...(parsed?.photos ?? []),
+    ...(parsed?.photo ? [parsed.photo] : []),
   ]);
   return {
     ...base,

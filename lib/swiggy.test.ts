@@ -169,11 +169,24 @@ describe("mergeRestaurantDetails — active Swiggy card enrichment", () => {
     expect(merged.rating).toBe(base.rating);
     expect(merged.priceForTwo).toBe(base.priceForTwo);
     expect(merged.photos).toHaveLength(3);
-    expect(merged.photos?.[0]).toContain("gallery-one");
-    expect(merged.photo).toBe(merged.photos?.[0]);
+    // The search photo stays the cover the card was dealt on; the gallery
+    // follows it, so details landing never swap the picture under the card.
+    expect(merged.photos?.[0]).toBe(base.photo);
+    expect(merged.photos?.[1]).toContain("gallery-one");
+    expect(merged.photo).toBe(base.photo);
     expect(merged.description).toBe("A compact dinner spot with a wood-fired menu.");
     expect(merged.highlights).toEqual(["Outdoor seating", "Serves cocktails"]);
     expect(merged.offers).toEqual(["Flat 20% off on pre-booking"]);
     expect(merged.distance).toBe("2.4 km away");
+  });
+
+  it("keeps the gallery's own first photo as the cover when it differs from `photo`", () => {
+    const first = "https://cdn.example/first.jpg";
+    const merged = mergeRestaurantDetails(
+      { ...base, photos: [first, "https://cdn.example/base.jpg"] },
+      { restaurant: { images: ["gallery-one"] } }
+    );
+    expect(merged.photos?.[0]).toBe(first);
+    expect(merged.photo).toBe(first);
   });
 });

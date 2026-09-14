@@ -14,6 +14,7 @@ import {
 import { biasContext, searchBias, subscribeGeoStatus } from "@/lib/bias";
 import { searchPlaces, geocodeArea } from "@/lib/places";
 import { buildDeck, nearbyArea, refreshSavedCardPhotos, type DeckCard } from "@/lib/deck";
+import { coverSettled, coverUrl, warmCover } from "@/lib/covers";
 import { bumpSkip, resetSkip, decSkip, peekSkip, setSkip } from "@/lib/skips";
 import { readNewSwipeMemory, recordNewSwipe, undoNewSwipe, type SwipeDir, type NewSwipeMemory } from "@/lib/swipeMemory";
 import { BENGALURU_AREA_OPTIONS } from "@/lib/areas";
@@ -44,6 +45,10 @@ const FLICK_MIN = 44; // px — ignore taps / jitter below this travel
 // card that scales up behind the one you just sent away.
 //
 const OUT_MS = 190; // the mode's own fade-out, before AppShell unmounts it
+// How many covers to have in hand ahead of the top card (lib/covers.ts). The
+// stack itself mounts three; warming further ahead is what keeps a quick run
+// of swipes from ever catching a card without its picture.
+const COVERS_AHEAD = 6;
 
 // ---- the opening beat -----------------------------------------------------
 // Every run of the deck opens the same way: the cards are dealt, then the two
@@ -237,6 +242,14 @@ export default function SwipeMode({
   });
 
   const seenRef = useRef<Set<string>>(new Set()); // session dismiss/decided ledger
+  // Bumped on every deck rebuild. An advance that waited for a cover (see
+  // commit) checks it before moving: a deck rebuilt meanwhile owns its own
+  // position, and a late advance must not eat its first card.
+  const runGen = useRef(0);
+  // True while the booking sheet's Add is waiting on the next card's cover. A
+  // swipe has `exiting` to hold the deck still for its own wait; this is the
+  // same hold for the add, which has no fly-out to hang it on.
+  const advancing = useRef(false);
   const newMemoryRef = useRef<NewSwipeMemory | null>(null);
   if (newMemoryRef.current === null) newMemoryRef.current = readNewSwipeMemory();
   const [deck, setDeck] = useState<DeckCard[]>([]);
@@ -415,23 +428,49 @@ export default function SwipeMode({
   // sooner, add it as a dep AND stop resetting pos/undo, or it will also throw
   // away the user's position on every swipe.
   const queryKey = JSON.stringify(query);
+  const runKey = `${source}|${queryKey}|${seed}`;
+  // A deck lands only with its top card's picture in hand (lib/covers.ts). A
+  // new run holds visibly — the stage stays on "Finding places…", there is
+  // nothing true to show yet. A rebuild inside a run (the GPS fix that
+  // re-anchors the pile before the first touch) holds quietly: the dealt pile
+  // stays up, complete, and the re-ranked one replaces it once its own top
+  // cover has settled — unless the pile was touched meanwhile, in which case
+  // it is theirs and the re-rank is dropped, as a late fix always was.
+  const [landing, setLanding] = useState(false);
+  const dealtRun = useRef<string | null>(null);
   useEffect(() => {
-    setDeck(
-      buildDeck({
-        source,
-        places: placesRef.current,
-        query,
-        swiggy,
-        seed,
-        seen: seenRef.current,
-        newMemory: newMemoryRef.current ?? {},
-        anchor: anchor ? { ...anchor.coords, source: anchor.source } : undefined,
-        terms: searchedConcepts,
-      })
-    );
-    setPos(0);
-    setUndo([]);
-    setExiting(null);
+    runGen.current += 1;
+    const gen = runGen.current;
+    const built = buildDeck({
+      source,
+      places: placesRef.current,
+      query,
+      swiggy,
+      seed,
+      seen: seenRef.current,
+      newMemory: newMemoryRef.current ?? {},
+      anchor: anchor ? { ...anchor.coords, source: anchor.source } : undefined,
+      terms: searchedConcepts,
+    });
+    const quiet = dealtRun.current === runKey;
+    const land = () => {
+      if (quiet && touchedRef.current) return;
+      dealtRun.current = runKey;
+      setDeck(built);
+      setPos(0);
+      setUndo([]);
+      setExiting(null);
+      setLanding(false);
+    };
+    const cover = built.length ? coverUrl(built[0]) : null;
+    if (coverSettled(cover)) {
+      land();
+      return;
+    }
+    if (!quiet) setLanding(true);
+    void warmCover(cover).then(() => {
+      if (runGen.current === gen) land();
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, queryKey, swiggy, seed, anchor, searchedConcepts]);
 
@@ -487,9 +526,16 @@ export default function SwipeMode({
     };
   }, [currentNew, coords]);
 
+  // The cover the card behind the top will open on — enriched, as SwipeCard
+  // will see it, so an advance waits on the picture that actually mounts.
+  const behindCover = (): string | null => {
+    const next = deck[pos + 1] as DeckCard | undefined;
+    return next ? coverUrl(enrichCard(next)) : null;
+  };
+
   // ---- actions -----------------------------------------------------------
   const commit = (dir: "left" | "right") => {
-    if (!current || exiting) return;
+    if (!current || exiting || advancing.current) return;
     touchedRef.current = true;
     const card = current;
     let entry: UndoEntry = { key: card.key, placeId: null };
@@ -520,13 +566,21 @@ export default function SwipeMode({
     }
     setUndo((u) => [...u, entry]);
     setExiting({ dir, key: card.key });
+    const gen = runGen.current;
+    const behind = behindCover();
     // No drag reset needed here: useCardSwipe clears its own state before it
     // calls onCommit, and the keyboard/button paths never had a drag.
     window.setTimeout(() => {
-      seenRef.current.add(card.key);
-      setPos((p) => p + 1);
-      setExiting(null);
-      if (prompt && card.kind === "saved") setConfirmHide(card);
+      // The card behind comes to the top with its picture, never before it —
+      // bounded, see lib/covers.ts. It has been warming since it entered the
+      // stack, so this is normally already settled.
+      void warmCover(behind).then(() => {
+        seenRef.current.add(card.key);
+        if (runGen.current !== gen) return;
+        setPos((p) => p + 1);
+        setExiting(null);
+        if (prompt && card.kind === "saved") setConfirmHide(card);
+      });
     }, EXIT_MS);
   };
 
@@ -568,6 +622,7 @@ export default function SwipeMode({
       setDetailNew(null);
       return;
     }
+    if (exiting || advancing.current) return; // a decision is already in flight
     const card = current;
     touchedRef.current = true;
     const placeId = saveNew(card.r, coords); // side effect kept out of the state updater
@@ -575,12 +630,19 @@ export default function SwipeMode({
     setUndo((u) => [...u, { key: card.key, placeId, newSwipe: { restaurant: card.r, dir: "right" } }]);
     onToast("Added to watchlist");
     seenRef.current.add(card.key);
-    setPos((p) => p + 1);
     setDetailNew(null);
+    // Same wait as a swipe: the next card arrives with its picture.
+    const gen = runGen.current;
+    const behind = behindCover();
+    advancing.current = true;
+    void warmCover(behind).then(() => {
+      advancing.current = false;
+      if (runGen.current === gen) setPos((p) => p + 1);
+    });
   };
 
   const doUndo = () => {
-    if (exiting || !undo.length) return;
+    if (exiting || advancing.current || !undo.length) return;
     const last = undo[undo.length - 1];
     // Side effects run here in the handler — never inside a setState updater
     // (React runs those during render, and store writes fan out to other
@@ -658,13 +720,19 @@ export default function SwipeMode({
   // Blob. Refresh only the visible Saved cards' photo arrays so those images
   // appear without resetting pos/undo or reordering the stack.
   const displayDeck = useMemo(() => refreshSavedCardPhotos(deck, places), [deck, places]);
-  const stack = displayDeck.slice(pos, pos + 3).map(enrichCard);
+  // The top card always has its cover — the deck landed on it, and every
+  // advance waited for it. The cards behind mount as theirs settle, never
+  // before: what shows under a card flying out is always a complete card.
+  const stack = displayDeck
+    .slice(pos, pos + 3)
+    .map(enrichCard)
+    .filter((card, i) => i === 0 || coverSettled(coverUrl(card)));
   const exhausted = deck.length > 0 && pos >= deck.length;
   const empty = deck.length === 0;
   // Busy the whole time a Swiggy fetch is in flight — not just on first load — so
   // a cuisine/keyword change hides the previous pool's cards immediately instead
   // of leaving them swipeable against a lens they no longer match.
-  const busy = source !== "saved" && loadingNew;
+  const busy = (source !== "saved" && loadingNew) || landing;
   // A Swiggy failure has to read differently from "no matches" — the deck is
   // empty either way, but only one of them is fixable by changing the filter.
   const newFailed = source !== "saved" && newError !== null;
@@ -681,9 +749,27 @@ export default function SwipeMode({
   const unsupportedAsk = source !== "saved" && (searchPlan.unsupported?.length ?? 0) > 0;
   const showCards = !busy && !newFailed && !empty && !exhausted;
 
+  // ---- covers ahead of the stack ------------------------------------------
+  // Warm the next few covers (lib/covers.ts) so a run of quick swipes never
+  // catches a card without its picture; each settle re-renders so a card
+  // behind the top can mount (see `stack`).
+  const [, settleTick] = useState(0);
+  useEffect(() => {
+    let live = true;
+    for (const card of displayDeck.slice(pos, pos + COVERS_AHEAD)) {
+      const url = coverUrl(card);
+      if (coverSettled(url)) continue;
+      void warmCover(url).then(() => {
+        if (live) settleTick((t) => t + 1);
+      });
+    }
+    return () => {
+      live = false;
+    };
+  }, [displayDeck, pos]);
+
   // The coach runs once per RUN of the deck — opening the mode, changing the
   // lens, starting over — and only once there are actually cards to teach on.
-  const runKey = `${source}|${queryKey}|${seed}`;
   useEffect(() => {
     if (!showCards) return;
     // The deal is not part of the coach and is never cancelled: it is the

@@ -14,6 +14,7 @@ import { isOpenNow, type Place, type Visit } from "@/lib/types";
 import { swiggyDirectionsUrl } from "@/lib/swiggyClient";
 import { coverPhoto, photosSorted, leadRating, leadPrice, stateMeta, hoursPill, directionsUrl } from "@/lib/format";
 import type { DeckCard } from "@/lib/deck";
+import { coverShape, coverUsable } from "@/lib/covers";
 import { PoweredBySwiggy } from "./PoweredBySwiggy";
 
 // The card's own surface. The photo sits ON it rather than filling it, so this
@@ -451,7 +452,12 @@ export default function SwipeCard({
   // Deliberately locked to the first photo: paging is a look at the same place,
   // not a new layout, and a box that resized under the thumb would bounce the
   // whole card. Later photos cover into the shape the cover established.
-  const [ratio, setRatio] = useState<number | null>(null);
+  // A warmed cover (lib/covers.ts) already knows its shape, so the box opens
+  // at the photo's own aspect instead of measuring it a frame after the deal.
+  const [ratio, setRatio] = useState<number | null>(() => {
+    const r = coverShape(cover);
+    return r == null ? null : Math.min(PHOTO_MAX, Math.max(PHOTO_MIN, r));
+  });
 
   return (
     <div
@@ -495,7 +501,10 @@ export default function SwipeCard({
               {v.name.slice(0, 1).toUpperCase()}
             </span>
           </div>
-          {cover && (
+          {/* A cover that failed or was waited out (lib/covers.ts) stays off the
+              card: it was dealt on its initial, and a photo arriving over a card
+              already up is the one thing the wait exists to prevent. */}
+          {cover && coverUsable(cover) && (
             // A real <img>, not a CSS background: Swiggy's photos are remote CDN
             // URLs, and an element gives us an onError to fall back to the initial
             // when one 404s — and an onLoad, which is where the box learns what
