@@ -53,6 +53,43 @@ case "$HOURS" in
 esac
 
 note "nudge: $MSG"
+
+# Also email the reminder (asked 2026-09-30: "along with the push notification,
+# also send me an email"). Gmail SMTP app password, reused from the LinkedIn
+# listener setup, read from this repo's .env.local. Email first, dialog second:
+# the dialog can sit unanswered for 300s and the mail must not wait on that.
+ENVF="/Users/keerthan.singhvi/going-out-app/.env.local"
+export SMTP_USER=$(grep '^SMTP_USER=' "$ENVF" | cut -d= -f2-)
+export SMTP_PASS=$(grep '^SMTP_PASS=' "$ENVF" | cut -d= -f2-)
+if [ -n "$SMTP_USER" ] && [ -n "$SMTP_PASS" ]; then
+  if MSG="$MSG" python3 - <<'PY' 2>>"$LOG"
+import os, smtplib
+from email.message import EmailMessage
+
+m = EmailMessage()
+m["From"] = os.environ["SMTP_USER"]
+m["To"] = "singhvikeerthan@gmail.com"
+m["Subject"] = "Swiggy token — renew (laptop, ~5 min)"
+m.set_content(
+    os.environ["MSG"]
+    + "\n\nOn the laptop: click [Renew now] on the dialog, or run"
+    + "\n  cd ~/going-out-app && npm run swiggy:renew"
+    + "\nthen finish the phone + OTP in the tab it opens."
+    + "\n\nMobile renewal stays blocked until Swiggy whitelists the domain"
+    + "\n(github.com/Swiggy/swiggy-mcp-server-manifest/issues/128)."
+)
+with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as s:
+    s.starttls()
+    s.login(os.environ["SMTP_USER"], os.environ["SMTP_PASS"])
+    s.send_message(m)
+PY
+  then note "email sent to singhvikeerthan@gmail.com"
+  else note "email FAILED (smtp error above) — dialog still shown"
+  fi
+else
+  note "email skipped: SMTP_USER/SMTP_PASS missing in .env.local"
+fi
+
 # giving up after 300: an unattended machine must not hold the script forever.
 CHOICE=$(osascript -e "display dialog \"$MSG\n\nRenew now? It's one Swiggy OTP — everything else finishes itself.\" buttons {\"Later\", \"Renew now\"} default button \"Renew now\" with title \"Swiggy token\" giving up after 300" 2>/dev/null)
 
