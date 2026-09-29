@@ -26,8 +26,8 @@ export function swiggyDirectionsUrl(r: SwiggyRestaurant): string {
   return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}`;
 }
 
-// The access token lasts 5 days, and renewing it is a chore someone has to run
-// (`npm run swiggy:refresh`) — nothing in the request path renews it — so
+// The access token lasts 5 days and nothing in the request path renews it —
+// renewal is startSwiggyRenew below (phone + OTP, from any device) — so
 // "reconnect" is a normal state the UI has to be able to say out loud.
 // `owner_only` is not a failure to retry — it is the honest answer that Swiggy
 // runs on Keerthan's single consent and this device is not his. See
@@ -77,6 +77,16 @@ async function post<T>(path: string, body: unknown): Promise<{ data: T | null; e
   } catch {
     return { data: null, error: "fetch_failed" };
   }
+}
+
+// Start a token renewal: the server builds the Swiggy consent URL (PKCE state
+// rides in an httpOnly cookie) and the caller navigates the browser to it.
+// Phone + OTP happen on Swiggy's page; /api/swiggy/renew/callback finishes the
+// rest server-side. Owner-gated like every Swiggy route — any other device
+// gets owner_only, which is correct: the consent being renewed is Keerthan's.
+export async function startSwiggyRenew(): Promise<{ url: string | null; error?: SwiggyError }> {
+  const { data, error } = await post<{ consentUrl?: string }>("/api/swiggy/renew", {});
+  return { url: data?.consentUrl ?? null, error };
 }
 
 export async function searchDineout(query: {

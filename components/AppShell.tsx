@@ -20,6 +20,7 @@ import BrowseSheet, { type BrowseMode } from "./BrowseSheet";
 import ModeReveal, { BEATS, type RevealSpec } from "./ModeReveal";
 import SignUpSheet, { type SignUpReason } from "./SignUpSheet";
 import LocationNudge from "./LocationNudge";
+import SwiggyRenewLink from "./SwiggyRenewLink";
 import { useSyncStatus } from "@/lib/sync/client";
 
 // The app's two ways of looking at the same places. There is no control for
@@ -374,6 +375,7 @@ export default function AppShell() {
       style={{ width: "100dvw", height: "var(--app-viewport-h)", background: "var(--bg-base)" }}
     >
       <MapView places={visible} selectedId={selectedId} onSelect={setSelectedId} />
+      <SwiggyRenewLink />
 
       {/* top scrim — light wash so the dark-ink masthead reads over the map */}
       <div

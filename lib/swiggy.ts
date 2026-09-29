@@ -401,7 +401,7 @@ export async function getDineoutRestaurantDetails(
   base: SwiggyRestaurant,
   opts: { lat?: number; lng?: number } = {}
 ): Promise<SwiggyRestaurant> {
-  if (!swiggyLive()) {
+  if (!(await swiggyLive())) {
     const idx = MOCK_RESTAURANTS.findIndex((r) => r.id === base.id);
     return enrichMock(base, Math.max(0, idx));
   }
@@ -800,7 +800,7 @@ export async function searchDineoutRestaurants(
   searched: string[];
   attempted: string[];
 }> {
-  if (!swiggyLive()) {
+  if (!(await swiggyLive())) {
     const mock = mockSearch(query);
     return { results: mock.results, dropped: 0, searched: mock.used, attempted: mock.attempted };
   }
@@ -1055,7 +1055,7 @@ export async function getAvailableSlots(
   restaurantId: string,
   opts: { lat?: number; lng?: number; date?: string; guestCount?: number } = {}
 ): Promise<SwiggySlot[]> {
-  if (!swiggyLive()) return mockSlots(restaurantId);
+  if (!(await swiggyLive())) return mockSlots(restaurantId);
 
   // Slots come back at the root of the response, not under `data` — the
   // reference calls this out explicitly ("access response.slots directly").
@@ -1117,7 +1117,7 @@ export async function bookTable(
 ): Promise<SwiggyBooking> {
   const guests = Math.min(20, Math.max(1, Math.round(guestCount) || 2));
 
-  if (!swiggyLive()) {
+  if (!(await swiggyLive())) {
     return {
       orderId: `mock-${restaurantId}-${slot.slotId}-${guests}`,
       status: "CONFIRMED",

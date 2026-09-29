@@ -19,7 +19,7 @@ function errorNote(error: SwiggyError): string {
   // Not a failure and not worth retrying: Swiggy runs on Keerthan's single
   // consent, so these routes answer only to his device. See lib/swiggy-gate.ts.
   if (error === "owner_only") return "Swiggy discovery is only available on Keerthan’s own device.";
-  if (error === "swiggy_reauth") return "Swiggy sign-in expired — run npm run swiggy:auth.";
+  if (error === "swiggy_reauth") return "Swiggy sign-in expired — the deck's New view has a Reconnect button.";
   if (error === "fetch_failed") return "You’re offline — couldn’t reach Swiggy.";
   if (error === "swiggy_busy") return "Swiggy is busy — give it a minute.";
   return "Swiggy Dineout is unreachable right now.";

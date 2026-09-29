@@ -15,6 +15,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { takeToken, type TokenOptions } from "./ratelimit";
+import { bustSwiggyTokenCache, storedSwiggyToken } from "./swiggyToken";
 
 const SERVER_URL = process.env.SWIGGY_MCP_URL ?? "https://mcp.swiggy.com/dineout";
 
@@ -39,7 +40,12 @@ export class SwiggyRateLimitError extends Error {
   }
 }
 
-function token(): string | null {
+// Database row first, env var second. The row is what /api/swiggy/renew/callback
+// writes, so it is fresh without a redeploy; the env var is the dev/test
+// fallback and, in prod, a stale artifact of the pre-renewal-route era.
+async function token(): Promise<string | null> {
+  const stored = await storedSwiggyToken();
+  if (stored) return stored.token;
   return process.env.SWIGGY_MCP_TOKEN?.trim() || null;
 }
 
@@ -124,8 +130,8 @@ export function _resetRateLimitState(): void {
 
 // No token configured → lib/swiggy.ts serves mock data instead, so the deck and
 // the booking flow stay usable in dev exactly as they were before access landed.
-export function swiggyLive(): boolean {
-  return token() !== null;
+export async function swiggyLive(): Promise<boolean> {
+  return (await token()) !== null;
 }
 
 // One MCP session per warm lambda instance. Connecting costs an `initialize`
@@ -213,12 +219,25 @@ async function callOnce(bearer: string, name: string, args: Record<string, unkno
   return client.callTool({ name, arguments: args });
 }
 
+// Prove a just-minted token actually works before anything stores it: one
+// initialize + listTools round-trip, metered like every other request, torn
+// down after. The renewal callback calls this so a broken mint fails loudly
+// there instead of as tomorrow's mystery 401.
+export async function probeBearer(bearer: string): Promise<void> {
+  const client = await connect(bearer);
+  try {
+    await client.listTools();
+  } finally {
+    await client.close();
+  }
+}
+
 // Both envelopes, for the bindings that need to read Swiggy's prose.
 export async function callSwiggyReply<T>(
   name: string,
   args: Record<string, unknown>
 ): Promise<SwiggyReply<T>> {
-  const bearer = token();
+  const bearer = await token();
   if (!bearer) throw new Error("swiggy_not_configured");
 
   // A 429 is the one answer that must NOT be retried — the retry is another
@@ -237,13 +256,22 @@ export async function callSwiggyReply<T>(
     // Drop the session either way: a 401 invalidates it, and a transport error
     // usually means the server expired a session this instance still holds.
     cached = null;
-    if (isAuthFailure(err)) throw new SwiggyAuthError();
+    // A 401 means the token this instance holds is dead. Bust the store's
+    // cache too, so the very next request re-reads the row — a renewal done
+    // seconds ago takes effect immediately instead of after a cache TTL.
+    if (isAuthFailure(err)) {
+      bustSwiggyTokenCache();
+      throw new SwiggyAuthError();
+    }
     try {
       return unwrapReply<T>(await callOnce(bearer, name, args));
     } catch (retryErr) {
       if (retryErr instanceof SwiggyRateLimitError || isRateLimited(retryErr)) throw await throttle(retryErr);
       cached = null;
-      if (isAuthFailure(retryErr)) throw new SwiggyAuthError();
+      if (isAuthFailure(retryErr)) {
+        bustSwiggyTokenCache();
+        throw new SwiggyAuthError();
+      }
       throw retryErr;
     }
   }

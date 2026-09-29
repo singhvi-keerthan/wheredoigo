@@ -6,6 +6,7 @@ import { usePlaces, addPlace, removePlace, updatePlace, getPlace, toggleNeverAga
 import {
   searchDineout,
   getDineoutDetails,
+  startSwiggyRenew,
   FALLBACK_COORDS,
   type SwiggyRestaurant,
   type SwiggyError,
@@ -262,6 +263,9 @@ export default function SwipeMode({
   const detailRequested = useRef<Set<string>>(new Set());
   const [loadingNew, setLoadingNew] = useState(false);
   const [newError, setNewError] = useState<SwiggyError | null>(null);
+  // Walking to Swiggy's consent page (phone + OTP). Stays true through the
+  // navigation away; reset only if starting the renewal itself failed.
+  const [reconnecting, setReconnecting] = useState(false);
   // The terms Swiggy was actually asked for. Only used by the empty state, so
   // it can name what came back with nothing instead of blaming your filter.
   const [searchedTerms, setSearchedTerms] = useState<string[]>([]);
@@ -965,11 +969,34 @@ export default function SwipeMode({
               {newError === "owner_only"
                 ? "Discovering new restaurants runs on his Swiggy account, so it only works there. Your own saved places work normally."
                 : newError === "swiggy_reauth"
-                  ? "Access tokens last 5 days. Run npm run swiggy:auth to sign in again."
+                  ? "Access tokens last 5 days. Reconnect below — a phone OTP on Swiggy's page, and the deck comes back."
                   : newError === "swiggy_busy"
                     ? "Too many Dineout requests in the last minute. Give it a moment — your saved places still work."
                     : "Dineout is unreachable right now — your saved places still work."}
             </p>
+            {newError === "swiggy_reauth" && (
+              <button
+                onClick={() => {
+                  setReconnecting(true);
+                  void startSwiggyRenew().then(({ url }) => {
+                    // Navigating away IS the success path; staying here means
+                    // the start failed, so hand the button back.
+                    if (url) window.location.assign(url);
+                    else setReconnecting(false);
+                  });
+                }}
+                disabled={reconnecting}
+                className="press mt-4 flex items-center gap-2 px-4 py-2.5 text-[13.5px] font-semibold"
+                style={{
+                  borderRadius: "var(--radius-chip)",
+                  border: "1px solid var(--border-strong)",
+                  color: "var(--text-primary)",
+                  opacity: reconnecting ? 0.6 : 1,
+                }}
+              >
+                {reconnecting ? "Opening Swiggy…" : "Reconnect Swiggy"}
+              </button>
+            )}
           </Centered>
         ) : empty ? (
           <Centered>
