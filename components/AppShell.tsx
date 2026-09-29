@@ -123,6 +123,13 @@ export default function AppShell() {
   // leaves stops being read, and this is the only thing left that says the
   // name is pressable, so it has to stay worth reading.
   const [tell, setTell] = useState(true);
+  // Desktop's second chance at the gesture. The timed tell fades, and on a
+  // desktop that faded label was the ONLY thing that ever said the name is
+  // pressable — no thumb ever finds a double-tap by accident with a mouse. A
+  // cursor resting on the name is someone asking what it does, so hovering it
+  // brings the label back for as long as they ask. Mouse only: a finger can't
+  // rest, and some mobile browsers fire enter without ever firing leave.
+  const [hintHover, setHintHover] = useState(false);
   // How far the name has to travel to sit in the middle of its row.
   const [centerShift, setCenterShift] = useState(0);
   // Where the wordmark's box actually ends on THIS screen. The deck hangs its
@@ -442,6 +449,12 @@ export default function AppShell() {
               onPointerCancel={() => {
                 flick.current = null;
               }}
+              onPointerEnter={(e) => {
+                if (e.pointerType === "mouse") setHintHover(true);
+              }}
+              onPointerLeave={(e) => {
+                if (e.pointerType === "mouse") setHintHover(false);
+              }}
               className="press pointer-events-auto font-medium leading-none tracking-[-0.015em]"
               style={{
                 touchAction: "pan-y",
@@ -482,6 +495,31 @@ export default function AppShell() {
             >
               <Menu size={17} style={{ color: "oklch(0.9 0 0)" }} />
             </button>
+          )}
+          {/* The way back, said where a desktop user can read it. The deck used
+              to teach nothing: the tell below is the map's, the aria-label is
+              silent to sighted eyes, and a mouse never stumbles into a
+              double-tap — which left desktop stranded in the deck. This takes
+              the empty right half of the name's row (the menu button's seat on
+              the map), fades on the same clock as the map's tell, and comes
+              back whenever the mouse rests on the name. Desktop only — on a
+              phone this row's centre is the wordmark itself, and the lens
+              panel's map row carries the way out there. */}
+          {inDeck && (
+            <span
+              aria-hidden
+              className="whitespace-nowrap text-[10.5px] max-sm:hidden pointer-coarse:hidden"
+              style={{
+                fontFamily: "var(--font-mono)",
+                letterSpacing: "0.04em",
+                color: "rgba(244,240,238,0.6)",
+                opacity: tell || hintHover ? 1 : 0,
+                transform: tell || hintHover ? "none" : "translateX(4px)",
+                transition: "opacity 0.32s ease, transform 0.32s ease",
+              }}
+            >
+              double-click the name for the map
+            </span>
           )}
         </div>
 
@@ -525,8 +563,12 @@ export default function AppShell() {
               Fades rather than unmounts, so nothing on this line ever moves.
               The MAP's copy only. Once the name is centred there is no room
               beside it for a right-aligned line — a 26px serif and 22 mono
-              characters do not fit across a phone — so the deck teaches the way
-              back in its own second line, which it owns anyway. See SwipeMode. */}
+              characters do not fit across a phone — so the deck's way back is
+              told on the name's own row above (desktop, where the row's right
+              half is empty) and by the lens panel's map row (everywhere).
+              The verb tracks the pointer: "double-tap" reads as a touch
+              gesture, and telling a mouse to tap is how desktop never found
+              the deck's door in the first place. */}
           {onMap && (
             <span
               aria-hidden
@@ -535,12 +577,13 @@ export default function AppShell() {
                 fontFamily: "var(--font-mono)",
                 letterSpacing: "0.04em",
                 color: "#8a93a0",
-                opacity: tell ? 1 : 0,
-                transform: tell ? "none" : "translateX(4px)",
+                opacity: tell || hintHover ? 1 : 0,
+                transform: tell || hintHover ? "none" : "translateX(4px)",
                 transition: "opacity 0.32s ease, transform 0.32s ease",
               }}
             >
-              double-tap for the deck
+              <span className="pointer-fine:hidden">double-tap for the deck</span>
+              <span className="pointer-coarse:hidden">double-click the name for the deck</span>
             </span>
           )}
         </div>
@@ -821,6 +864,17 @@ export default function AppShell() {
           onOpenBrowse={(mode) => {
             setMenuOpen(false);
             setBrowseMode(mode);
+          }}
+          // The reveal still blooms from the wordmark — the row in the menu is
+          // a door, but the toggle it stands for is the name, same as the
+          // keyboard path.
+          onOpenSwipe={() => {
+            setMenuOpen(false);
+            const r = titleRef.current?.getBoundingClientRect();
+            openSwipe(
+              r ? r.left + r.width / 2 : window.innerWidth / 2,
+              r ? r.top + r.height / 2 : 80
+            );
           }}
           onToast={showToast}
         />

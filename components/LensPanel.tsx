@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { X, Sparkles, RefreshCw, ChevronDown, Clock, MapPin } from "lucide-react";
+import { X, Sparkles, RefreshCw, ChevronDown, Clock, Map as MapIcon, MapPin } from "lucide-react";
 import { geocodeArea } from "@/lib/places";
 import { parseFallback } from "@/lib/decide-fallback";
 import { rankPlaces, type DecideQuery } from "@/lib/decide";
@@ -273,6 +273,7 @@ export default function LensPanel({
   lens,
   areas,
   onClose,
+  onOpenMap,
 }: {
   lens: Lens;
   // Every locality present in the pool this deck is drawing from — saved
@@ -280,6 +281,11 @@ export default function LensPanel({
   // here because only the mode holds the Swiggy half.
   areas: string[];
   onClose: () => void;
+  // Leave the mode entirely, back to the map. Lives on this panel because it
+  // is the deck's only menu: the wordmark's double-tap is the gesture, and a
+  // gesture with no control anywhere is a door people can't find — desktop
+  // proved it.
+  onOpenMap: () => void;
 }) {
   const { source, setSource, filters, setFilters, setExtras, dirty, clear } = lens;
   const [picker, setPicker] = useState<FilterField | null>(null);
@@ -572,6 +578,29 @@ export default function LensPanel({
             )}
           </>
         )}
+
+        {/* Not a filter — the way out of the mode, below a hairline so it
+            reads as the panel's footer. See onOpenMap above. */}
+        <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--border)" }}>
+          <button
+            onClick={onOpenMap}
+            className="press flex w-full items-center gap-2.5 px-3 py-2.5 text-left"
+            style={{
+              background: "var(--bg-elevated)",
+              border: "1px solid var(--border-strong)",
+              borderRadius: "var(--radius-sm)",
+            }}
+          >
+            <MapIcon size={15} strokeWidth={2.25} style={{ color: "var(--accent)" }} />
+            <span className="flex-1 text-[13.5px] font-semibold" style={{ color: "var(--text-primary)" }}>
+              Open map mode
+            </span>
+            <span className="text-[11.5px]" style={{ color: "var(--text-tertiary)" }}>
+              or <span className="pointer-fine:hidden">double-tap</span>
+              <span className="pointer-coarse:hidden">double-click</span> the name
+            </span>
+          </button>
+        </div>
       </div>
     </div>
   );

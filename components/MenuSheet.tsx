@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import Link from "next/link";
-import { X, Images, Store, UtensilsCrossed, MapPinned, Pizza, Download, Upload, ChevronRight, Compass, LifeBuoy } from "lucide-react";
+import { X, Images, Store, UtensilsCrossed, MapPinned, Pizza, Download, Upload, ChevronRight, Compass, Layers, LifeBuoy } from "lucide-react";
 import { usePlaces, downloadBackup, importData } from "@/lib/store";
 import type { TagNamespace } from "@/lib/types";
 import type { BrowseMode } from "./BrowseSheet";
@@ -15,10 +15,12 @@ import { PoweredBySwiggy } from "./PoweredBySwiggy";
 export default function MenuSheet({
   onClose,
   onOpenBrowse,
+  onOpenSwipe,
   onToast,
 }: {
   onClose: () => void;
   onOpenBrowse: (mode: BrowseMode) => void;
+  onOpenSwipe: () => void;
   onToast: (msg: string) => void;
 }) {
   const places = usePlaces();
@@ -110,6 +112,34 @@ export default function MenuSheet({
             <X size={14} strokeWidth={2.25} />
           </button>
         </div>
+
+        {/* The other way of looking at the same library. The wordmark's
+            double-tap is the fast path, but a gesture is invisible once its
+            hint has faded — desktop especially never finds it — so the mode
+            door also lives here, where anyone lost goes looking, and the row
+            says the gesture out loud for next time. Its twin sits in the
+            deck's lens panel. */}
+        <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--text-tertiary)" }}>
+          Mode
+        </p>
+        <button
+          onClick={onOpenSwipe}
+          className="press mb-5 flex w-full items-center gap-3 rounded-[var(--radius)] px-3.5 py-3 text-left"
+          style={{ background: "var(--bg-elevated)", border: "1px solid var(--ink-line)" }}
+        >
+          <Layers size={18} style={{ color: "var(--text-secondary)" }} />
+          <span className="min-w-0 flex-1">
+            <span className="block text-[15px] font-semibold" style={{ color: "var(--text-primary)" }}>
+              Open swipe mode
+            </span>
+            <span className="block text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>
+              One place at a time — or{" "}
+              <span className="pointer-fine:hidden">double-tap</span>
+              <span className="pointer-coarse:hidden">double-click</span> the name
+            </span>
+          </span>
+          <ChevronRight size={17} style={{ color: "var(--text-tertiary)" }} />
+        </button>
 
         {/* The way back to the map they arrived from.
             Until now this was a one-way door: the share view offered "Your map"

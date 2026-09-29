@@ -1220,7 +1220,19 @@ export default function SwipeMode({
         </div>
       )}
 
-      {lensOpen && <LensPanel lens={lens} areas={areas} onClose={() => setLensOpen(false)} />}
+      {lensOpen && (
+        <LensPanel
+          lens={lens}
+          areas={areas}
+          onClose={() => setLensOpen(false)}
+          // Panel first, then the outro — the leaving animation belongs to the
+          // deck, not to a sheet it would otherwise play under.
+          onOpenMap={() => {
+            setLensOpen(false);
+            onRequestClose();
+          }}
+        />
+      )}
 
       {detailNew && (
         <NewCardDetail
