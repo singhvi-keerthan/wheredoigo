@@ -57,8 +57,15 @@ note "nudge: $MSG"
 CHOICE=$(osascript -e "display dialog \"$MSG\n\nRenew now? It's one Swiggy OTP — everything else finishes itself.\" buttons {\"Later\", \"Renew now\"} default button \"Renew now\" with title \"Swiggy token\" giving up after 300" 2>/dev/null)
 
 if printf '%s' "$CHOICE" | grep -q "Renew now"; then
-  note "opening $APP/#renew-swiggy"
-  open "$APP/#renew-swiggy"
+  # The in-app #renew-swiggy path is walled off until Swiggy whitelists the
+  # domain ("Oops, Vercel isn't whitelisted yet", 2026-09-30) — localhost is
+  # whitelisted, so run the local chain instead: consent tab + OTP here, and
+  # swiggy-renew-finish.ts stores the result where prod reads it.
+  note "launching npm run swiggy:renew in Terminal"
+  osascript -e 'tell application "Terminal"
+    activate
+    do script "cd /Users/keerthan.singhvi/going-out-app && npm run swiggy:renew"
+  end tell'
 else
   note "dismissed (or timed out)"
 fi
