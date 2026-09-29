@@ -943,8 +943,15 @@ export default function SwipeMode({
         </button>
       </div>
 
-      {/* ---- card stage: whatever is left, edge to edge ---- */}
-      <div className="relative min-h-0 flex-1">
+      {/* ---- card stage: whatever is left ----
+          Edge to edge on a phone, which is the shape these cards are drawn
+          for — and only there. A photo-first portrait card stretched across a
+          desktop window is a letterboxed mural, so the stage clamps to a
+          phone's width and centres in whatever is wider. The coach bar and
+          undo carry the same clamp below: absolutely positioned with both
+          insets set, max-width + auto margins centre them over the column,
+          not the window. */}
+      <div className="relative mx-auto min-h-0 w-full max-w-[430px] flex-1">
         {busy ? (
           <Centered>
             <Sparkles size={20} className="animate-pulse" style={{ color: "var(--accent)" }} />
@@ -1136,7 +1143,7 @@ export default function SwipeMode({
       {/* ---- the coach: which way is which, shown once per run ---- */}
       {phase === "coach" && current && (
         <div
-          className="pointer-events-none absolute inset-x-0 bottom-0"
+          className="pointer-events-none absolute inset-x-0 bottom-0 mx-auto w-full max-w-[430px]"
           style={{
             zIndex: 12,
             height: COACH_BAR_H,
@@ -1198,7 +1205,7 @@ export default function SwipeMode({
           touch user with no way back at all. */}
       {undo.length > 0 && phase !== "coach" && (
         <div
-          className="absolute inset-x-0 bottom-0 flex justify-end pr-4 pb-[max(1.25rem,env(safe-area-inset-bottom))]"
+          className="absolute inset-x-0 bottom-0 mx-auto flex w-full max-w-[430px] justify-end pr-4 pb-[max(1.25rem,env(safe-area-inset-bottom))]"
           style={{ zIndex: 11 }}
         >
           <button
