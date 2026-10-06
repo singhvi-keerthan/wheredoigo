@@ -56,7 +56,10 @@ async function register(url: string): Promise<{ clientId: string; clientSecret?:
 }
 
 // Serve the redirect once, hand back the authorization code.
-function awaitCode(expectedState: string): Promise<string> {
+// onListening fires only once the port is ours, so the browser never opens onto
+// some other server squatting on it (a stray `python -m http.server 8765` did,
+// twice — the consent "worked" and the code landed on its 404 page).
+function awaitCode(expectedState: string, onListening: () => void): Promise<string> {
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
       const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
@@ -83,7 +86,17 @@ function awaitCode(expectedState: string): Promise<string> {
       if (!code) return reject(new Error("no authorization code in callback"));
       resolve(code);
     });
-    server.listen(PORT);
+    server.on("error", (err: NodeJS.ErrnoException) => {
+      reject(
+        err.code === "EADDRINUSE"
+          ? new Error(
+              `port ${PORT} is taken (\`lsof -nP -iTCP:${PORT} -sTCP:LISTEN\`) — ` +
+                `rerun with SWIGGY_AUTH_PORT=8799`
+            )
+          : err
+      );
+    });
+    server.listen(PORT, onListening);
     // Codes are single-use and expire in 120s; give the phone + OTP step room.
     setTimeout(() => {
       server.close();
@@ -110,9 +123,9 @@ async function main() {
   authUrl.searchParams.set("code_challenge_method", "S256");
 
   console.log("\nOpening Swiggy consent (phone + OTP):\n" + authUrl.toString() + "\n");
-  const pending = awaitCode(state);
-  exec(`open "${authUrl.toString()}"`); // macOS; the URL above is the fallback
-  const code = await pending;
+  const code = await awaitCode(state, () => {
+    exec(`open "${authUrl.toString()}"`); // macOS; the URL above is the fallback
+  });
 
   const form = new URLSearchParams({
     grant_type: "authorization_code",
