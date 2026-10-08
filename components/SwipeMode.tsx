@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { RotateCcw, Sparkles, X, Heart, Check, SlidersHorizontal } from "lucide-react";
 import { usePlaces, addPlace, removePlace, updatePlace, getPlace, toggleNeverAgain } from "@/lib/store";
 import {
@@ -14,7 +14,7 @@ import {
 } from "@/lib/swiggyClient";
 import { biasContext, searchBias, subscribeGeoStatus } from "@/lib/bias";
 import { searchPlaces, geocodeArea } from "@/lib/places";
-import { buildDeck, nearbyArea, refreshSavedCardPhotos, type DeckCard } from "@/lib/deck";
+import { buildDeck, nearbyArea, refreshSavedCardPhotos, type DeckCard, type DeckSource } from "@/lib/deck";
 import { coverSettled, coverUrl, warmCover } from "@/lib/covers";
 import { bumpSkip, resetSkip, decSkip, peekSkip, setSkip } from "@/lib/skips";
 import { readNewSwipeMemory, recordNewSwipe, undoNewSwipe, type SwipeDir, type NewSwipeMemory } from "@/lib/swipeMemory";
@@ -22,7 +22,8 @@ import { BENGALURU_AREA_OPTIONS } from "@/lib/areas";
 import SwipeCard from "./SwipeCard";
 import NewCardDetail from "./NewCardDetail";
 import { useCardSwipe, DY_DAMP } from "./useCardSwipe";
-import LensPanel, { useLens } from "./LensPanel";
+import LensPanel, { SourceSwitch, useLens } from "./LensPanel";
+import { askOnOpen, setAskOnOpen } from "@/lib/entryPref";
 
 const SWIPE_THRESHOLD = 92; // px past which a release commits (horizontal)
 const EXIT_MS = 240;
@@ -232,6 +233,18 @@ export default function SwipeMode({
   const { source, query, area, searchPlan } = lens;
   const areaCenter = query.areaCenter;
   const [lensOpen, setLensOpen] = useState(false);
+  // The two doors on opening: "go wild" deals straight away, "I know what I
+  // want" opens the filter editor as a form. Shown unless this device said
+  // not to ask (lib/entryPref.ts; the map's menu turns it back on). Either way
+  // the deck's own header carries the switch and the filters afterwards, so
+  // the doors teach the deck rather than guard it.
+  const [doors, setDoors] = useState<"closed" | "doors" | "form">(() => (askOnOpen() ? "doors" : "closed"));
+  const [dontAsk, setDontAsk] = useState(false);
+  const covered = doors !== "closed" || lensOpen;
+  const leaveDoors = () => {
+    if (dontAsk) setAskOnOpen(false);
+    setDoors("closed");
+  };
   const places = usePlaces();
   const reduced = usePrefersReducedMotion();
   // Latest-places snapshot read only at deck-build time — kept in a ref (updated
@@ -489,15 +502,26 @@ export default function SwipeMode({
   // The localities the Area filter can offer. New discovery cannot derive this
   // only from the current Swiggy page, because that page is small and area is
   // itself one way to broaden the page.
-  const areas = useMemo(() => {
-    const set = new Set<string>();
-    for (const p of places) if (p.area) set.add(p.area);
-    if (source !== "saved") {
-      for (const a of BENGALURU_AREA_OPTIONS) set.add(a);
-      for (const r of swiggy) if (r.area) set.add(r.area);
-    }
-    return [...set];
-  }, [source, places, swiggy]);
+  // Most-held first: the filter editor shows only the first few as chips (the
+  // rest are a search away), so those few are the localities this pool has the
+  // most places in.
+  // A function of the source because the editor's draft can switch it: a
+  // Saved deck's editor set to New must offer New's areas.
+  const areasFor = useCallback(
+    (src: DeckSource) => {
+      const count = new Map<string, number>();
+      const add = (a: string | undefined, n: number) => {
+        if (a) count.set(a, (count.get(a) ?? 0) + n);
+      };
+      for (const p of places) add(p.area, 1);
+      if (src !== "saved") {
+        for (const r of swiggy) add(r.area, 1);
+        for (const a of BENGALURU_AREA_OPTIONS) add(a, 0);
+      }
+      return [...count.entries()].sort((a, b) => b[1] - a[1]).map(([a]) => a);
+    },
+    [places, swiggy]
+  );
 
   const enrichCard = (card: DeckCard): DeckCard => {
     if (card.kind !== "new") return card;
@@ -691,6 +715,14 @@ export default function SwipeMode({
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (doors !== "closed") {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          if (doors === "form") setDoors("doors");
+          else leaveDoors();
+        }
+        return;
+      }
       if (detailNew || confirmHide || lensOpen) {
         if (e.key === "Escape") {
           e.preventDefault();
@@ -721,7 +753,7 @@ export default function SwipeMode({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deck, pos, exiting, detailNew, confirmHide, lensOpen, undo.length, phase]);
+  }, [deck, pos, exiting, detailNew, confirmHide, lensOpen, undo.length, phase, doors, dontAsk]);
 
   // ---- render ------------------------------------------------------------
   // A right swipe does two different things, so it can't wear one label. On a
@@ -766,7 +798,9 @@ export default function SwipeMode({
   // The ask named only things Dineout does not list (lib/swiggyTerms.ts). No
   // search ran; the honest deck is empty and says so.
   const unsupportedAsk = source !== "saved" && (searchPlan.unsupported?.length ?? 0) > 0;
-  const showCards = !busy && !newFailed && !empty && !exhausted;
+  // Held while the doors are up, so the deal and the coach play when the deck
+  // is actually in front of you, not behind a choice.
+  const showCards = doors === "closed" && !busy && !newFailed && !empty && !exhausted;
 
   // ---- covers ahead of the stack ------------------------------------------
   // Warm the next few covers (lib/covers.ts) so a run of quick swipes never
@@ -871,18 +905,6 @@ export default function SwipeMode({
     return { transform: "none", transition: "transform 0.34s var(--ease-spring)" };
   };
 
-  // What the collapsed trigger says. Never just "filters" — the mode should be
-  // able to tell you what it is dealing you without being opened up.
-  const sourceLabel = source === "saved" ? "Saved places" : source === "new" ? "New places" : "Saved + new";
-
-  // Said aloud. Every other aria-label in this app is on an icon-only control —
-  // Close, Back, Remove photo — where there is no text to read. This button HAS
-  // text, and it is the text that matters: a flat aria-label="Change filters"
-  // replaces the accessible name outright, so a screen reader announced the verb
-  // and swallowed the one thing the line exists to say. The name carries the
-  // visible string verbatim and prefixes what pressing it does.
-  const lensLabel = `Filters: ${sourceLabel}${lens.summary.length > 0 ? ` · ${lens.summary.join(" · ")}` : ""}`;
-
   return (
     <div
       className={`fixed inset-x-0 top-0 z-[52] flex flex-col ${closing ? "mode-out" : entryKind === "fan" ? "" : "mode-in"}`}
@@ -899,49 +921,56 @@ export default function SwipeMode({
           ends rather than wherever a constant said it would. */}
       <div aria-hidden className="shrink-0" style={{ height: mastheadBottom, minHeight: "env(safe-area-inset-top)" }} />
 
-      {/* ---- line two: what this mode is showing.
-          Three versions of this now, and the third is the one that holds. It
-          began as a glass pill hung under the wordmark and looked it: a chunky
-          UI capsule stranded under a delicate serif, two languages colliding in
-          one corner. Killing the capsule was right; killing it down to 11px at
-          66% on the left margin overshot — the deck's only filter control had
-          become a footnote, easy to miss and easy to mistake for a caption.
-          So it keeps the capsule's absence and takes back its weight: 12.5px,
-          near-full brightness, centred directly beneath the name. The glyph
-          carries the app's accent, which is the whole highlight — one warm mark
-          in a dark masthead, saying "this is a control, the rest is type."
-          Centred because line one is centred: a name over a caption on a shared
-          axis is a masthead, the same two lines pinned to the left edge with
-          different weights was a corner. The whole line is the target. */}
+      {/* ---- line two: which deck, and what it is filtered to.
+          This was a 12.5px mono caption ("Saved places") that opened a sheet
+          holding the Saved / New / Both switch as its first row — three
+          rounds of restyling one line, and people still didn't see that there
+          were three decks or any filters. The medium was the problem, not the
+          type: a choice of three hidden behind a caption is hidden navigation,
+          which NN/g measured being used 57% of the time against 86% for
+          visible. So both are now on the screen: the switch itself, and a row
+          that says what the deck is filtered to, every pick removable in place. */}
       <div
-        className="flex shrink-0 justify-center px-5"
-        // The gaps are the caption's own type size, not a number: half a line
-        // above, three-quarters below. It sits nearer the name than the photo
-        // because it belongs to the name, and it keeps that relationship at any
-        // text size on any screen, which a px pair would not.
-        style={{ fontSize: "12.5px", marginTop: "0.5em", marginBottom: "0.75em", zIndex: 10 }}
+        className="relative z-10 mx-auto w-full max-w-[430px] shrink-0 px-4"
+        style={{ marginTop: "0.75rem" }}
+        // Out of reach while the doors or the editor cover it — the editor
+        // holds a draft, and a change made underneath would be overwritten by
+        // its Apply.
+        inert={covered}
       >
-        <button
-          onClick={() => setLensOpen(true)}
-          aria-label={lensLabel}
-          className="press flex max-w-full items-center gap-1.5"
-          style={{ color: "rgba(244,240,238,0.9)" }}
-        >
-          <SlidersHorizontal size={12} strokeWidth={2.5} className="shrink-0" style={{ color: "var(--accent)" }} />
-          <span
-            className="truncate"
-            style={{ fontFamily: "var(--font-mono)", fontWeight: 500, letterSpacing: "0.01em" }}
+        <SourceSwitch source={source} onPick={lens.setSource} dense />
+        <div className="scroll-quiet mt-2 flex gap-1.5 overflow-x-auto pb-0.5">
+          <button
+            onClick={() => setLensOpen(true)}
+            aria-label={`Filters${lens.applied.length ? `, ${lens.applied.length} on` : ""}`}
+            className="press flex min-h-[32px] shrink-0 items-center gap-1.5 px-3 text-[12.5px] font-semibold"
+            style={{
+              borderRadius: "var(--radius-chip)",
+              border: "1px solid var(--border-strong)",
+              color: "var(--text-primary)",
+            }}
           >
-            {sourceLabel}
-            {lens.summary.length > 0 && (
-              <span className="capitalize" style={{ color: "rgba(244,240,238,0.72)" }}>
-                {" "}
-                · {lens.summary.join(" · ")}
-              </span>
+            <SlidersHorizontal size={13} strokeWidth={2.5} style={{ color: "var(--accent)" }} />
+            Filters
+            {lens.applied.length > 0 && (
+              <span style={{ fontFamily: "var(--font-mono)", color: "var(--text-tertiary)" }}>{lens.applied.length}</span>
             )}
-          </span>
-        </button>
+          </button>
+          {lens.applied.map((a) => (
+            <button
+              key={a.key}
+              onClick={() => lens.setFilters((f) => a.remove(f))}
+              aria-label={`Remove ${a.label}`}
+              className="press flex min-h-[32px] shrink-0 items-center gap-1 pl-3 pr-2.5 text-[12.5px] font-semibold"
+              style={{ borderRadius: "var(--radius-chip)", background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)" }}
+            >
+              {a.label}
+              <X size={12} strokeWidth={2.5} />
+            </button>
+          ))}
+        </div>
       </div>
+      <div aria-hidden className="shrink-0" style={{ height: "0.6rem" }} />
 
       {/* ---- card stage: whatever is left ----
           Edge to edge on a phone, which is the shape these cards are drawn
@@ -951,8 +980,10 @@ export default function SwipeMode({
           undo carry the same clamp below: absolutely positioned with both
           insets set, max-width + auto margins centre them over the column,
           not the window. */}
-      <div className="relative mx-auto min-h-0 w-full max-w-[430px] flex-1">
-        {busy ? (
+      <div className="relative mx-auto min-h-0 w-full max-w-[430px] flex-1" inert={covered}>
+        {/* Nothing is dealt behind the doors: the deal animation is the
+            arrival, so it plays when the deck is actually in front of you. */}
+        {doors !== "closed" ? null : busy ? (
           <Centered>
             <Sparkles size={20} className="animate-pulse" style={{ color: "var(--accent)" }} />
             <p className="mt-2 text-[13px]" style={{ color: "var(--text-tertiary)" }}>
@@ -1227,11 +1258,74 @@ export default function SwipeMode({
         </div>
       )}
 
+      {doors === "doors" && (
+        <div
+          className="absolute inset-x-0 bottom-0 z-20 flex flex-col"
+          style={{ top: mastheadBottom, background: "var(--deck-bg)" }}
+          role="dialog"
+          aria-label="How do you want to choose?"
+        >
+          <div className="mx-auto flex w-full max-w-[430px] flex-1 flex-col px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-8">
+            <h2 className="text-[32px] leading-[1.08]" style={{ fontFamily: "var(--font-display)", color: "var(--text-primary)" }}>
+              Where to tonight?
+            </h2>
+            <p className="mt-2 text-[14px]" style={{ color: "var(--text-tertiary)" }}>
+              Two ways in. You can change everything from the deck after.
+            </p>
+            {/* The choices sit low, in the thumb's reach, right above the box
+                that remembers the answer — not up under the headline. */}
+            <div className="flex-1" />
+            <div className="mb-4 flex flex-col gap-3">
+              <DoorButton
+                title="I wanna go wild"
+                body="Deal me good places nearby. No questions."
+                onClick={() => {
+                  lens.clear();
+                  leaveDoors();
+                }}
+              />
+              <DoorButton
+                title="I think I know what I want"
+                body="Pick an area, food or vibe first. All optional."
+                onClick={() => setDoors("form")}
+              />
+            </div>
+            <label
+              className="flex min-h-[48px] cursor-pointer items-center gap-3 px-4 py-3"
+              style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)" }}
+            >
+              <input
+                type="checkbox"
+                checked={dontAsk}
+                onChange={(e) => setDontAsk(e.target.checked)}
+                className="h-5 w-5 shrink-0"
+                style={{ accentColor: "var(--accent)" }}
+              />
+              <span className="text-[13.5px]" style={{ color: "var(--text-primary)" }}>
+                Don&rsquo;t ask me this again
+                <span style={{ color: "var(--text-tertiary)" }}> · turn it back on from the menu</span>
+              </span>
+            </label>
+          </div>
+        </div>
+      )}
+
+      {doors === "form" && (
+        <LensPanel
+          lens={lens}
+          areasFor={areasFor}
+          variant="form"
+          onClose={() => setDoors("doors")}
+          onApply={leaveDoors}
+        />
+      )}
+
       {lensOpen && (
         <LensPanel
           lens={lens}
-          areas={areas}
+          areasFor={areasFor}
           onClose={() => setLensOpen(false)}
+          onApply={() => setLensOpen(false)}
           // Panel first, then the outro — the leaving animation belongs to the
           // deck, not to a sheet it would otherwise play under.
           onOpenMap={() => {
@@ -1360,5 +1454,22 @@ function Centered({ children }: { children: React.ReactNode }) {
     >
       <div className="flex flex-col items-center">{children}</div>
     </div>
+  );
+}
+
+function DoorButton({ title, body, onClick }: { title: string; body: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="press w-full px-5 py-5 text-left"
+      style={{ background: "var(--bg-raised)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius)" }}
+    >
+      <span className="block text-[18px] font-bold" style={{ color: "var(--text-primary)" }}>
+        {title}
+      </span>
+      <span className="mt-1 block text-[13.5px] leading-snug" style={{ color: "var(--text-tertiary)" }}>
+        {body}
+      </span>
+    </button>
   );
 }

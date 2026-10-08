@@ -1,587 +1,305 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { X, Sparkles, RefreshCw, ChevronDown, Clock, Map as MapIcon, MapPin } from "lucide-react";
-import { geocodeArea } from "@/lib/places";
-import { parseFallback } from "@/lib/decide-fallback";
-import { rankPlaces, type DecideQuery } from "@/lib/decide";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { X, Search, ChevronLeft, Map as MapIcon, Clock } from "lucide-react";
+import type { DecideQuery } from "@/lib/decide";
 import { buildSearchPlan, type SwiggySearchPlan } from "@/lib/swiggyTerms";
-import { TAG_OPTIONS } from "@/lib/types";
-import { usePlaces } from "@/lib/store";
 import type { DeckSource } from "@/lib/deck";
+import {
+  BUDGETS,
+  EMPTY_FILTERS,
+  LIFECYCLES,
+  RATINGS,
+  TAG_GROUPS,
+  appliedOf,
+  buildQuery,
+  chipsFor,
+  labelOf,
+  pruneFor,
+  searchablePicks,
+  suggest,
+  toggleTag,
+  type Filters,
+  type Suggestion,
+} from "@/lib/filterVocab";
 
-// The lens — what the deck is looking at. This used to be a whole sheet you
-// passed THROUGH to reach the deck; swipe is a mode now, not something you
-// arrive at, so the lens travels with it as a panel the mode opens on itself.
-// State lives in the hook so the mode keeps its lens while the panel is shut.
-
-type FilterField =
-  | "lifecycle"
-  | "area"
-  | "cuisine"
-  | "maxBudget"
-  | "minRating"
-  | "type"
-  | "staple"
-  | "occasion"
-  | "vibe"
-  | "practical";
-type Category = { id: FilterField; label: string; values: { value: string; label: string }[] };
-
-const opt = (arr: string[]) => arr.map((v) => ({ value: v, label: v }));
-
-// ---- the standard four --------------------------------------------------
-// Where, what, how much, how good — what every delivery and booking app puts
-// in front of you, and the only filters that bite on BOTH sources, so they sit
-// in their own row above the tag lens and show for every source.
+// The lens — what the deck is looking at: a source (Saved / New / Both) and a
+// set of filters. State lives in the hook so the mode keeps its lens while the
+// editor is shut, and so the deck's own header can show and edit it.
 //
-// Area is the odd one: its values aren't a fixed vocabulary, they're the
-// localities actually present in the pool you're swiping (see the `areas`
-// prop). That way every option returns something, and there's no free-text box
-// competing with Ask, which already handles "near koramangala" — and geocodes.
-const CUISINE_CAT: Category = { id: "cuisine", label: "Cuisine", values: opt(TAG_OPTIONS.cuisine) };
-// Per person, and pinned to the same rupee ladder decide.ts estimates Google's
-// price levels onto (300/800/1500/2500) — a rung between two levels would filter
-// on a distinction the underlying data can't actually make.
-const BUDGET_CAT: Category = {
-  id: "maxBudget",
-  label: "Budget",
-  values: [500, 1000, 1500, 2500].map((n) => ({
-    value: String(n),
-    label: `Under ₹${n.toLocaleString("en-IN")}`,
-  })),
-};
-const RATING_CAT: Category = {
-  id: "minRating",
-  label: "Rating",
-  values: [3.5, 4, 4.5].map((n) => ({ value: String(n), label: `${n.toFixed(1)}+` })),
-};
-
-// ---- the tag lens -------------------------------------------------------
-// Your own vocabulary, so it only appears when your own places are the deck.
-// "Show" is the lifecycle lens.
-const TAG_CATS: Category[] = [
-  {
-    id: "lifecycle",
-    label: "Show",
-    values: [
-      { value: "any", label: "All" },
-      { value: "favorites", label: "Favorites" },
-      { value: "watchlist", label: "Watchlist" },
-      { value: "visited", label: "Been" },
-    ],
-  },
-  { id: "type", label: "Type", values: opt(TAG_OPTIONS.type) },
-  { id: "staple", label: "Staple", values: opt(TAG_OPTIONS.staple) },
-  { id: "occasion", label: "Occasion", values: opt(TAG_OPTIONS.occasion) },
-  { id: "vibe", label: "Vibe", values: opt(TAG_OPTIONS.vibe) },
-  { id: "practical", label: "Practical", values: opt(TAG_OPTIONS.practical) },
-];
-
-// The two numeric filters live here as numbers, not as the chip's string value,
-// so buildQuery hands decide.ts and buildDeck the same shape Ask does.
-type Filters = {
-  lifecycle: "any" | "favorites" | "watchlist" | "visited";
-  area: string;
-  cuisine: string;
-  maxBudget: number | null;
-  minRating: number | null;
-  type: string;
-  staple: string;
-  occasion: string;
-  vibe: string;
-  practical: string;
-  openNow: boolean;
-};
-const EMPTY_FILTERS: Filters = {
-  lifecycle: "any",
-  area: "",
-  cuisine: "",
-  maxBudget: null,
-  minRating: null,
-  type: "",
-  staple: "",
-  occasion: "",
-  vibe: "",
-  practical: "",
-  openNow: false,
-};
-
-// What's left that no chip can express — free keywords, hard negatives, and the
-// centroid Ask geocodes for an area (the chips only ever set the area's name).
-// Ask-only, carried alongside the chip filters.
-type Extras = Pick<
-  DecideQuery,
-  | "areaCenter"
-  | "keywords"
-  | "boostRatings"
-  | "excludeCuisines"
-  | "excludeTypes"
-  | "excludeStaples"
-  | "excludeOccasions"
-  | "excludeVibes"
-  | "excludePractical"
-> & {
-  // The full arrays a parse produced. The chips are single-select, so without
-  // this "japanese or korean" reached the ranker as "japanese".
-  multi?: Partial<Record<MultiField, string[]>>;
-};
-
-type MultiField = "types" | "cuisines" | "staples" | "occasions" | "vibes" | "practical";
-
-const MULTI_OF: Record<MultiField, keyof Filters> = {
-  types: "type",
-  cuisines: "cuisine",
-  staples: "staple",
-  occasions: "occasion",
-  vibes: "vibe",
-  practical: "practical",
-};
-
-// A hand-picked chip overrides the ask; an untouched one carries everything the
-// ask found. See the same rule in AskSheet.
-function valuesFor(f: Filters, x: Extras, field: MultiField): string[] | undefined {
-  const chip = f[MULTI_OF[field]] as string;
-  if (!chip) return undefined;
-  const parsed = x.multi?.[field];
-  return parsed?.length && parsed[0] === chip ? parsed : [chip];
-}
-
-function buildQuery(f: Filters, x: Extras): DecideQuery {
-  const q: DecideQuery = { lifecycle: f.lifecycle };
-  if (f.openNow) q.openNow = true;
-  q.cuisines = valuesFor(f, x, "cuisines");
-  q.types = valuesFor(f, x, "types");
-  q.staples = valuesFor(f, x, "staples");
-  q.occasions = valuesFor(f, x, "occasions");
-  q.vibes = valuesFor(f, x, "vibes");
-  q.practical = valuesFor(f, x, "practical");
-  if (x.boostRatings?.length) q.boostRatings = x.boostRatings;
-  if (f.area) {
-    q.area = f.area;
-    // Only Ask ever produces a centroid; with one, rankPlaces gates by distance
-    // instead of by the name (see DecideQuery.area).
-    if (x.areaCenter) q.areaCenter = x.areaCenter;
-  }
-  if (f.maxBudget != null) q.maxBudget = f.maxBudget;
-  if (f.minRating != null) q.minRating = f.minRating;
-  if (x.keywords?.length) q.keywords = x.keywords;
-  for (const k of [
-    "excludeCuisines",
-    "excludeTypes",
-    "excludeStaples",
-    "excludeOccasions",
-    "excludeVibes",
-    "excludePractical",
-  ] as const) {
-    if (x[k]?.length) q[k] = x[k];
-  }
-  return q;
-}
+// There is no free-text box any more. "Tell me the mood…" accepted anything
+// and the New deck could act on a fraction of it — Swiggy's search takes one
+// term, and most moods have none — so the deck over-promised on every ask.
+// The editor offers only what the deck can act on, a short list per group,
+// and a search across the full vocabulary for the rest (lib/filterVocab.ts).
 
 export type Lens = ReturnType<typeof useLens>;
 
 export function useLens() {
-  const places = usePlaces();
   const [source, setSource] = useState<DeckSource>("saved");
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
-  const [extras, setExtras] = useState<Extras>({});
-  // True when the last Ask was read by the offline keyword parser rather than
-  // the model. Lives on the lens because the deck's collapsed trigger shows it.
-  const [basicParse, setBasicParse] = useState(false);
 
   // Built for every source. The tag half only lands on saved cards (buildDeck
-  // never ranks Swiggy through rankPlaces), but area/budget/rating do gate the
-  // Swiggy half too — so "new" can't be handed an empty query any more, or the
-  // standard filters would silently no-op on the one source that's all new.
-  const query = useMemo<DecideQuery>(() => buildQuery(filters, extras), [filters, extras]);
-  const cuisine = filters.cuisine || null;
+  // never ranks Swiggy through rankPlaces), but area/budget/rating gate the
+  // Swiggy half too.
+  const query = useMemo<DecideQuery>(() => buildQuery(filters), [filters]);
+  const applied = useMemo(() => appliedOf(filters), [filters]);
+  const dirty = applied.length > 0;
 
-  // Cheap and local (rankPlaces is pure), so the chips get live feedback.
-  // Only meaningful for the saved side.
-  const savedMatches = useMemo(
-    () => (source === "new" ? 0 : rankPlaces(places, query, 1).length),
-    [source, places, query]
-  );
-
-  // A one-line summary for the collapsed trigger, so the mode can always say
-  // what it is showing you without the panel being open.
-  const area = filters.area || null;
-  const summary = useMemo(() => {
-    const bits: string[] = [];
-    if (filters.lifecycle !== "any") bits.push(filters.lifecycle);
-    if (filters.area) bits.push(filters.area);
-    for (const k of ["cuisine", "type", "staple", "occasion", "vibe", "practical"] as const) {
-      if (filters[k]) bits.push(filters[k]);
-    }
-    if (filters.maxBudget != null) bits.push(`under ₹${filters.maxBudget.toLocaleString("en-IN")}`);
-    if (filters.minRating != null) bits.push(`${filters.minRating.toFixed(1)}+`);
-    if (filters.openNow) bits.push("open now");
-    if (basicParse) bits.push("basic matching");
-    return bits;
-  }, [filters, basicParse]);
-
-  // Is anything narrowing the deck right now? Not just `summary.length` — Ask
-  // can set keywords and hard negatives that no chip shows, and a Clear that
-  // left those behind would be a lie.
-  const dirty = useMemo(
-    () =>
-      summary.length > 0 ||
-      // `multi` is excluded: extrasFromParsed always writes the object (its
-      // fields may all be undefined), so counting it made `dirty` permanently
-      // true after ANY ask — which lit the Clear button and made the deck offer
-      // to loosen a lens that was narrowing nothing.
-      Object.entries(extras).some(([k, v]) =>
-        k === "multi" ? false : Array.isArray(v) ? v.length > 0 : v != null
-      ),
-    [summary, extras]
-  );
-
-  const clear = () => {
-    setFilters(EMPTY_FILTERS);
-    setExtras({});
-    setBasicParse(false);
+  // Switching to New drops the picks New can't act on (lib/filterVocab.ts
+  // pruneFor) — the applied row must only ever show filters that bite.
+  const pickSource = (s: DeckSource) => {
+    setSource(s);
+    setFilters((f) => pruneFor(f, s));
   };
 
   return {
     source,
-    setSource,
+    setSource: pickSource,
     filters,
     setFilters,
-    extras,
-    setExtras,
-    basicParse,
-    setBasicParse,
     query,
-    area,
-    cuisine,
-    // What New mode should actually ask Swiggy for. Built from the STRUCTURED
-    // query, not from the user's leftover words: the old path joined whatever
-    // keywords survived stopword-stripping into one string ("rooftop friends"),
-    // which Swiggy resolves as nothing. See lib/swiggyTerms.ts.
-    searchPlan: (source === "saved"
-      ? { terms: [] }
-      : buildSearchPlan(query, extras.keywords)) as SwiggySearchPlan,
-    savedMatches,
-    summary,
+    area: filters.area || null,
+    // What New mode should actually ask Swiggy for, built from the structured
+    // query. See lib/swiggyTerms.ts.
+    searchPlan: (source === "saved" ? { terms: [] } : buildSearchPlan(query)) as SwiggySearchPlan,
+    applied,
+    summary: applied.map((a) => a.label),
     dirty,
-    clear,
+    clear: () => setFilters(EMPTY_FILTERS),
   };
 }
 
+export const SOURCES: { key: DeckSource; label: string }[] = [
+  { key: "saved", label: "Saved" },
+  { key: "new", label: "New" },
+  { key: "both", label: "Both" },
+];
+
+// The one control that says which deck this is. Shared by the deck's header
+// and the editor so the two read as the same switch.
+export function SourceSwitch({
+  source,
+  onPick,
+  dense = false,
+}: {
+  source: DeckSource;
+  onPick: (s: DeckSource) => void;
+  dense?: boolean;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Which places"
+      // A radio group moves with the arrow keys — and has to keep them: on the
+      // deck the same keys swipe the card, so an arrow meant for the switch
+      // must never reach the deck's shortcuts (it would skip or add a place).
+      onKeyDown={(e) => {
+        const step = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+        if (!step) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const i = SOURCES.findIndex((x) => x.key === source);
+        const next = SOURCES[(i + step + SOURCES.length) % SOURCES.length].key;
+        onPick(next);
+        const btn = e.currentTarget.querySelectorAll<HTMLButtonElement>("[role=radio]")[SOURCES.findIndex((x) => x.key === next)];
+        btn?.focus();
+      }}
+      className="grid w-full grid-cols-3 gap-1"
+      style={{
+        background: "var(--bg-elevated)",
+        border: "1px solid var(--border-strong)",
+        borderRadius: "var(--radius-chip)",
+        padding: 3,
+      }}
+    >
+      {SOURCES.map((s) => {
+        const on = source === s.key;
+        return (
+          <button
+            key={s.key}
+            role="radio"
+            aria-checked={on}
+            tabIndex={on ? 0 : -1}
+            onClick={() => onPick(s.key)}
+            className={`press ${dense ? "py-1.5 text-[13px]" : "py-2 text-[13.5px]"} font-semibold transition-colors`}
+            style={{
+              borderRadius: "calc(var(--radius-chip) - 3px)",
+              background: on ? "oklch(0.97 0 0)" : "transparent",
+              color: on ? "oklch(0.16 0.006 260)" : "var(--text-secondary)",
+            }}
+          >
+            {s.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// The filter editor. Two presentations of the same thing:
+//   "sheet" — the deck's filter sheet, over the cards.
+//   "form"  — the "I know what I want" door: full screen, every question
+//             optional, and the button reads "Just show me places" untouched.
+// Both edit a DRAFT; nothing reaches the deck until Apply, and closing or Back
+// throws the draft away — so a half-made change never refetches Swiggy under
+// you, and "never mind" means never mind.
 export default function LensPanel({
   lens,
-  areas,
+  areasFor,
+  variant = "sheet",
   onClose,
+  onApply,
   onOpenMap,
 }: {
   lens: Lens;
-  // Every locality present in the pool this deck is drawing from — saved
-  // places, Swiggy results, or both, per source. Passed in rather than derived
-  // here because only the mode holds the Swiggy half.
-  areas: string[];
-  onClose: () => void;
-  // Leave the mode entirely, back to the map. Lives on this panel because it
-  // is the deck's only menu: the wordmark's double-tap is the gesture, and a
-  // gesture with no control anywhere is a door people can't find — desktop
-  // proved it.
-  onOpenMap: () => void;
+  // Every locality the pool for a source holds, most-held first.
+  areasFor: (source: DeckSource) => string[];
+  variant?: "sheet" | "form";
+  onClose: () => void; // cancel — the draft is discarded
+  onApply: () => void; // after the draft is committed to the lens
+  // Leave the mode entirely, back to the map. The sheet is the deck's only
+  // menu, so the way out lives on it.
+  onOpenMap?: () => void;
 }) {
-  const { source, setSource, filters, setFilters, setExtras, dirty, clear } = lens;
-  const [picker, setPicker] = useState<FilterField | null>(null);
-  const [nl, setNl] = useState("");
-  const [thinking, setThinking] = useState(false);
-  const { basicParse, setBasicParse } = lens;
+  const [draft, setDraft] = useState<Filters>(lens.filters);
+  const [source, setSource] = useState<DeckSource>(lens.source);
+  const [text, setText] = useState("");
+  const areas = useMemo(() => areasFor(source), [areasFor, source]);
+  const suggestions = useMemo(() => suggest(text, source, areas), [text, source, areas]);
+  const picked = appliedOf(draft).length;
+  const isForm = variant === "form";
+  // A dialog takes focus when it opens, so the keyboard is in it rather than
+  // on the deck it covers.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    dialogRef.current?.focus();
+  }, []);
+  const onDialogKey = (e: React.KeyboardEvent) => {
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    e.stopPropagation();
+    onClose();
+  };
+  // New searches at most MAX_TERMS terms at once (lib/swiggyTerms.ts). Picking
+  // more is allowed — they still narrow your saved places on Both — but the
+  // editor says which ones New will search rather than dropping the rest
+  // silently.
+  const plan = source === "saved" ? null : buildSearchPlan(buildQuery(draft));
+  const overCap = plan && searchablePicks(draft) > plan.terms.length && plan.terms.length >= 4 ? plan.terms : null;
 
-  // A chosen area survives in the list even after the pool moves under it (a
-  // cuisine change refetches Swiggy), so the chip never points at a value the
-  // list can't show you or let you clear.
-  const areaCat = useMemo<Category>(() => {
-    const all = [...new Set(filters.area ? [...areas, filters.area] : areas)].sort((a, b) =>
-      a.localeCompare(b)
+  const apply = () => {
+    lens.setFilters(draft);
+    lens.setSource(source);
+    onApply();
+  };
+
+  const takeSuggestion = (s: Suggestion) => {
+    setDraft((d) =>
+      s.kind === "area" ? { ...d, area: d.area === s.value ? "" : s.value } : toggleTag(d, s.field, s.value)
     );
-    return { id: "area", label: "Area", values: all.map((a) => ({ value: a, label: a })) };
-  }, [areas, filters.area]);
-
-  // An empty pool means an Area chip that opens onto nothing — drop it rather
-  // than offer a dead control.
-  const standardCats = useMemo<Category[]>(
-    () => [...(areaCat.values.length ? [areaCat] : []), CUISINE_CAT, BUDGET_CAT, RATING_CAT],
-    [areaCat]
-  );
-  const tagCats = source === "saved" ? TAG_CATS : [];
-  const openCat = picker
-    ? [...standardCats, ...tagCats].find((c) => c.id === picker) ?? null
-    : null;
-
-  // Chips speak strings; budget and rating are stored as numbers.
-  const valueOf = (id: FilterField): string => {
-    const v = filters[id];
-    return v == null || v === "" ? "" : String(v);
+    setText("");
   };
 
-  const setField = (id: FilterField, value: string) => {
-    setFilters((f) => ({
-      ...f,
-      [id]: id === "maxBudget" || id === "minRating" ? (value ? Number(value) : null) : value,
-    }));
-    // Choosing an area by hand drops the centroid a previous Ask geocoded: the
-    // name you just picked is the constraint now, not a radius round another one.
-    if (id === "area") setExtras((x) => ({ ...x, areaCenter: undefined }));
-    setPicker(null);
-  };
+  const isPicked = (s: Suggestion) => (s.kind === "area" ? draft.area === s.value : draft[s.field].includes(s.value));
 
-  // Ask — the ONE natural-language mechanism, same for every source. The model
-  // route parses free text into the structured query; here we fan it out onto
-  // the category filters (so the chips reflect what you asked) plus the extras.
-  const ask = async () => {
-    const text = nl.trim();
-    if (!text) return;
-    setThinking(true);
-    let q: DecideQuery;
-    // See AskSheet: a silent drop to the keyword parser is how this feature ran
-    // for weeks looking fine and understanding almost nothing, so the deck says
-    // when it happened.
-    let basic = true;
-    try {
-      const res = await fetch("/api/decide", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: text }),
-      });
-      const data = await res.json();
-      if (data.query) {
-        q = data.query;
-        basic = data.parsedBy !== "model";
-      } else {
-        q = parseFallback(text);
-      }
-    } catch {
-      q = parseFallback(text);
-    }
-    setBasicParse(basic);
-    if (q.area) {
-      try {
-        const hit = await geocodeArea(q.area);
-        if (hit) {
-          q.areaCenter = { lat: hit.lat, lng: hit.lng };
-          q.area = hit.name;
-        }
-      } catch {
-        // Keep the area name. The deck and Swiggy search both have name-based
-        // fallbacks, so a geocode miss should not turn an area ask into a
-        // generic keyword ask.
-      }
-    }
-    setFilters((f) => ({
-      ...f,
-      lifecycle: q.lifecycle ?? f.lifecycle,
-      area: q.area ?? f.area,
-      cuisine: q.cuisines?.[0] ?? f.cuisine,
-      maxBudget: q.maxBudget ?? f.maxBudget,
-      minRating: q.minRating ?? f.minRating,
-      type: q.types?.[0] ?? f.type,
-      staple: q.staples?.[0] ?? f.staple,
-      occasion: q.occasions?.[0] ?? f.occasion,
-      vibe: q.vibes?.[0] ?? f.vibe,
-      practical: q.practical?.[0] ?? f.practical,
-      openNow: q.openNow ?? f.openNow,
-    }));
-    setExtras((x) => ({
-      // Area and its centroid travel together. This ask named an area → take
-      // its centroid (undefined if geocoding failed, which falls back to the
-      // name). It didn't → the previous area name is still standing above, so
-      // its centroid has to stand with it.
-      areaCenter: q.area ? q.areaCenter : x.areaCenter,
-      keywords: q.keywords,
-      // Parsed and then discarded until now, on both surfaces.
-      boostRatings: q.boostRatings,
-      multi: {
-        types: q.types,
-        cuisines: q.cuisines,
-        staples: q.staples,
-        occasions: q.occasions,
-        vibes: q.vibes,
-        practical: q.practical,
-      },
-      excludeCuisines: q.excludeCuisines,
-      excludeTypes: q.excludeTypes,
-      excludeStaples: q.excludeStaples,
-      excludeOccasions: q.excludeOccasions,
-      excludeVibes: q.excludeVibes,
-      excludePractical: q.excludePractical,
-    }));
-    setThinking(false);
-  };
+  // Area is single-select: the Swiggy search runs from one locality. The chips
+  // are the few the pool holds most of, plus the current pick.
+  const areaChips = useMemo(() => {
+    const shown = areas.slice(0, 5);
+    if (draft.area && !shown.includes(draft.area)) shown.push(draft.area);
+    return shown;
+  }, [areas, draft.area]);
 
-  const SOURCES: { key: DeckSource; label: string }[] = [
-    { key: "saved", label: "Saved" },
-    { key: "new", label: "New" },
-    { key: "both", label: "Both" },
-  ];
-
-  return (
-    <div className="fixed inset-0 z-[54] flex flex-col justify-end" style={{ background: "rgba(6,7,10,0.6)" }} onClick={onClose}>
-      <div
-        className="animate-rise w-full px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3"
-        style={{
-          background: "var(--bg-raised)",
-          borderTopLeftRadius: "var(--radius-lg)",
-          borderTopRightRadius: "var(--radius-lg)",
-          boxShadow: "var(--shadow-sheet)",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="mb-3 flex items-center justify-between">
-          <span className="eyebrow" style={{ color: "var(--accent)" }}>
-            Showing
-          </span>
-          <div className="flex items-center gap-2">
-            {/* Nine controls can be on at once now. Un-setting them one at a
-                time is the kind of chore a filter sheet is supposed to save
-                you — and this is the only thing that also clears what Ask set
-                behind the chips. */}
-            {dirty && (
-              <button
-                onClick={() => {
-                  clear();
-                  setPicker(null);
-                  setNl("");
-                }}
-                className="press px-2 py-1 text-[12px] font-semibold"
-                style={{ color: "var(--text-tertiary)" }}
-              >
-                Clear all
-              </button>
-            )}
-            <button
-              onClick={onClose}
-              aria-label="Close filters"
-              className="press grid h-8 w-8 place-items-center rounded-full"
-              style={{ background: "var(--bg-elevated)", color: "var(--text-tertiary)" }}
-            >
-              <X size={15} strokeWidth={2.25} />
-            </button>
-          </div>
-        </div>
-
-        {/* SOURCE — the first filter */}
-        <div
-          className="grid grid-cols-3 gap-1"
-          style={{
-            background: "var(--bg-elevated)",
-            border: "1px solid var(--border-strong)",
-            borderRadius: "var(--radius-chip)",
-            padding: 3,
+  const body = (
+    <>
+      <Section title={isForm ? "From" : "Showing"}>
+        <SourceSwitch
+          source={source}
+          onPick={(s) => {
+            setSource(s);
+            setDraft((d) => pruneFor(d, s));
           }}
-        >
-          {SOURCES.map((s) => {
-            const on = source === s.key;
-            return (
-              <button
-                key={s.key}
-                onClick={() => {
-                  setSource(s.key);
-                  setPicker(null);
-                }}
-                className="press py-2 text-[13.5px] font-semibold transition-colors"
-                style={{
-                  borderRadius: "calc(var(--radius-chip) - 3px)",
-                  background: on ? "oklch(0.97 0 0)" : "transparent",
-                  color: on ? "oklch(0.16 0.006 260)" : "var(--text-secondary)",
-                }}
-              >
-                {s.label}
-              </button>
-            );
-          })}
-        </div>
+        />
+      </Section>
 
-        {/* Ask */}
-        <div
-          className="mt-2.5 flex items-center gap-2 px-3"
-          style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)" }}
-        >
-          <Sparkles size={15} strokeWidth={2.25} style={{ color: "var(--accent)" }} />
-          <input
-            value={nl}
-            onChange={(e) => setNl(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && ask()}
-            placeholder="Tell me the mood…"
-            className="flex-1 bg-transparent py-2.5 text-[14px] outline-none"
-            style={{ color: "var(--text-primary)" }}
-          />
-          <button
-            onClick={ask}
-            disabled={thinking || !nl.trim()}
-            className="press flex items-center gap-1.5 px-3 py-1.5 text-[12.5px] font-bold disabled:opacity-40"
-            style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
-          >
-            {thinking ? <RefreshCw size={13} className="animate-spin" /> : <Sparkles size={13} strokeWidth={2.25} />}
-            Ask
-          </button>
-        </div>
-
-        {/* THE STANDARD FILTERS — where, what, how much, how good. Wraps rather
-            than scrolls: four chips is the whole set, and a filter you have to
-            discover by scrolling sideways is the problem this row exists to
-            fix. Shown for every source, because all four bite on both. */}
-        <div className="mt-2.5 flex flex-wrap gap-1.5">
-          {standardCats.map((cat) => (
-            <CatChip
-              key={cat.id}
-              cat={cat}
-              value={valueOf(cat.id)}
-              isOpen={picker === cat.id}
-              onToggle={() => setPicker((p) => (p === cat.id ? null : cat.id))}
+      {areaChips.length > 0 && (
+        <Section title="Where" hint="one">
+          {areaChips.map((a) => (
+            <Chip
+              key={a}
+              label={a}
+              on={draft.area === a}
+              onClick={() => setDraft((d) => ({ ...d, area: d.area === a ? "" : a }))}
             />
           ))}
-        </div>
-        {openCat && standardCats.some((c) => c.id === openCat.id) && (
-          <ValueList cat={openCat} value={valueOf(openCat.id)} onPick={setField} />
-        )}
+        </Section>
+      )}
 
-        {/* THE TAG LENS — your own vocabulary, so only when your own places are
-            in the deck. Kept below a hairline and left to scroll: it's a long
-            tail you go looking for, not the row you land on. */}
-        {tagCats.length > 0 && (
-          <>
-            <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--border)" }}>
-              <div className="scroll-quiet flex gap-1.5 overflow-x-auto pb-0.5">
-                {tagCats.map((cat) => (
-                  <CatChip
-                    key={cat.id}
-                    cat={cat}
-                    value={valueOf(cat.id)}
-                    isOpen={picker === cat.id}
-                    onToggle={() => setPicker((p) => (p === cat.id ? null : cat.id))}
-                  />
-                ))}
-                {/* Hours are a saved-place fact — Swiggy hands back none — so
-                    this stays with the tags rather than joining the four. */}
-                <button
-                  onClick={() => setFilters((f) => ({ ...f, openNow: !f.openNow }))}
-                  className="press flex shrink-0 items-center gap-1 px-3 py-1.5 text-[12px] font-medium transition-colors"
-                  style={{
-                    borderRadius: "var(--radius-chip)",
-                    background: filters.openNow ? "var(--s-watchlist)" : "transparent",
-                    color: filters.openNow ? "#1a1206" : "var(--text-secondary)",
-                    border: `1px solid ${filters.openNow ? "var(--s-watchlist)" : "var(--border-strong)"}`,
-                  }}
-                >
-                  <Clock size={11} /> Open now
-                </button>
-              </div>
-            </div>
-            {openCat && tagCats.some((c) => c.id === openCat.id) && (
-              <ValueList cat={openCat} value={valueOf(openCat.id)} onPick={setField} />
-            )}
-          </>
-        )}
+      {TAG_GROUPS.map((g) => {
+        const chips = chipsFor(g, source, draft[g.field]);
+        if (chips.length === 0) return null;
+        return (
+          <Section key={g.field} title={g.title} hint="pick any">
+            {chips.map((v) => (
+              <Chip
+                key={v}
+                label={labelOf(v)}
+                on={draft[g.field].includes(v)}
+                onClick={() => setDraft((d) => toggleTag(d, g.field, v))}
+              />
+            ))}
+          </Section>
+        );
+      })}
 
-        {/* Not a filter — the way out of the mode, below a hairline so it
-            reads as the panel's footer. See onOpenMap above. */}
-        <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--border)" }}>
+      <Section title="Budget per person" hint="one">
+        {BUDGETS.map((n) => (
+          <Chip
+            key={n}
+            label={`Under ₹${n.toLocaleString("en-IN")}`}
+            on={draft.maxBudget === n}
+            onClick={() => setDraft((d) => ({ ...d, maxBudget: d.maxBudget === n ? null : n }))}
+          />
+        ))}
+      </Section>
+
+      <Section title="Rating" hint="one">
+        {RATINGS.map((n) => (
+          <Chip
+            key={n}
+            label={`${n.toFixed(1)}+`}
+            on={draft.minRating === n}
+            onClick={() => setDraft((d) => ({ ...d, minRating: d.minRating === n ? null : n }))}
+          />
+        ))}
+      </Section>
+
+      {/* Your own places' facts: their lifecycle, and hours (Google's, on a
+          saved place). Swiggy cards carry neither yet, so a New deck doesn't
+          offer them. */}
+      {source !== "new" && (
+        <Section title="Your places" hint="one">
+          {LIFECYCLES.filter((l) => l.value !== "any").map((l) => (
+            <Chip
+              key={l.value}
+              label={l.label}
+              on={draft.lifecycle === l.value}
+              onClick={() => setDraft((d) => ({ ...d, lifecycle: d.lifecycle === l.value ? "any" : l.value }))}
+            />
+          ))}
+          <Chip
+            label="Open now"
+            icon={<Clock size={12} strokeWidth={2.5} />}
+            on={draft.openNow}
+            onClick={() => setDraft((d) => ({ ...d, openNow: !d.openNow }))}
+          />
+        </Section>
+      )}
+
+      {onOpenMap && !isForm && (
+        <div className="mt-5 pt-3" style={{ borderTop: "1px solid var(--border)" }}>
           <button
             onClick={onOpenMap}
             className="press flex w-full items-center gap-2.5 px-3 py-2.5 text-left"
@@ -601,115 +319,241 @@ export default function LensPanel({
             </span>
           </button>
         </div>
-      </div>
-    </div>
+      )}
+    </>
   );
-}
 
-// A category chip: what the filter is when it's off, what you picked when it's
-// on. Never "Budget · Under ₹1,000" — the chip row has to stay readable at a
-// glance, and the value IS the more useful half.
-function CatChip({
-  cat,
-  value,
-  isOpen,
-  onToggle,
-}: {
-  cat: Category;
-  value: string;
-  isOpen: boolean;
-  onToggle: () => void;
-}) {
-  const active = cat.id === "lifecycle" ? value !== "any" : value !== "";
-  const shownLabel = active ? cat.values.find((v) => v.value === value)?.label ?? cat.label : cat.label;
-  const highlight = active || isOpen;
-  return (
-    <button
-      onClick={onToggle}
-      className="press flex shrink-0 items-center gap-1 px-3 py-1.5 text-[12px] font-semibold capitalize transition-colors"
+  const searchBox = (
+    <label
+      className="flex items-center gap-2 px-3"
       style={{
-        borderRadius: "var(--radius-chip)",
-        background: highlight ? "oklch(0.97 0 0)" : "transparent",
-        color: highlight ? "oklch(0.16 0.006 260)" : "var(--text-secondary)",
-        border: `1px solid ${highlight ? "oklch(0.97 0 0)" : "var(--border-strong)"}`,
+        background: "var(--bg-elevated)",
+        border: `1px solid ${text ? "var(--accent)" : "var(--border-strong)"}`,
+        borderRadius: "var(--radius-sm)",
       }}
     >
-      {shownLabel}
-      <ChevronDown size={12} strokeWidth={2.5} style={{ transform: isOpen ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
-    </button>
+      <Search size={15} strokeWidth={2.25} style={{ color: "var(--accent)" }} />
+      <span className="sr-only">Search areas, cuisines, dishes and vibes</span>
+      <input
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && suggestions[0]) takeSuggestion(suggestions[0]);
+          if (e.key === "Escape" && text) {
+            e.stopPropagation();
+            setText("");
+          }
+        }}
+        placeholder="Area, cuisine, dish, vibe…"
+        className="min-w-0 flex-1 bg-transparent py-2.5 text-[14px] outline-none"
+        style={{ color: "var(--text-primary)" }}
+      />
+      {text && (
+        <button
+          onClick={() => setText("")}
+          aria-label="Clear search"
+          className="press grid h-7 w-7 place-items-center rounded-full"
+          style={{ background: "var(--bg-hover)", color: "var(--text-tertiary)" }}
+        >
+          <X size={12} strokeWidth={2.5} />
+        </button>
+      )}
+    </label>
+  );
+
+  const results = (
+    <ul className="mt-1" aria-label="Suggestions">
+      {suggestions.length === 0 && (
+        <li className="px-1 py-4 text-[13px]" style={{ color: "var(--text-tertiary)" }}>
+          Nothing by that name{source === "new" ? " that Swiggy can search for" : ""}.
+        </li>
+      )}
+      {suggestions.map((s) => (
+        <li key={`${s.kind}:${s.kind === "tag" ? s.field : ""}:${s.value}:${s.label}`}>
+          <button
+            onClick={() => takeSuggestion(s)}
+            className="press flex min-h-[48px] w-full items-center justify-between gap-3 px-1 text-left"
+            style={{ borderBottom: "1px solid var(--border)" }}
+          >
+            <span className="text-[15px]" style={{ color: "var(--text-primary)" }}>
+              {s.label}
+              {isPicked(s) && (
+                <span className="ml-2 text-[12px]" style={{ color: "var(--accent)" }}>
+                  picked
+                </span>
+              )}
+            </span>
+            <span className="shrink-0 text-[11px] uppercase tracking-[0.06em]" style={{ color: "var(--text-tertiary)", fontFamily: "var(--font-mono)" }}>
+              {s.group}
+            </span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+
+  const footer = (
+    <>
+    {overCap && (
+      <p className="pt-3 text-[12.5px] leading-snug" style={{ color: "var(--text-tertiary)" }}>
+        New searches 4 picks at a time:{" "}
+        <span style={{ color: "var(--text-secondary)" }}>{overCap.join(", ")}</span>. Remove one to swap another in.
+      </p>
+    )}
+    <div className="flex items-center gap-2 pt-3">
+      {picked > 0 && (
+        <button
+          onClick={() => setDraft(EMPTY_FILTERS)}
+          className="press px-4 py-3 text-[13.5px] font-semibold"
+          style={{ color: "var(--text-tertiary)" }}
+        >
+          Clear all
+        </button>
+      )}
+      <button
+        onClick={apply}
+        className="press flex-1 py-3 text-[15px] font-bold"
+        style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
+      >
+        {isForm && picked === 0 ? "Just show me places" : picked > 0 ? `Show places · ${picked} picked` : "Show places"}
+      </button>
+    </div>
+    </>
+  );
+
+  if (isForm) {
+    // Portalled to the page root: rendered inside the deck, the form would sit
+    // in the deck's stacking layer and the masthead (a sibling layer above it)
+    // would draw its wordmark across the form's header.
+    // The form only ever opens from a tap, so there is always a document.
+    if (typeof document === "undefined") return null;
+    return createPortal(
+      <div
+        className="fixed inset-0 z-[60] flex flex-col"
+        style={{ background: "var(--deck-bg)", height: "var(--app-viewport-h)" }}
+        role="dialog"
+        aria-modal="true"
+        aria-label="What are you in the mood for?"
+        ref={dialogRef}
+        tabIndex={-1}
+        onKeyDown={onDialogKey}
+      >
+        <div className="mx-auto flex w-full max-w-[430px] min-h-0 flex-1 flex-col px-5 pt-[max(1rem,env(safe-area-inset-top))]">
+          <div className="flex items-center justify-between py-2">
+            <button
+              onClick={onClose}
+              aria-label="Back"
+              className="press grid h-10 w-10 place-items-center rounded-full"
+              style={{ background: "var(--bg-elevated)", color: "var(--text-primary)" }}
+            >
+              <ChevronLeft size={18} strokeWidth={2.25} />
+            </button>
+            <span
+              className="px-3 py-1.5 text-[11.5px]"
+              style={{ fontFamily: "var(--font-mono)", color: "var(--accent)", background: "var(--accent-soft)", borderRadius: "var(--radius-chip)" }}
+            >
+              every question is optional
+            </span>
+          </div>
+          <h2 className="mt-2 text-[28px] leading-tight" style={{ fontFamily: "var(--font-display)", color: "var(--text-primary)" }}>
+            What are you in the mood for?
+          </h2>
+          <p className="mt-1 text-[13.5px]" style={{ color: "var(--text-tertiary)" }}>
+            Pick what you know, skip what you don&rsquo;t.
+          </p>
+          <div className="mt-4">{searchBox}</div>
+          <div className="scroll-quiet min-h-0 flex-1 overflow-y-auto pb-4">{text ? results : body}</div>
+          <div className="pb-[max(1.25rem,env(safe-area-inset-bottom))]" style={{ borderTop: "1px solid var(--border)" }}>
+            {footer}
+          </div>
+        </div>
+      </div>,
+      document.body
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-[54] flex flex-col justify-end" style={{ background: "rgba(6,7,10,0.6)" }} onClick={onClose}>
+      <div
+        className="animate-rise mx-auto flex max-h-[88dvh] w-full max-w-[560px] flex-col px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3"
+        style={{
+          background: "var(--bg-raised)",
+          borderTopLeftRadius: "var(--radius-lg)",
+          borderTopRightRadius: "var(--radius-lg)",
+          boxShadow: "var(--shadow-sheet)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Filters"
+        ref={dialogRef}
+        tabIndex={-1}
+        onKeyDown={onDialogKey}
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <span className="eyebrow" style={{ color: "var(--accent)" }}>
+            Filters
+          </span>
+          <button
+            onClick={onClose}
+            aria-label="Close filters"
+            className="press grid h-8 w-8 place-items-center rounded-full"
+            style={{ background: "var(--bg-elevated)", color: "var(--text-tertiary)" }}
+          >
+            <X size={15} strokeWidth={2.25} />
+          </button>
+        </div>
+        {searchBox}
+        <div className="scroll-quiet min-h-0 flex-1 overflow-y-auto pb-2">{text ? results : body}</div>
+        <div style={{ borderTop: "1px solid var(--border)" }}>{footer}</div>
+      </div>
+    </div>
   );
 }
 
-// The values for the open category, under the row that owns it — so the list
-// always opens directly beneath the chip you tapped.
-function ValueList({
-  cat,
-  value,
-  onPick,
-}: {
-  cat: Category;
-  value: string;
-  onPick: (id: FilterField, value: string) => void;
-}) {
-  const [customArea, setCustomArea] = useState("");
-  const typedArea = customArea.trim();
-  // Lifecycle's "All" IS its any; every other category needs one adding.
-  const values = cat.id === "lifecycle" ? cat.values : [{ value: "", label: "Any" }, ...cat.values];
+function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return (
-    <div
-      className="animate-rise scroll-quiet mt-2 flex max-h-[34vh] flex-col gap-2 overflow-y-auto p-3"
-      style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)" }}
-    >
-      {cat.id === "area" && (
-        <div
-          className="flex items-center gap-2 px-3"
-          style={{
-            background: "var(--bg-raised)",
-            border: "1px solid var(--border-strong)",
-            borderRadius: "var(--radius-sm)",
-          }}
-        >
-          <MapPin size={14} strokeWidth={2.25} style={{ color: "var(--text-tertiary)" }} />
-          <input
-            value={customArea}
-            onChange={(e) => setCustomArea(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && typedArea) onPick("area", typedArea);
-            }}
-            placeholder="Type any area"
-            className="min-w-0 flex-1 bg-transparent py-2.5 text-[13px] outline-none"
-            style={{ color: "var(--text-primary)" }}
-          />
-          <button
-            onClick={() => typedArea && onPick("area", typedArea)}
-            disabled={!typedArea}
-            className="press px-3 py-1.5 text-[12px] font-bold disabled:opacity-40"
-            style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
-          >
-            Use
-          </button>
-        </div>
-      )}
-      <div className="flex flex-wrap gap-1.5">
-        {values.map((v) => {
-          const on = value === v.value;
-          return (
-            <button
-              key={v.value || "any"}
-              onClick={() => onPick(cat.id, v.value)}
-              className="press px-3 py-1.5 text-[12.5px] font-semibold capitalize transition-colors"
-              style={{
-                borderRadius: "var(--radius-chip)",
-                background: on ? "oklch(0.97 0 0)" : "transparent",
-                color: on ? "oklch(0.16 0.006 260)" : "var(--text-secondary)",
-                border: `1px solid ${on ? "oklch(0.97 0 0)" : "var(--border-strong)"}`,
-              }}
-            >
-              {v.label}
-            </button>
-          );
-        })}
+    <div className="mt-4">
+      <div className="mb-2 flex items-baseline justify-between">
+        <span className="text-[11px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--text-tertiary)" }}>
+          {title}
+        </span>
+        {hint && (
+          <span className="text-[11.5px]" style={{ color: "var(--text-tertiary)" }}>
+            {hint}
+          </span>
+        )}
       </div>
+      <div className="flex flex-wrap gap-1.5">{children}</div>
     </div>
+  );
+}
+
+function Chip({
+  label,
+  on,
+  onClick,
+  icon,
+}: {
+  label: string;
+  on: boolean;
+  onClick: () => void;
+  icon?: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      aria-pressed={on}
+      className="press flex min-h-[36px] items-center gap-1.5 px-3.5 text-[13px] font-semibold transition-colors"
+      style={{
+        borderRadius: "var(--radius-chip)",
+        background: on ? "oklch(0.97 0 0)" : "transparent",
+        color: on ? "oklch(0.16 0.006 260)" : "var(--text-secondary)",
+        border: `1px solid ${on ? "oklch(0.97 0 0)" : "var(--border-strong)"}`,
+      }}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }

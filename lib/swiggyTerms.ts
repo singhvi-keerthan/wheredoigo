@@ -87,10 +87,14 @@ const VIBE_TERMS: Record<string, string> = {
   romantic: "Romantic",
 };
 
+// `late-night` deliberately absent. Measured 2026-10-07 at Indiranagar,
+// Koramangala and Whitefield: "Late Night" returns the same 13 rows everywhere,
+// all NAME matches — Night Out Cafe, Day Night Dhaba, Marquis Night Club — with
+// zero overlap with any cuisine. It narrows the pool to noise, not to places
+// open late; hours come from the details payload instead.
 const PRACTICAL_TERMS: Record<string, string> = {
   vegetarian: "Pure Veg",
   "pet-friendly": "Pet Friendly",
-  "late-night": "Late Night",
   groups: "Group Dining",
 };
 
@@ -148,6 +152,13 @@ const SOURCES: { key: keyof DecideQuery; table: Record<string, string> }[] = [
 ];
 
 const MAX_TERMS = 4;
+
+// Whether a value of the lens vocabulary has a Swiggy term behind it — what the
+// filter editor offers when the deck is New, so it never shows a chip the
+// catalogue search would silently ignore.
+export function searchableOnSwiggy(key: keyof DecideQuery, value: string): boolean {
+  return SOURCES.some((s) => s.key === key && value in s.table);
+}
 
 // The half of the type vocabulary that is not on Dineout at all. A museum is
 // not a restaurant Swiggy can't filter for — it is not in the catalogue — so
