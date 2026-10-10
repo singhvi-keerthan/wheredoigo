@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildSearchArgs, SEARCH_LIMIT, mergeRestaurantDetails, parseSearchRows, type SwiggyRestaurant } from "./swiggy";
+import { buildSearchArgs, SEARCH_LIMIT, mergeRestaurantDetails, parseSearchRows, swiggyPhotoUrl, type SwiggyRestaurant } from "./swiggy";
 
 // Verbatim from a live search_restaurants_dineout call (query "dinner",
 // Bengaluru). Kept exactly as Swiggy sent it — trailing double-spaces, empty
@@ -190,7 +190,8 @@ describe("mergeRestaurantDetails — active Swiggy card enrichment", () => {
     });
     expect(merged.photo).toBe(base.photo); // the cover the card was dealt on
     expect(merged.photos?.[0]).toBe(base.photo);
-    expect(merged.photos?.slice(1, 4)).toEqual(masthead.slice(0, 3));
+    // Every gallery URL goes through the card-size transform (swiggyPhotoUrl).
+    expect(merged.photos?.slice(1, 4)).toEqual(masthead.slice(0, 3).map(swiggyPhotoUrl));
     expect(merged.photos).toHaveLength(8);
     expect(merged.photos?.some((p) => p.includes("menu"))).toBe(false);
   });
@@ -239,5 +240,43 @@ describe("render rows — offers, the headline deal and the rating count", () =>
     const r = mergeRestaurantDetails(base, { id: "1", name: "Y", rating: { value: "0", count: 0 } });
     expect(r.deal ?? null).toBeNull();
     expect(r.ratingCount ?? null).toBeNull();
+  });
+});
+
+describe("swiggyPhotoUrl — a full media URL gets the card-size transform", () => {
+  const BASE = "https://media-assets.swiggy.com/swiggy/image/upload/";
+
+  // The shape the search payload actually sends (measured 2026-09-14): a full
+  // URL, no transform, which the CDN serves as a 262px thumbnail.
+  it("inserts the transform after /upload/ on a bare path", () => {
+    expect(swiggyPhotoUrl(`${BASE}DINEOUT_ALL_RESTAURANTS/IMAGES/x.JPG`)).toBe(
+      `${BASE}fl_lossy,f_auto,q_auto,w_800/DINEOUT_ALL_RESTAURANTS/IMAGES/x.JPG`
+    );
+  });
+
+  it("leaves a URL alone when it already carries a transform segment", () => {
+    const done = `${BASE}fl_lossy,f_auto,q_auto,w_800/DINEOUT/a.jpg`;
+    expect(swiggyPhotoUrl(done)).toBe(done);
+    const other = `${BASE}w_400/DINEOUT/a.jpg`;
+    expect(swiggyPhotoUrl(other)).toBe(other);
+  });
+
+  // Cloudinary requires the transform BEFORE a version segment.
+  it("puts the transform ahead of a v123 version segment", () => {
+    expect(swiggyPhotoUrl(`${BASE}v1700000000/DINEOUT/a.jpg`)).toBe(
+      `${BASE}fl_lossy,f_auto,q_auto,w_800/v1700000000/DINEOUT/a.jpg`
+    );
+  });
+
+  it("passes any other host straight through", () => {
+    const g = "https://lh3.googleusercontent.com/p/abc=s800";
+    expect(swiggyPhotoUrl(g)).toBe(g);
+    const menu = "https://dineout-media-assets.swiggy.com/swiggy/image/upload/DINEOUT/menu1.JPG";
+    // A sibling host with the same path shape gets the same treatment — it is
+    // the same CDN. (Menu images are never read by the card; this just pins
+    // the host rule.)
+    expect(swiggyPhotoUrl(menu)).toBe(
+      "https://dineout-media-assets.swiggy.com/swiggy/image/upload/fl_lossy,f_auto,q_auto,w_800/DINEOUT/menu1.JPG"
+    );
   });
 });

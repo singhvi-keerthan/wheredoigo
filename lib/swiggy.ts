@@ -174,11 +174,30 @@ const MEDIA_TRANSFORMS = "fl_lossy,f_auto,q_auto,w_800";
 const WIDE_SEARCH = process.env.SWIGGY_WIDE_SEARCH === "1";
 const EXTRA_SEARCH_PAGE = process.env.SWIGGY_EXTRA_SEARCH_PAGE === "1";
 
+// A full Swiggy media URL with no transform segment. Measured 2026-09-14 and
+// again 2026-10-10: the search payload gives FULL URLs (…/upload/DINEOUT…/x.JPG)
+// and the CDN serves those at its 262×154 thumbnail size, while the same path
+// with the transform inserted after /upload/ comes back at 800 wide. Passing an
+// absolute URL "straight through" therefore stretched a 262px thumbnail across
+// every New card's hero. A transform is one Cloudinary-style segment of
+// comma-separated `key_value` pairs; a path that already has one (or starts
+// with a `v123` version, which must FOLLOW the transform) is left alone.
+const SWIGGY_UPLOAD = /^(https?:\/\/[^/]*media-assets\.swiggy\.com\/swiggy\/image\/upload\/)(.+)$/i;
+const TRANSFORM_SEGMENT = /^(?:[a-z]{1,3}_[^/,]+)(?:,[a-z]{1,3}_[^/,]+)*$/i;
+
+export function swiggyPhotoUrl(raw: string): string {
+  const m = raw.match(SWIGGY_UPLOAD);
+  if (!m) return raw;
+  const first = m[2].split("/")[0];
+  if (TRANSFORM_SEGMENT.test(first)) return raw;
+  return `${m[1]}${MEDIA_TRANSFORMS}/${m[2]}`;
+}
+
 function imageUrl(v: unknown): string | null {
   const raw = asStr(v);
   if (!raw) return null;
-  if (/^https?:\/\//i.test(raw)) return raw;
-  if (/^\/\//.test(raw)) return `https:${raw}`;
+  if (/^https?:\/\//i.test(raw)) return swiggyPhotoUrl(raw);
+  if (/^\/\//.test(raw)) return swiggyPhotoUrl(`https:${raw}`);
   return `${MEDIA_BASE}/${MEDIA_TRANSFORMS}/${raw.replace(/^\/+/, "")}`;
 }
 

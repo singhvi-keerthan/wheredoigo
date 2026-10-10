@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Image from "next/image";
-import { Search, Plus, Menu, MapPin, TriangleAlert, X } from "lucide-react";
+import { Search, Plus, Menu, MapPin, TriangleAlert, X, Layers } from "lucide-react";
 import { usePlaces, usePersistError } from "@/lib/store";
 import { displayState, type DisplayState } from "@/lib/types";
 import { cityLabel } from "@/lib/city";
@@ -513,27 +513,47 @@ export default function AppShell() {
                 // gives 5.846em raw, less 0.015em/char of the -0.39px tracking
                 // over 10 characters. (The old 18-char name was 10.15em by the
                 // same method, which is where that number came from.) The
-                // reserve is everything else on the row: both side paddings, the
-                // gap, and the control — the 36px menu button on the map, the
-                // wider lens chip in the deck, capped at 128px and truncating
-                // inside that. At this length the clamp is slack on any phone,
+                // reserve is everything else on the row: both side paddings
+                // (40), the gap, and the controls — on the map the Deck pill
+                // (~82px) beside the 36px menu button. At this length the clamp
+                // is slack on any phone — a 320px screen still clears 26px —
                 // so the name simply sits at 26px; it still holds if the
                 // reserve ever grows.
-                fontSize: "min(26px, calc((100vw - 86px) / 5.7))",
+                fontSize: "min(26px, calc((100vw - 170px) / 5.7))",
               }}
             >
               wheredoigo
             </h1>
           </div>
           {onMap && (
-            <button
-              onClick={() => setMenuOpen(true)}
-              aria-label="Menu"
-              className="press pointer-events-auto grid h-9 w-9 shrink-0 place-items-center rounded-full"
-              style={GLASS}
-            >
-              <Menu size={17} style={{ color: "oklch(0.9 0 0)" }} />
-            </button>
+            <div className="flex shrink-0 items-center gap-2">
+              {/* The deck's door, said out loud. The wordmark gesture stays
+                  (double-tap, flick) and the menu row stays; this is the one
+                  a first-time thumb can see. Same row, same glass, same
+                  height as the menu button beside it — no new chrome over the
+                  map, which is the one condition on it. The reveal blooms
+                  from the button, as it does from the name. */}
+              <button
+                onClick={(e) => {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  openSwipe(r.left + r.width / 2, r.top + r.height / 2);
+                }}
+                aria-label="Open the deck"
+                className="press pointer-events-auto flex h-9 items-center gap-1.5 rounded-full pl-3 pr-3.5 text-[12.5px] font-semibold"
+                style={{ ...GLASS, color: "oklch(0.92 0 0)" }}
+              >
+                <Layers size={15} strokeWidth={2.25} style={{ color: "var(--accent)" }} />
+                Deck
+              </button>
+              <button
+                onClick={() => setMenuOpen(true)}
+                aria-label="Menu"
+                className="press pointer-events-auto grid h-9 w-9 shrink-0 place-items-center rounded-full"
+                style={GLASS}
+              >
+                <Menu size={17} style={{ color: "oklch(0.9 0 0)" }} />
+              </button>
+            </div>
           )}
           {/* The way back, said where a desktop user can read it. The deck used
               to teach nothing: the tell below is the map's, the aria-label is
@@ -595,36 +615,12 @@ export default function AppShell() {
               )}
             </p>
           )}
-          {/* The only teaching left. The arrow that used to sit beside the name
-              was a button that switched modes, which is the one thing this
-              masthead is not allowed to have — so what it was explaining now
-              has to explain itself: the line names the gesture, not a control.
-              Fades rather than unmounts, so nothing on this line ever moves.
-              The MAP's copy only. Once the name is centred there is no room
-              beside it for a right-aligned line — a 26px serif and 22 mono
-              characters do not fit across a phone — so the deck's way back is
-              told on the name's own row above (desktop, where the row's right
-              half is empty) and by the lens panel's map row (everywhere).
-              The verb tracks the pointer: "double-tap" reads as a touch
-              gesture, and telling a mouse to tap is how desktop never found
-              the deck's door in the first place. */}
-          {onMap && (
-            <span
-              aria-hidden
-              className="pointer-events-none ml-auto whitespace-nowrap text-[10.5px]"
-              style={{
-                fontFamily: "var(--font-mono)",
-                letterSpacing: "0.04em",
-                color: "#8a93a0",
-                opacity: tell || hintHover ? 1 : 0,
-                transform: tell || hintHover ? "none" : "translateX(4px)",
-                transition: "opacity 0.32s ease, transform 0.32s ease",
-              }}
-            >
-              <span className="pointer-fine:hidden">double-tap for the deck</span>
-              <span className="pointer-coarse:hidden">double-click the name for the deck</span>
-            </span>
-          )}
+          {/* The "double-tap for the deck" line that used to fade in here is
+              gone with the reason for it: the deck has a visible door on the
+              name's row now (the Deck pill), so the gesture is a shortcut, not
+              the only way in, and a map that explains a hidden control is a
+              map carrying one more line of chrome. The deck's own way back is
+              still told on the name's row (desktop) and in the filter sheet. */}
         </div>
 
       </header>

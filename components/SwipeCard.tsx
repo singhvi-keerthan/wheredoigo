@@ -12,7 +12,8 @@ import {
   BadgePercent,
   ExternalLink,
 } from "lucide-react";
-import { isOpenNow, type Place, type Visit } from "@/lib/types";
+import { isOpenNow, displayState, type Place, type Visit } from "@/lib/types";
+import { presentableReasons } from "@/lib/cardReasons";
 import { swiggyDirectionsUrl, swiggyRestaurantUrl, offersBesidesDeal } from "@/lib/swiggyClient";
 import { coverPhoto, photosSorted, leadRating, leadPrice, stateMeta, hoursPill, directionsUrl } from "@/lib/format";
 import type { DeckCard } from "@/lib/deck";
@@ -96,6 +97,7 @@ function savedView(place: Place, reasons: string[], distanceKm: number | null): 
   const chips = place.tags
     .filter((t) => t.namespace === "cuisine" || t.namespace === "staple")
     .map((t) => t.value);
+  const open = isOpenNow(place.openingPeriods);
   return {
     name: place.name,
     cover: cover?.dataUrl ?? null,
@@ -108,8 +110,15 @@ function savedView(place: Place, reasons: string[], distanceKm: number | null): 
     approx: place.approxLocation === true,
     distanceKm,
     chips,
-    reasons,
-    open: isOpenNow(place.openingPeriods),
+    // The ranker's reasons minus what the state row above them already says
+    // (lib/cardReasons.ts) — ranking is untouched, only the chips printed.
+    reasons: presentableReasons(reasons, {
+      ratingValue: rating.value,
+      ratingMine: rating.mine,
+      badge: displayState(place),
+      open,
+    }),
+    open,
     hours: hoursPill(place),
     badge: { label: meta.label, color: meta.color },
   };
@@ -131,7 +140,7 @@ function newView(card: Extract<DeckCard, { kind: "new" }>): CardView {
     // which is what the deck ranked this card on.
     distanceKm: card.distanceKm ?? null,
     chips: cuisinesWorthShowing(r.cuisines),
-    reasons: card.reasons,
+    reasons: presentableReasons(card.reasons, { ratingValue: r.rating, ratingMine: false, badge: "new", open: null }),
     open: null,
     hours: null,
     badge: { label: "New · Swiggy", color: "var(--accent)" },
@@ -387,9 +396,15 @@ function SavedBody({
 
 function NewBody({
   card,
+  reasonsShown,
   onBook,
 }: {
   card: Extract<DeckCard, { kind: "new" }>;
+  // Whether the header printed reason chips (after lib/cardReasons.ts
+  // dedupe). When it printed none it fell back to the cuisines, and a
+  // cuisine section below would say them twice — the check has to read the
+  // same filtered list the header used, not the raw deck reasons.
+  reasonsShown: boolean;
   onBook: () => void;
 }) {
   const { r } = card;
@@ -401,7 +416,7 @@ function NewBody({
   const address = r.address && r.address.trim().toLowerCase() !== (r.area ?? "").trim().toLowerCase() ? r.address : null;
   return (
     <>
-      {card.reasons.length > 0 && cuisines.length > 0 && (
+      {reasonsShown && cuisines.length > 0 && (
         <Section title="Cuisines">
           <Chips values={cuisines} />
         </Section>
@@ -756,7 +771,7 @@ export default function SwipeCard({
           {card.kind === "saved" ? (
             <SavedBody place={card.place} onOpenDetails={onOpenDetails} />
           ) : (
-            <NewBody card={card} onBook={onBook} />
+            <NewBody card={card} reasonsShown={v.reasons.length > 0} onBook={onBook} />
           )}
         </div>
       </div>

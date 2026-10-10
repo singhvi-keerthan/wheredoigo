@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { X, Search, ChevronLeft, Map as MapIcon, Clock } from "lucide-react";
+import { X, Search, ChevronLeft, ChevronDown, Map as MapIcon, Clock } from "lucide-react";
 import type { DecideQuery } from "@/lib/decide";
 import { buildSearchPlan, type SwiggySearchPlan } from "@/lib/swiggyTerms";
 import type { DeckSource } from "@/lib/deck";
@@ -205,6 +205,11 @@ export default function LensPanel({
   const [draft, setDraft] = useState<Filters>(lens.filters);
   const [source, setSource] = useState<DeckSource>(lens.source);
   const [text, setText] = useState("");
+  // The editor leads with the four things most asks turn on — search, where,
+  // food (cuisine, dish), budget — and folds the rest behind "More". Folded,
+  // not gone: a pick in a folded group (made earlier, or through the search
+  // box) opens the fold, so nothing picked is ever out of sight or unremovable.
+  const [more, setMore] = useState(false);
   const [askDoors, setAskDoors] = useState(askOnOpen);
   // The Saved-deck ask: free text → the same picks the chips make, plus the
   // extras no chip expresses. Edits the draft like everything else here.
@@ -310,6 +315,32 @@ export default function LensPanel({
     return shown;
   }, [areas, draft.area]);
 
+  // Search → where → food → budget lead; everything else is behind "More".
+  const leadGroups = TAG_GROUPS.filter((g) => g.field === "cuisines" || g.field === "staples");
+  const moreGroups = TAG_GROUPS.filter((g) => g.field !== "cuisines" && g.field !== "staples");
+  const morePicked =
+    moreGroups.reduce((n, g) => n + draft[g.field].length, 0) +
+    (draft.minRating != null ? 1 : 0) +
+    (draft.lifecycle !== "any" ? 1 : 0) +
+    (draft.openNow ? 1 : 0);
+  const showMore = more || morePicked > 0;
+  const tagSection = (g: (typeof TAG_GROUPS)[number]) => {
+    const chips = chipsFor(g, source, draft[g.field]);
+    if (chips.length === 0) return null;
+    return (
+      <Section key={g.field} title={g.title} hint="pick any">
+        {chips.map((v) => (
+          <Chip
+            key={v}
+            label={labelOf(v)}
+            on={draft[g.field].includes(v)}
+            onClick={() => setDraft((d) => toggleTag(d, g.field, v))}
+          />
+        ))}
+      </Section>
+    );
+  };
+
   const body = (
     <>
       <Section title={isForm ? "From" : "Showing"}>
@@ -359,22 +390,7 @@ export default function LensPanel({
         </Section>
       )}
 
-      {TAG_GROUPS.map((g) => {
-        const chips = chipsFor(g, source, draft[g.field]);
-        if (chips.length === 0) return null;
-        return (
-          <Section key={g.field} title={g.title} hint="pick any">
-            {chips.map((v) => (
-              <Chip
-                key={v}
-                label={labelOf(v)}
-                on={draft[g.field].includes(v)}
-                onClick={() => setDraft((d) => toggleTag(d, g.field, v))}
-              />
-            ))}
-          </Section>
-        );
-      })}
+      {leadGroups.map(tagSection)}
 
       <Section title="Budget per person" hint="one">
         {withValue(BUDGETS, draft.maxBudget).map((n) => (
@@ -387,37 +403,64 @@ export default function LensPanel({
         ))}
       </Section>
 
-      <Section title="Rating" hint="one">
-        {withValue(RATINGS, draft.minRating).map((n) => (
-          <Chip
-            key={n}
-            label={`${n.toFixed(1)}+`}
-            on={draft.minRating === n}
-            onClick={() => setDraft((d) => ({ ...d, minRating: d.minRating === n ? null : n }))}
-          />
-        ))}
-      </Section>
+      <button
+        onClick={() => setMore((m) => !m)}
+        aria-expanded={showMore}
+        className="press mt-5 flex w-full items-center justify-between py-2 text-left text-[13.5px] font-semibold"
+        style={{ color: "var(--text-secondary)", borderTop: "1px solid var(--border)" }}
+      >
+        <span>
+          {showMore ? "Fewer preferences" : "More preferences"}
+          {!showMore && morePicked > 0 && (
+            <span className="ml-2" style={{ fontFamily: "var(--font-mono)", color: "var(--accent)" }}>
+              {morePicked}
+            </span>
+          )}
+        </span>
+        <ChevronDown
+          size={15}
+          strokeWidth={2.5}
+          style={{ transform: showMore ? "rotate(180deg)" : "none", transition: "transform 0.2s ease" }}
+        />
+      </button>
 
-      {/* Your own places' facts: their lifecycle, and hours (Google's, on a
-          saved place). Swiggy cards carry neither yet, so a New deck doesn't
-          offer them. */}
-      {source !== "new" && (
-        <Section title="Your places" hint="one">
-          {LIFECYCLES.filter((l) => l.value !== "any").map((l) => (
-            <Chip
-              key={l.value}
-              label={l.label}
-              on={draft.lifecycle === l.value}
-              onClick={() => setDraft((d) => ({ ...d, lifecycle: d.lifecycle === l.value ? "any" : l.value }))}
-            />
-          ))}
-          <Chip
-            label="Open now"
-            icon={<Clock size={12} strokeWidth={2.5} />}
-            on={draft.openNow}
-            onClick={() => setDraft((d) => ({ ...d, openNow: !d.openNow }))}
-          />
-        </Section>
+      {showMore && (
+        <>
+          {moreGroups.map(tagSection)}
+
+          <Section title="Rating" hint="one">
+            {withValue(RATINGS, draft.minRating).map((n) => (
+              <Chip
+                key={n}
+                label={`${n.toFixed(1)}+`}
+                on={draft.minRating === n}
+                onClick={() => setDraft((d) => ({ ...d, minRating: d.minRating === n ? null : n }))}
+              />
+            ))}
+          </Section>
+
+          {/* Your own places' facts: their lifecycle, and hours (Google's, on a
+              saved place). Swiggy cards carry neither yet, so a New deck doesn't
+              offer them. */}
+          {source !== "new" && (
+            <Section title="Your places" hint="one">
+              {LIFECYCLES.filter((l) => l.value !== "any").map((l) => (
+                <Chip
+                  key={l.value}
+                  label={l.label}
+                  on={draft.lifecycle === l.value}
+                  onClick={() => setDraft((d) => ({ ...d, lifecycle: d.lifecycle === l.value ? "any" : l.value }))}
+                />
+              ))}
+              <Chip
+                label="Open now"
+                icon={<Clock size={12} strokeWidth={2.5} />}
+                on={draft.openNow}
+                onClick={() => setDraft((d) => ({ ...d, openNow: !d.openNow }))}
+              />
+            </Section>
+          )}
+        </>
       )}
 
       {onOpenMap && !isForm && (

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { RotateCcw, Sparkles, X, Heart, Check, SlidersHorizontal } from "lucide-react";
+import { RotateCcw, Sparkles, X, Heart, Check, SlidersHorizontal, ListChecks } from "lucide-react";
 import { usePlaces, addPlace, removePlace, updatePlace, getPlace, toggleNeverAgain } from "@/lib/store";
 import {
   searchDineout,
@@ -23,6 +23,8 @@ import SwipeCard from "./SwipeCard";
 import NewCardDetail from "./NewCardDetail";
 import { useCardSwipe, DY_DAMP } from "./useCardSwipe";
 import LensPanel, { SourceSwitch, useLens } from "./LensPanel";
+import PicksSheet from "./PicksSheet";
+import { usePicks, addPick, removePick, clearPicks } from "@/lib/picks";
 import { askOnOpen, setAskOnOpen } from "@/lib/entryPref";
 
 const SWIPE_THRESHOLD = 92; // px past which a release commits (horizontal)
@@ -94,6 +96,10 @@ type UndoEntry = {
   skipId?: string;
   restoreSkip?: number;
   newSwipe?: { restaurant: SwiggyRestaurant; dir: SwipeDir };
+  // The place this swipe NEWLY picked (lib/picks.ts) — undo takes the pick
+  // back. Absent when the yes only re-confirmed a pick already on the list,
+  // which undo must leave alone.
+  pick?: string;
 };
 
 function usePrefersReducedMotion(): boolean {
@@ -234,6 +240,11 @@ export default function SwipeMode({
   const { source, query, area, searchPlan } = lens;
   const areaCenter = query.areaCenter;
   const [lensOpen, setLensOpen] = useState(false);
+  // The yeses — where a right swipe leads (lib/picks.ts). Kept across lens
+  // changes and reloads; the header counts them, the sheet lists them, and the
+  // end of the deck offers them before "Start over".
+  const storedPicks = usePicks();
+  const [picksOpen, setPicksOpen] = useState(false);
   // The two doors on opening: "go wild" deals straight away, "I know what I
   // want" opens the filter editor as a form. Shown unless this device said
   // not to ask (lib/entryPref.ts; the map's menu turns it back on). Either way
@@ -241,12 +252,25 @@ export default function SwipeMode({
   // the doors teach the deck rather than guard it.
   const [doors, setDoors] = useState<"closed" | "doors" | "form">(() => (askOnOpen() ? "doors" : "closed"));
   const [dontAsk, setDontAsk] = useState(false);
-  const covered = doors !== "closed" || lensOpen;
+  const covered = doors !== "closed" || lensOpen || picksOpen;
   const leaveDoors = () => {
     if (dontAsk) setAskOnOpen(false);
     setDoors("closed");
   };
   const places = usePlaces();
+  // Only picks whose place still exists count — a place deleted from the
+  // full place screen leaves its pick behind in the ledger, and a header
+  // counting ghosts over a sheet with nothing in it is the mismatch Codex
+  // caught (2026-10-10). The ledger itself is pruned once the sheet opens.
+  const picks = useMemo(() => {
+    const live = new Set(places.filter((p) => !p.deletedAt).map((p) => p.id));
+    return storedPicks.filter((k) => live.has(k.id));
+  }, [storedPicks, places]);
+  useEffect(() => {
+    if (!picksOpen) return;
+    const live = new Set(places.filter((p) => !p.deletedAt).map((p) => p.id));
+    for (const k of storedPicks) if (!live.has(k.id)) removePick(k.id);
+  }, [picksOpen, storedPicks, places]);
   const reduced = usePrefersReducedMotion();
   // Latest-places snapshot read only at deck-build time — kept in a ref (updated
   // in an effect, never during render) so a mid-session add doesn't reshuffle
@@ -587,15 +611,28 @@ export default function SwipeMode({
     if (dir === "right") {
       if (card.kind === "new") {
         newMemoryRef.current = recordNewSwipe(card.r, dir);
-        entry = { key: card.key, placeId: saveNew(card.r, coords), newSwipe: { restaurant: card.r, dir } };
-        onToast("Added to watchlist");
+        const placeId = saveNew(card.r, coords);
+        // A fresh Place is always a fresh pick; the pick holds the place id,
+        // never the Swiggy row.
+        addPick(placeId);
+        entry = { key: card.key, placeId, newSwipe: { restaurant: card.r, dir }, pick: placeId };
+        onToast(`Added to watchlist · ${picks.length + 1} picked`);
       } else {
         // Changed your mind — drop the skip ramp, but remember where it was so
         // Undo genuinely reverses the swipe instead of quietly keeping the reset.
         const prior = peekSkip(card.place.id);
         resetSkip(card.place.id);
-        entry = { key: card.key, placeId: null, skipId: card.place.id, restoreSkip: prior };
-        onToast("Already on your map");
+        // The yes goes somewhere now: the place joins tonight's picks. Before
+        // this the toast said "Already on your map" and the swipe was a no-op.
+        const fresh = addPick(card.place.id);
+        entry = {
+          key: card.key,
+          placeId: null,
+          skipId: card.place.id,
+          restoreSkip: prior,
+          ...(fresh ? { pick: card.place.id } : {}),
+        };
+        onToast(fresh ? `Picked · ${picks.length + 1}` : "Already in your picks");
       }
     } else {
       if (card.kind === "new") {
@@ -670,9 +707,10 @@ export default function SwipeMode({
     const card = current;
     touchedRef.current = true;
     const placeId = saveNew(card.r, coords); // side effect kept out of the state updater
+    addPick(placeId);
     newMemoryRef.current = recordNewSwipe(card.r, "right");
-    setUndo((u) => [...u, { key: card.key, placeId, newSwipe: { restaurant: card.r, dir: "right" } }]);
-    onToast("Added to watchlist");
+    setUndo((u) => [...u, { key: card.key, placeId, newSwipe: { restaurant: card.r, dir: "right" }, pick: placeId }]);
+    onToast(`Added to watchlist · ${picks.length + 1} picked`);
     seenRef.current.add(card.key);
     setDetailNew(null);
     // Same wait as a swipe: the next card arrives with its picture.
@@ -691,6 +729,7 @@ export default function SwipeMode({
     // Side effects run here in the handler — never inside a setState updater
     // (React runs those during render, and store writes fan out to other
     // components mid-render).
+    if (last.pick) removePick(last.pick); // reverse the pick — only one this swipe made
     if (last.placeId) removePlace(last.placeId); // reverse the add
     if (last.skipId) {
       // A right swipe reset the count (restore it exactly); a left swipe bumped
@@ -724,10 +763,11 @@ export default function SwipeMode({
         }
         return;
       }
-      if (detailNew || confirmHide || lensOpen) {
+      if (detailNew || confirmHide || lensOpen || picksOpen) {
         if (e.key === "Escape") {
           e.preventDefault();
-          if (lensOpen) setLensOpen(false);
+          if (picksOpen) setPicksOpen(false);
+          else if (lensOpen) setLensOpen(false);
           else if (detailNew) setDetailNew(null);
           else keepAround();
         }
@@ -754,7 +794,7 @@ export default function SwipeMode({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deck, pos, exiting, detailNew, confirmHide, lensOpen, undo.length, phase, doors, dontAsk]);
+  }, [deck, pos, exiting, detailNew, confirmHide, lensOpen, picksOpen, undo.length, phase, doors, dontAsk]);
 
   // ---- render ------------------------------------------------------------
   // A right swipe does two different things, so it can't wear one label. On a
@@ -957,6 +997,25 @@ export default function SwipeMode({
               <span style={{ fontFamily: "var(--font-mono)", color: "var(--text-tertiary)" }}>{lens.applied.length}</span>
             )}
           </button>
+          {/* The yeses, reachable the whole run — nobody should have to
+              exhaust the deck to finish choosing. Same chip as Filters; the
+              count turns amber once there is something to come back to. */}
+          <button
+            onClick={() => setPicksOpen(true)}
+            aria-label={`Your picks${picks.length ? `, ${picks.length}` : ""}`}
+            className="press flex min-h-[32px] shrink-0 items-center gap-1.5 px-3 text-[12.5px] font-semibold"
+            style={{
+              borderRadius: "var(--radius-chip)",
+              border: "1px solid var(--border-strong)",
+              color: "var(--text-primary)",
+            }}
+          >
+            <ListChecks size={13} strokeWidth={2.5} style={{ color: picks.length ? "var(--accent)" : "var(--text-tertiary)" }} />
+            Picks
+            {picks.length > 0 && (
+              <span style={{ fontFamily: "var(--font-mono)", color: "var(--accent)" }}>{picks.length}</span>
+            )}
+          </button>
           {lens.applied.map((a) => (
             <button
               key={a.key}
@@ -1075,12 +1134,30 @@ export default function SwipeMode({
               That&rsquo;s everyone
             </p>
             <p className="mt-1 text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>
-              You&rsquo;ve seen every place in this lens.
+              {picks.length > 0
+                ? `You said yes to ${picks.length} ${picks.length === 1 ? "place" : "places"}.`
+                : "You’ve seen every place in this deck."}
             </p>
+            {/* The end of the deck is the picks when there are any: the run
+                earned a shortlist, so the shortlist is what it ends on, and
+                dealing again is the second choice, not the only one. */}
+            {picks.length > 0 && (
+              <button
+                onClick={() => setPicksOpen(true)}
+                className="press mt-4 flex items-center gap-2 px-5 py-3 text-[14px] font-bold"
+                style={{ borderRadius: "var(--radius-chip)", background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)" }}
+              >
+                <ListChecks size={15} strokeWidth={2.5} /> Review your picks
+              </button>
+            )}
             <button
               onClick={reshuffle}
-              className="press mt-4 flex items-center gap-2 px-4 py-2.5 text-[13.5px] font-semibold"
-              style={{ borderRadius: "var(--radius-chip)", border: "1px solid var(--border-strong)", color: "var(--text-primary)" }}
+              className={`press flex items-center gap-2 px-4 py-2.5 text-[13.5px] font-semibold ${picks.length > 0 ? "mt-2" : "mt-4"}`}
+              style={{
+                borderRadius: "var(--radius-chip)",
+                border: picks.length > 0 ? "1px solid transparent" : "1px solid var(--border-strong)",
+                color: picks.length > 0 ? "var(--text-tertiary)" : "var(--text-primary)",
+              }}
             >
               <RotateCcw size={14} /> Start over
             </button>
@@ -1239,6 +1316,10 @@ export default function SwipeMode({
         <div
           className="absolute inset-x-0 bottom-0 mx-auto flex w-full max-w-[430px] justify-end pr-4 pb-[max(1.25rem,env(safe-area-inset-bottom))]"
           style={{ zIndex: 11 }}
+          // Out of reach under a sheet, like the header and the stage: a Tab
+          // from the picks sheet must not land on Undo and take back a swipe
+          // (and the place it saved) behind the sheet's back.
+          inert={covered}
         >
           <button
             onClick={doUndo}
@@ -1266,17 +1347,21 @@ export default function SwipeMode({
           role="dialog"
           aria-label="How do you want to choose?"
         >
-          <div className="mx-auto flex w-full max-w-[430px] flex-1 flex-col px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-8">
-            <h2 className="text-[32px] leading-[1.08]" style={{ fontFamily: "var(--font-display)", color: "var(--text-primary)" }}>
+          <div className="mx-auto flex w-full max-w-[430px] flex-1 flex-col px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-6">
+            {/* One composition, not a headline stranded over a void: the
+                question sits directly on its two answers, and the whole group
+                rides low, in the thumb's reach. The spacer is ABOVE it. */}
+            <div className="flex-1" />
+            <h2
+              className="text-[34px] leading-[1.06]"
+              style={{ fontFamily: "var(--font-display)", color: "var(--text-primary)", textWrap: "balance" }}
+            >
               Where to tonight?
             </h2>
             <p className="mt-2 text-[14px]" style={{ color: "var(--text-tertiary)" }}>
-              Two ways in. You can change everything from the deck after.
+              Two ways in. Change anything from the deck after.
             </p>
-            {/* The choices sit low, in the thumb's reach, right above the box
-                that remembers the answer — not up under the headline. */}
-            <div className="flex-1" />
-            <div className="mb-4 flex flex-col gap-3">
+            <div className="mt-6 flex flex-col gap-3">
               <DoorButton
                 title="I wanna go wild"
                 body="Deal me good places nearby. No questions."
@@ -1291,20 +1376,19 @@ export default function SwipeMode({
                 onClick={() => setDoors("form")}
               />
             </div>
-            <label
-              className="flex min-h-[48px] cursor-pointer items-center gap-3 px-4 py-3"
-              style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)" }}
-            >
+            {/* A quiet line, not a boxed control: it is a preference, not a
+                third door. The way back (under Filters) is said once, small. */}
+            <label className="mt-5 flex min-h-[44px] cursor-pointer items-center justify-center gap-2.5 px-2">
               <input
                 type="checkbox"
                 checked={dontAsk}
                 onChange={(e) => setDontAsk(e.target.checked)}
-                className="h-5 w-5 shrink-0"
+                className="h-4 w-4 shrink-0"
                 style={{ accentColor: "var(--accent)" }}
               />
-              <span className="text-[13.5px]" style={{ color: "var(--text-primary)" }}>
-                Don&rsquo;t ask me this again
-                <span style={{ color: "var(--text-tertiary)" }}> · turn it back on under Filters</span>
+              <span className="text-[13px]" style={{ color: "var(--text-tertiary)" }}>
+                Don&rsquo;t ask again
+                <span className="max-[359px]:hidden"> · turn it back on under Filters</span>
               </span>
             </label>
           </div>
@@ -1333,6 +1417,22 @@ export default function SwipeMode({
             setLensOpen(false);
             onRequestClose();
           }}
+        />
+      )}
+
+      {picksOpen && (
+        <PicksSheet
+          picks={picks}
+          places={places}
+          onClose={() => setPicksOpen(false)}
+          // The full place screen — PlaceDetail sits below the mode, so this
+          // is the same leave-and-open the card's own escape hatch uses.
+          onOpen={(id) => {
+            setPicksOpen(false);
+            onOpenSaved(id);
+          }}
+          onRemove={removePick}
+          onClear={clearPicks}
         />
       )}
 
