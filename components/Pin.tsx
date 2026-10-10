@@ -16,12 +16,16 @@ export default function Pin({
   color,
   active,
   variant = "full",
+  maxWidth = 150,
 }: {
   name: string;
   glyph: ReactNode;
   color: string;
   active: boolean;
   variant?: PinVariant;
+  // How much of the name the sticker shows before truncating. The map keeps
+  // the default so stickers stay small; a preview off the map can afford more.
+  maxWidth?: number;
 }) {
   if (variant === "dot") {
     return (
@@ -80,8 +84,8 @@ export default function Pin({
           {glyph}
         </span>
         <span
-          className="max-w-[150px] truncate"
-          style={{ fontSize: 13, fontWeight: 600, letterSpacing: "-0.01em", color: "oklch(0.2 0.01 260)" }}
+          className="truncate"
+          style={{ maxWidth, fontSize: 13, fontWeight: 600, letterSpacing: "-0.01em", color: "oklch(0.2 0.01 260)" }}
         >
           {name}
         </span>

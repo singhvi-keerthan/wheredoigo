@@ -4,17 +4,24 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X, Trash2 } from "lucide-react";
 import type { Photo } from "@/lib/types";
+import { relativeDate } from "@/lib/format";
 
-// Full-screen photo lightbox — swipe (native scroll-snap) between every photo
-// on the place, opened from either the peek card's thumbnail strip or the
-// detail sheet's carousel. Delete lives here (and as a small corner badge on
-// the thumbnails) rather than a reveal-then-tap dance.
+// Full-screen photo view — the swipe card's language, not a bare lightbox.
+// The photo sits on the deck's ink, whole (contain: this is where you see the
+// picture the sheet cropped), with the place's name in serif at the foot and
+// the count in mono. Swipe between photos with native scroll-snap; the thin
+// segments at the top say where you are, as they do on the card. Delete lives
+// here, and only here, as a quiet glass circle.
 export default function PhotoViewer({
+  name,
   photos,
   startIndex,
   onClose,
   onDelete,
 }: {
+  // The place the photo belongs to; the share view passes none and the foot
+  // shows only the count.
+  name?: string;
   photos: Photo[];
   startIndex: number;
   onClose: () => void;
@@ -62,7 +69,7 @@ export default function PhotoViewer({
   // transformed/filtered ancestor's box instead of the real viewport, and
   // this is opened from deep inside animated, draggable sheets.
   return createPortal(
-    <div className="fixed inset-0 z-[70]" style={{ background: "rgba(6,7,10,0.97)" }}>
+    <div className="mode-in fixed inset-0 z-[70]" style={{ background: "var(--deck-bg)" }}>
       <div
         ref={trackRef}
         onScroll={(e) => {
@@ -72,14 +79,11 @@ export default function PhotoViewer({
         className="scroll-quiet flex h-full w-full snap-x snap-mandatory overflow-x-auto"
       >
         {photos.map((ph) => (
-          <div
-            key={ph.id}
-            className="grid h-full w-full shrink-0 snap-center place-items-center px-2"
-            onClick={onClose}
-          >
+          <div key={ph.id} className="grid h-full w-full shrink-0 snap-center place-items-center" onClick={onClose}>
             <img
               src={ph.dataUrl}
               alt=""
+              draggable={false}
               className="max-h-full max-w-full object-contain"
               onClick={(e) => e.stopPropagation()}
             />
@@ -87,38 +91,67 @@ export default function PhotoViewer({
         ))}
       </div>
 
-      <div className="pointer-events-none fixed inset-x-0 top-0 flex items-center justify-between px-4 pt-[max(0.9rem,env(safe-area-inset-top))]">
+      {/* top: close · where you are · delete */}
+      <div className="pointer-events-none fixed inset-x-0 top-0 flex items-center gap-4 px-4 pt-[max(0.9rem,env(safe-area-inset-top))]">
         <button
           onClick={onClose}
           aria-label="Close"
-          className="press pointer-events-auto grid h-9 w-9 place-items-center rounded-full"
-          style={{ background: "rgba(255,255,255,0.14)", color: "#fff" }}
+          className="press pointer-events-auto grid h-9 w-9 shrink-0 place-items-center rounded-full"
+          style={GLASS_CIRCLE}
         >
           <X size={16} strokeWidth={2.25} />
         </button>
-        {photos.length > 1 && (
-          <span
-            className="font-[family-name:var(--font-mono)] text-[12px]"
-            style={{ color: "rgba(255,255,255,0.7)" }}
-          >
-            {index + 1}/{photos.length}
-          </span>
-        )}
+        <div className="flex flex-1 gap-1.5">
+          {photos.length > 1 &&
+            photos.map((ph, i) => (
+              <span
+                key={ph.id}
+                className="h-[3px] flex-1 rounded-full"
+                style={{
+                  background: i === index ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.28)",
+                  transition: "background 0.2s ease",
+                }}
+              />
+            ))}
+        </div>
         {onDelete ? (
           <button
             onClick={() => onDelete(current.id)}
             aria-label="Delete photo"
-            className="press pointer-events-auto grid h-9 w-9 place-items-center rounded-full"
-            style={{ background: "rgba(255,255,255,0.14)", color: "#fff" }}
+            className="press pointer-events-auto grid h-9 w-9 shrink-0 place-items-center rounded-full"
+            style={GLASS_CIRCLE}
           >
             <Trash2 size={16} strokeWidth={2.25} />
           </button>
         ) : (
-          // keeps the counter centred between close and this slot
-          <span className="h-9 w-9" />
+          <span className="h-9 w-9 shrink-0" />
         )}
+      </div>
+
+      {/* foot: whose photo this is */}
+      <div
+        className="pointer-events-none fixed inset-x-0 bottom-0 px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-16"
+        style={{ background: "linear-gradient(0deg, rgba(6,7,10,0.84), rgba(6,7,10,0))" }}
+      >
+        {name && (
+          <p className="text-[24px] leading-[1.05] tracking-[-0.005em]" style={{ fontFamily: "var(--font-serif)", color: "#fff" }}>
+            {name}
+          </p>
+        )}
+        <p className="mt-1 text-[12px]" style={{ fontFamily: "var(--font-mono)", color: "rgba(255,255,255,0.62)" }}>
+          {photos.length > 1 ? `${index + 1} of ${photos.length} · ` : ""}
+          {relativeDate(current.createdAt)}
+          {current.source === "google" ? " · Google" : ""}
+        </p>
       </div>
     </div>,
     document.body
   );
 }
+
+const GLASS_CIRCLE = {
+  background: "rgba(255,255,255,0.12)",
+  color: "#fff",
+  backdropFilter: "blur(14px)",
+  WebkitBackdropFilter: "blur(14px)",
+} as const;

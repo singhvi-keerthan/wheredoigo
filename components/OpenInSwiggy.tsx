@@ -21,17 +21,20 @@ export default function OpenInSwiggy({ place }: { place: Place }) {
   const owner = useIsSiteOwner();
   const [state, setState] = useState<"idle" | "looking" | "none" | "failed">("idle");
 
+  // A quiet pill in the place screen's link row (components/placeChrome.tsx
+  // INK_PILL), with the attribution under it.
   const rowClass =
-    "press flex w-full items-center justify-center gap-2 py-3 text-[14px] font-semibold no-underline";
+    "press inline-flex h-11 items-center gap-2 px-4 text-[13.5px] font-semibold no-underline";
   const rowStyle = {
     borderRadius: "var(--radius-chip)",
+    background: "rgba(255,255,255,0.07)",
     border: "1px solid var(--border-strong)",
     color: "var(--text-primary)",
   } as const;
 
   if (place.swiggyId) {
     return (
-      <div className="mt-2">
+      <div className="flex flex-col items-start gap-1">
         <a
           href={swiggyRestaurantUrl(place.swiggyId, place.name, place.area)}
           target="_blank"
@@ -41,7 +44,7 @@ export default function OpenInSwiggy({ place }: { place: Place }) {
         >
           <ExternalLink size={15} strokeWidth={2.25} /> Open in Swiggy
         </a>
-        <PoweredBySwiggy className="mt-1.5 text-center" />
+        <PoweredBySwiggy className="pl-1" />
       </div>
     );
   }
@@ -68,7 +71,7 @@ export default function OpenInSwiggy({ place }: { place: Place }) {
           : "Find on Swiggy";
 
   return (
-    <div className="mt-2">
+    <div className="flex flex-col items-start gap-1">
       <button
         onClick={find}
         disabled={state === "looking" || state === "none"}
@@ -77,7 +80,7 @@ export default function OpenInSwiggy({ place }: { place: Place }) {
       >
         <Search size={15} strokeWidth={2.25} /> {label}
       </button>
-      <PoweredBySwiggy className="mt-1.5 text-center" />
+      <PoweredBySwiggy className="pl-1" />
     </div>
   );
 }

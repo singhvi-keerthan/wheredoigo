@@ -1,21 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { createElement, useEffect, useRef, useState } from "react";
 import {
   X,
   Search,
-  Link as LinkIcon,
   LocateFixed,
-  ChevronRight,
   ArrowLeft,
   MapPin,
   Star,
   Loader2,
   Navigation2,
   Check,
-  CalendarCheck,
   Clapperboard,
-  Play,
 } from "lucide-react";
 import { addPlace, findDuplicate, getPlace, updatePlace } from "@/lib/store";
 import { parseLocation, isUrl } from "@/lib/capture";
@@ -24,15 +20,19 @@ import { tagsFromGoogleTypes } from "@/lib/googleTags";
 import { priceSigns } from "@/lib/format";
 import { TAG_OPTIONS, type CaptureSource, type Tag } from "@/lib/types";
 import { searchBias, noteGpsFix, noteGeoGranted } from "@/lib/bias";
+import { glyphFor } from "./PlaceGlyph";
+import Pin from "./Pin";
 import { useSheetDrag } from "./useSheetDrag";
+import { WHITE_ACTION, INK_PILL, IgDot } from "./placeChrome";
 
 // The + surface = ADDING a place, not searching what's already logged (that's
-// the search dock). Three routes, straight from the design: search by name
-// (Google), paste a Maps link (short goo.gl links resolve server-side), or pin
-// the current location (reverse-matched to the real places around you — raw
-// GPS is only the fallback). Each ends on a lightweight "confirm" screen where
-// you can drop an optional one-line note.
-type Mode = "menu" | "search" | "link" | "nearby" | "confirm";
+// the search dock). It opens on one field — the map's search dock, continued —
+// which takes a name (Google text search) or a pasted Maps link (short goo.gl
+// links resolve server-side) alike; "pin where I am" sits under it as the one
+// other way in, reverse-matched to the real places around you (raw GPS is only
+// the fallback). Every route ends on the same confirm screen, where the pick is
+// shown as the sticker it is about to become on the map.
+type Mode = "search" | "nearby" | "confirm";
 
 // A picked-but-not-yet-saved place. `commit()` creates it and returns its id;
 // `backTo` is the route to return to if you back out of confirm. `baseTags` is
@@ -48,11 +48,9 @@ type Pending = {
 };
 
 const TITLES: Record<Mode, string> = {
-  menu: "Add a place",
-  search: "Search by name",
-  link: "Paste a link",
-  nearby: "Pin where I am",
-  confirm: "A few details",
+  search: "Add a place",
+  nearby: "Around you",
+  confirm: "Save it",
 };
 
 export type AddedOpts = {
@@ -77,11 +75,10 @@ export default function AddPlaceSheet({
   // the link is already known, so the sheet opens straight on the name.
   initialReel?: string;
 }) {
-  const [mode, setMode] = useState<Mode>(initialQuery || initialReel ? "search" : "menu");
+  const [mode, setMode] = useState<Mode>("search");
   const [q, setQ] = useState(initialQuery ?? "");
   const [gResults, setGResults] = useState<GooglePlace[]>([]);
   const [gLoading, setGLoading] = useState(false);
-  const [link, setLink] = useState("");
   // Keyed by the exact URL it resolved, so a changed input never shows stale
   // results and the effect body never sets state synchronously.
   const [resolved, setResolved] = useState<{
@@ -96,15 +93,15 @@ export default function AddPlaceSheet({
   const [pending, setPending] = useState<Pending | null>(null);
 
   // Escape mirrors the Back button rather than closing outright: this sheet is
-  // several screens deep (menu → search/link/nearby → confirm) and a blunt
-  // dismiss halfway through would throw away a place you'd already picked.
-  // Step back one level; from the menu, leave. Same target the ArrowLeft uses.
+  // a couple of screens deep (search/nearby → confirm) and a blunt dismiss
+  // halfway through would throw away a place you'd already picked. Step back
+  // one level; from the field, leave. Same target the ArrowLeft uses.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      if (mode === "menu") onClose();
-      else setMode(mode === "confirm" && pending ? pending.backTo : "menu");
+      if (mode === "search") onClose();
+      else setMode(mode === "confirm" && pending ? pending.backTo : "search");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -118,14 +115,18 @@ export default function AddPlaceSheet({
   const inputRef = useRef<HTMLInputElement>(null);
   const { sheetRef, handleProps } = useSheetDrag(onClose);
 
-  // Focus the field when entering a text route (mounted fresh each open, so
-  // state starts at the menu — no reset effect needed).
+  // Focus the field whenever the search screen is showing (mounted fresh each
+  // open, so state starts there — no reset effect needed).
   useEffect(() => {
-    if (mode === "search" || mode === "link") inputRef.current?.focus();
+    if (mode === "search") inputRef.current?.focus();
   }, [mode]);
 
+  // One field, three readings: a URL resolves as a link, "lat, lng" pins
+  // straight away, anything else is a name to search.
   const query = q.trim();
-  const showResults = mode === "search" && query.length >= 2;
+  const urlMode = isUrl(query);
+  const localCoords = query ? parseLocation(query) : null;
+  const showResults = mode === "search" && !urlMode && !localCoords && query.length >= 2;
 
   // Live Google text search (debounced), biased to where you are. Only "new"
   // places here — no local list, so the + never re-surfaces what you've logged.
@@ -148,6 +149,9 @@ export default function AddPlaceSheet({
       active = false;
       ctrl.abort();
       clearTimeout(t);
+      // A search cut short (the text changed, or became a link) must not
+      // leave its spinner behind.
+      setGLoading(false);
     };
   }, [query, showResults]);
 
@@ -155,15 +159,13 @@ export default function AddPlaceSheet({
   // the extracted name so the pin lands on a real place, not viewport coords.
   // All state writes are deferred into the timeout (React 19 lint) and keyed to
   // the query, so stale resolutions never leak onto a changed input.
-  const linkTrimmed = link.trim();
-  const localCoords = linkTrimmed ? parseLocation(linkTrimmed) : null;
   useEffect(() => {
-    if (mode !== "link" || !isUrl(linkTrimmed)) return;
+    if (mode !== "search" || !urlMode) return;
     let active = true;
     const t = setTimeout(async () => {
       if (!active) return;
       setResolving(true);
-      const r = await resolveMapsLink(linkTrimmed);
+      const r = await resolveMapsLink(query);
       if (!active) return;
       const coords = r.lat != null && r.lng != null ? { lat: r.lat, lng: r.lng } : null;
       let results: GooglePlace[] = [];
@@ -172,19 +174,20 @@ export default function AddPlaceSheet({
         ({ results } = await searchPlaces(r.name, coords ?? searchBias()));
         if (!active) return;
       }
-      setResolved({ q: linkTrimmed, results, coords });
+      setResolved({ q: query, results, coords });
       setResolving(false);
     }, 500);
     return () => {
       active = false;
       clearTimeout(t);
+      setResolving(false);
     };
-  }, [mode, linkTrimmed]);
+  }, [mode, urlMode, query]);
 
-  const linkResults = resolved && resolved.q === linkTrimmed ? resolved.results : [];
-  const linkCoords = resolved && resolved.q === linkTrimmed ? resolved.coords : null;
+  const linkResults = urlMode && resolved && resolved.q === query ? resolved.results : [];
+  const linkCoords = urlMode && resolved && resolved.q === query ? resolved.coords : null;
   const resolveFailed =
-    !!resolved && resolved.q === linkTrimmed && resolved.results.length === 0 && !resolved.coords;
+    urlMode && !!resolved && resolved.q === query && resolved.results.length === 0 && !resolved.coords;
 
   if (!open) return null;
 
@@ -315,7 +318,7 @@ export default function AddPlaceSheet({
           setNearby({ lat, lng, results, accuracy });
           setMode("nearby");
         } else {
-          addAt(lat, lng, "Pinned location", "manual", "menu");
+          addAt(lat, lng, "Pinned location", "manual", "search");
         }
       },
       (err) => {
@@ -329,6 +332,17 @@ export default function AddPlaceSheet({
       { enableHighAccuracy: true, timeout: 10_000 }
     );
   };
+
+  const coords = localCoords ?? linkCoords;
+  // The glyph the sticker will carry: the type picked on this screen, else
+  // whatever Google implied. A lucide icon is a component, so it is rendered
+  // with createElement rather than as a JSX tag chosen during render.
+  const pendingGlyph = pending
+    ? createElement(
+        glyphFor({ tags: [...types.map((value) => ({ namespace: "type" as const, value })), ...pending.baseTags] }),
+        { size: 16, strokeWidth: 2.25 }
+      )
+    : null;
 
   return (
     <div className="fixed inset-0 z-50" style={{ background: "rgba(10,8,12,0.64)" }} onClick={onClose}>
@@ -346,16 +360,16 @@ export default function AddPlaceSheet({
         {/* handle + header */}
         <div className="sticky top-0 z-10 px-5 pt-2" style={{ background: "var(--bg-raised)" }}>
           <div {...handleProps} className="flex cursor-grab touch-none justify-center pb-3 pt-0.5">
-            <div className="h-[4px] w-10 rounded-full" style={{ background: "var(--ink-line)" }} />
+            <span className="h-[5px] w-10 rounded-full" style={{ background: "var(--ink-line)" }} />
           </div>
           <div className="flex items-center justify-between pb-3">
-            <div className="flex items-center gap-2">
-              {mode !== "menu" && (
+            <div className="flex items-center gap-2.5">
+              {mode !== "search" && (
                 <button
-                  onClick={() => setMode(mode === "confirm" && pending ? pending.backTo : "menu")}
+                  onClick={() => setMode(mode === "confirm" && pending ? pending.backTo : "search")}
                   aria-label="Back"
-                  className="press grid h-7 w-7 place-items-center rounded-full"
-                  style={{ background: "var(--bg-elevated)", color: "var(--text-secondary)" }}
+                  className="press grid h-8 w-8 place-items-center rounded-full"
+                  style={{ background: "rgba(255,255,255,0.07)", color: "var(--text-secondary)" }}
                 >
                   <ArrowLeft size={15} strokeWidth={2.25} />
                 </button>
@@ -370,8 +384,8 @@ export default function AddPlaceSheet({
             <button
               onClick={onClose}
               aria-label="Close"
-              className="press grid h-7 w-7 place-items-center rounded-full"
-              style={{ background: "var(--bg-elevated)", color: "var(--text-tertiary)" }}
+              className="press grid h-8 w-8 place-items-center rounded-full"
+              style={{ background: "rgba(255,255,255,0.07)", color: "var(--text-secondary)" }}
             >
               <X size={14} strokeWidth={2.25} />
             </button>
@@ -379,59 +393,49 @@ export default function AddPlaceSheet({
         </div>
 
         <div className="px-5 pt-1">
-          {mode === "menu" && (
-            <div className="flex flex-col gap-2.5 pb-2">
-              <MenuRow
-                icon={<Search size={20} strokeWidth={2.5} />}
-                title="Search by name"
-                sub="Saw it in a reel? Type the name"
-                onClick={() => setMode("search")}
-              />
-              <MenuRow
-                icon={<LinkIcon size={19} strokeWidth={2.25} />}
-                title="Paste a link"
-                sub="A Google Maps link someone sent"
-                onClick={() => setMode("link")}
-              />
-              <MenuRow
-                icon={locating ? <Loader2 size={19} className="animate-spin" /> : <LocateFixed size={19} strokeWidth={2.25} />}
-                title="Pin where I am"
-                sub={locating ? "Finding places around you…" : "Use your current location"}
-                onClick={pinHere}
-              />
-              {geoError && (
-                <p className="px-1 text-[12.5px]" style={{ color: "var(--s-never, #e5786f)" }}>
-                  {geoError}
-                </p>
-              )}
-            </div>
-          )}
-
           {mode === "search" && (
             <div className="pb-2">
               {initialReel && reel === initialReel && (
-                <p className="mb-2.5 flex items-center gap-1.5 text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>
+                <p className="mb-3 flex items-center gap-1.5 text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>
                   <Clapperboard size={13} strokeWidth={2.25} style={{ color: "var(--accent)" }} />
                   Reel attached — now find the place it’s about
                 </p>
               )}
+              {/* the field: the map's search dock, continued */}
               <div
-                className="flex items-center gap-2.5 px-3.5"
-                style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)" }}
+                className="flex h-12 items-center gap-2.5 pl-4 pr-3"
+                style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-chip)" }}
               >
-                <Search size={17} strokeWidth={2.25} style={{ color: "var(--accent)" }} />
+                <Search size={17} strokeWidth={2.25} className="shrink-0" style={{ color: "var(--accent)" }} />
                 <input
                   ref={inputRef}
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
-                  placeholder="e.g. Nandi Hills, or Blue Tokai"
-                  className="min-w-0 flex-1 bg-transparent py-3.5 text-[14.5px] outline-none"
+                  placeholder="Name, or a Google Maps link"
+                  className="min-w-0 flex-1 bg-transparent text-[15px] outline-none"
                   style={{ color: "var(--text-primary)" }}
                 />
                 {/* fixed slot — the spinner never nudges the field */}
                 <span className="grid h-4 w-4 shrink-0 place-items-center">
-                  {gLoading && <Loader2 size={15} className="animate-spin" style={{ color: "var(--text-tertiary)" }} />}
+                  {((showResults && gLoading) || (urlMode && resolving)) && (
+                    <Loader2 size={15} className="animate-spin" style={{ color: "var(--text-tertiary)" }} />
+                  )}
                 </span>
+              </div>
+
+              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                <button
+                  onClick={pinHere}
+                  disabled={locating}
+                  className="press inline-flex h-11 items-center gap-1.5 px-4 text-[13px] font-semibold disabled:opacity-70"
+                  style={INK_PILL}
+                >
+                  {locating ? <Loader2 size={15} className="animate-spin" /> : <LocateFixed size={15} strokeWidth={2.25} style={{ color: "var(--accent)" }} />}
+                  {locating ? "Finding places around you…" : "Pin where I am"}
+                </button>
+                {geoError && (
+                  <span className="text-[12.5px]" style={{ color: "var(--s-favorite)" }}>{geoError}</span>
+                )}
               </div>
 
               {/* The panel holds its height from the moment this screen opens,
@@ -440,172 +444,125 @@ export default function AddPlaceSheet({
                   field — and the thumb already resting on it — a third of the
                   screen upward mid-word. Reserved up front, only the CONTENTS
                   switch as you type. CommandPalette's list does the same. */}
-              <div className="scroll-quiet mt-2 flex h-[42vh] flex-col gap-1.5 overflow-y-auto">
-                {!showResults && (
-                  <p className="px-1 py-4 text-center text-[13px]" style={{ color: "var(--text-tertiary)" }}>
-                    Type a couple of letters — matches show up here.
+              <div className="scroll-quiet mt-3 flex h-[42vh] flex-col overflow-y-auto">
+                {!showResults && !urlMode && !coords && (
+                  <p className="px-1 py-5 text-center text-[13px] leading-relaxed" style={{ color: "var(--text-tertiary)" }}>
+                    Saw it in a reel? Type the name.
+                    <br />
+                    Or paste any Google Maps link someone sent.
                   </p>
                 )}
                 {showResults && gResults.map((r) => (
                   <ResultRow key={r.placeId} r={r} onPick={() => addGoogle(r, "search")} />
                 ))}
                 {showResults && !gLoading && gResults.length === 0 && (
-                  <p className="px-1 py-4 text-center text-[13px]" style={{ color: "var(--text-tertiary)" }}>
+                  <p className="px-1 py-5 text-center text-[13px]" style={{ color: "var(--text-tertiary)" }}>
                     No matches — check the spelling or paste a link instead.
+                  </p>
+                )}
+
+                {linkResults.map((r) => (
+                  <ResultRow key={r.placeId} r={r} onPick={() => addGoogle(r, "search")} />
+                ))}
+                {coords && linkResults.length === 0 && (
+                  <button
+                    onClick={() => addAt(coords.lat, coords.lng, "Pinned location", "paste", "search")}
+                    className="press mt-1 flex h-12 w-full items-center gap-2.5 px-4"
+                    style={WHITE_ACTION}
+                  >
+                    <Navigation2 size={16} strokeWidth={2.5} />
+                    <span className="text-[14.5px] font-semibold">Pin this location</span>
+                    <span className="ml-auto text-[11.5px]" style={{ fontFamily: "var(--font-mono)", opacity: 0.6 }}>
+                      {coords.lat.toFixed(4)}, {coords.lng.toFixed(4)}
+                    </span>
+                  </button>
+                )}
+                {urlMode && !coords && linkResults.length === 0 && !resolving && (
+                  <p className="px-1 py-5 text-center text-[13px]" style={{ color: "var(--text-tertiary)" }}>
+                    {resolveFailed ? "Couldn’t read that link — try the place’s name instead." : "Reading the link…"}
                   </p>
                 )}
               </div>
             </div>
           )}
 
-          {mode === "link" && (
-            <div className="pb-2">
-              <div
-                className="flex items-center gap-2.5 px-3.5"
-                style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)" }}
-              >
-                <LinkIcon size={17} strokeWidth={2.25} style={{ color: "var(--accent)" }} />
-                <input
-                  ref={inputRef}
-                  value={link}
-                  onChange={(e) => setLink(e.target.value)}
-                  placeholder="Paste a Google Maps link or lat, lng"
-                  className="min-w-0 flex-1 bg-transparent py-3.5 text-[14.5px] outline-none"
-                  style={{ color: "var(--text-primary)" }}
-                />
-                <span className="grid h-4 w-4 shrink-0 place-items-center">
-                  {resolving && <Loader2 size={15} className="animate-spin" style={{ color: "var(--text-tertiary)" }} />}
-                </span>
-              </div>
-
-              {linkResults.length > 0 && (
-                <div className="mt-2 flex flex-col gap-1.5">
-                  {linkResults.map((r) => (
-                    <ResultRow key={r.placeId} r={r} onPick={() => addGoogle(r, "link")} />
-                  ))}
-                </div>
-              )}
-
-              {(() => {
-                const coords = localCoords ?? linkCoords;
-                if (!coords || linkResults.length > 0) return null;
-                return (
-                  <button
-                    onClick={() => addAt(coords.lat, coords.lng, "Pinned location", "paste", "link")}
-                    className="press mt-2.5 flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-3.5 py-3"
-                    style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)" }}
-                  >
-                    <Navigation2 size={16} strokeWidth={2.5} />
-                    <span className="text-[14.5px] font-semibold">Pin this location</span>
-                    <span className="ml-auto font-[family-name:var(--font-mono)] text-[11.5px]" style={{ opacity: 0.6 }}>
-                      {coords.lat.toFixed(4)}, {coords.lng.toFixed(4)}
-                    </span>
-                  </button>
-                );
-              })()}
-
-              {!localCoords && !linkCoords && linkResults.length === 0 && !resolving && (
-                <p className="mt-2.5 px-1 text-[12.5px] leading-relaxed" style={{ color: "var(--text-tertiary)" }}>
-                  {resolveFailed
-                    ? "Couldn’t read that link — try searching the place by name instead."
-                    : <>Paste any Google Maps link — including short <span style={{ color: "var(--text-secondary)" }}>maps.app.goo.gl</span> shares — or raw <span style={{ color: "var(--text-secondary)" }}>lat, lng</span>.</>}
-                </p>
-              )}
-            </div>
-          )}
-
           {mode === "nearby" && nearby && (
             <div className="pb-2">
-              <p className="mb-2 px-1 text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>
-                Places around you — pick the one you’re at.
+              <p className="mb-1 text-[13px]" style={{ color: "var(--text-secondary)" }}>
+                Pick the one you’re at.
               </p>
               {/* GPS on the first fix (or indoors) can land 100s of m off —
                   say so rather than let a wrong pick look confident. */}
               {nearby.accuracy != null && nearby.accuracy > 300 && (
-                <p className="mb-2 px-1 text-[11.5px]" style={{ color: "var(--s-favorite)" }}>
+                <p className="mb-1 text-[12px]" style={{ color: "var(--s-favorite)" }}>
                   Location is approximate (±{Math.round(nearby.accuracy)}m) — pick carefully, or drop a pin instead.
                 </p>
               )}
-              <div className="flex flex-col gap-1.5">
+              <div className="flex flex-col">
                 {nearby.results.map((r) => (
                   <ResultRow key={r.placeId} r={r} onPick={() => addGoogle(r, "nearby")} />
                 ))}
               </div>
               <button
                 onClick={() => addAt(nearby.lat, nearby.lng, "Pinned location", "manual", "nearby")}
-                className="press mt-2.5 flex w-full items-center justify-center gap-2 py-3 text-[13.5px] font-semibold"
-                style={{ borderRadius: "var(--radius-chip)", border: "1px dashed var(--border-strong)", color: "var(--text-secondary)" }}
+                className="press mt-3 inline-flex h-10 items-center gap-1.5 text-[13px] font-medium"
+                style={{ color: "var(--text-tertiary)" }}
               >
-                <MapPin size={15} /> None of these — just drop a pin here
+                <MapPin size={14} /> None of these — just drop a pin here
               </button>
             </div>
           )}
 
           {mode === "confirm" && pending && (
             <div className="pb-2">
-              {/* what you're saving */}
-              <div className="mb-3 rounded-[var(--radius-sm)] px-3.5 py-3" style={{ background: "var(--bg-elevated)" }}>
-                <div className="flex items-center gap-2">
-                  <MapPin size={15} strokeWidth={2.25} style={{ color: "var(--accent)" }} />
-                  <span className="truncate text-[15px] font-semibold" style={{ color: "var(--text-primary)" }}>
-                    {pending.name}
-                  </span>
+              {/* what lands on the map: the sticker, on a scrap of the paper */}
+              <div
+                className="grid h-[140px] w-full place-items-center overflow-hidden"
+                style={{
+                  borderRadius: "var(--radius)",
+                  background: "radial-gradient(rgba(20,16,24,0.13) 1px, transparent 1.2px) 0 0 / 14px 14px, #f3f3f0",
+                }}
+              >
+                <div className="pointer-events-none max-w-[86%]">
+                  <Pin
+                    name={pending.name}
+                    glyph={pendingGlyph}
+                    color="var(--s-watchlist)"
+                    active
+                    maxWidth={240}
+                  />
                 </div>
-                {pending.sub && (
-                  <p className="mt-0.5 truncate text-[12px]" style={{ color: "var(--text-tertiary)" }}>
-                    {pending.sub}
-                  </p>
-                )}
-                {reel.trim() && (
-                  <a
-                    href={/^https?:\/\//i.test(reel.trim()) ? reel.trim() : `https://${reel.trim()}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="press mt-2 inline-flex items-center gap-1.5 text-[12.5px] font-semibold"
-                    style={{ color: "var(--text-secondary)" }}
-                  >
-                    <span className="grid h-5 w-5 place-items-center rounded-[7px]" style={{ background: "linear-gradient(45deg,#feda75,#fa7e1e,#d62976,#962fbf,#4f5bd5)" }}>
-                      <Play size={11} strokeWidth={0} fill="#fff" style={{ color: "#fff" }} />
-                    </span>
-                    Watch reel
-                  </a>
-                )}
               </div>
+              {pending.sub && (
+                <p className="mt-2.5 truncate text-center text-[12.5px]" style={{ fontFamily: "var(--font-mono)", color: "var(--text-tertiary)" }}>
+                  {pending.sub}
+                </p>
+              )}
 
               {/* What kind of place. Asked every time rather than inferred and
                   hidden: this map is for viewpoints and museums as much as for
                   dinner, and Google has no type at all for plenty of them.
                   Pre-selected where Google was confident, always editable. */}
-              <div className="mb-3">
-                <p
-                  className="mb-2 px-1 text-[11.5px] font-semibold uppercase tracking-[0.07em]"
-                  style={{ color: "var(--text-tertiary)" }}
-                >
-                  What kind of place?
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {TAG_OPTIONS.type.map((v) => {
-                    const on = types.includes(v);
-                    return (
-                      <button
-                        key={v}
-                        onClick={() =>
-                          setTypes((prev) => (on ? prev.filter((x) => x !== v) : [...prev, v]))
-                        }
-                        className="press inline-flex items-center gap-1 px-3 py-1.5 text-[13px] font-medium transition-colors"
-                        style={{
-                          borderRadius: "var(--radius-chip)",
-                          background: on ? "oklch(0.97 0 0)" : "var(--bg-elevated)",
-                          color: on ? "oklch(0.16 0.006 260)" : "var(--text-secondary)",
-                          border: `1px solid ${on ? "oklch(0.97 0 0)" : "var(--border)"}`,
-                        }}
-                      >
-                        {on && <Check size={11} strokeWidth={3} />}
-                        {v}
-                      </button>
-                    );
-                  })}
-                </div>
+              <p className="mt-5 text-[13.5px]" style={{ color: "var(--text-secondary)" }}>What kind of place is it?</p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {TAG_OPTIONS.type.map((v) => {
+                  const on = types.includes(v);
+                  return (
+                    <button
+                      key={v}
+                      onClick={() => setTypes((prev) => (on ? prev.filter((x) => x !== v) : [...prev, v]))}
+                      className="press inline-flex items-center gap-1 px-3 py-[7px] text-[13px] font-medium transition-colors"
+                      style={{
+                        borderRadius: "var(--radius-chip)",
+                        background: on ? "oklch(0.97 0 0)" : "rgba(255,255,255,0.07)",
+                        color: on ? "oklch(0.16 0.006 260)" : "var(--text-secondary)",
+                      }}
+                    >
+                      {on && <Check size={11} strokeWidth={3} />}
+                      {v}
+                    </button>
+                  );
+                })}
               </div>
 
               {/* optional one-liner — the assistant reads this. No autoFocus:
@@ -614,32 +571,36 @@ export default function AddPlaceSheet({
               <textarea
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
-                placeholder="Optional note — “saw on insta, the courtyard looked unreal”"
-                rows={3}
-                className="w-full resize-none px-3.5 py-3 text-[15px] leading-relaxed outline-none"
-                style={{
-                  color: "var(--text-primary)",
-                  background: "var(--bg-elevated)",
-                  border: "1px solid var(--border-strong)",
-                  borderRadius: "var(--radius-sm)",
-                }}
+                placeholder="Why you saved it — “the courtyard looked unreal”"
+                rows={2}
+                className="mt-5 w-full resize-none bg-transparent pb-2 text-[16px] italic leading-snug outline-none"
+                style={{ fontFamily: "var(--font-serif)", color: "var(--text-primary)", borderBottom: "1px solid var(--border-strong)" }}
               />
-              <p className="mt-1.5 px-1 text-[11.5px]" style={{ color: "var(--text-tertiary)" }}>
-                Why you saved it — searchable later, so “rooftop” finds this place.
-              </p>
 
               {/* optional reel link — most saves start on a reel; this is the
                   "go back and see why" handle, shown later as Watch on Instagram */}
-              <div
-                className="mt-2.5 flex items-center gap-2.5 px-3.5"
-                style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)" }}
-              >
-                <Clapperboard size={16} strokeWidth={2} className="shrink-0" style={{ color: "var(--text-tertiary)" }} />
+              <div className="mt-2 flex items-center gap-2.5" style={{ borderBottom: "1px solid var(--border-strong)" }}>
+                {/* Once a link is in, its dot is the way to open it and check
+                    it is about the place you picked — a shared reel arrives
+                    unseen by this sheet. */}
+                {reel.trim() ? (
+                  <a
+                    href={/^https?:\/\//i.test(reel.trim()) ? reel.trim() : `https://${reel.trim()}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label="Watch the reel"
+                    className="press grid h-11 w-8 shrink-0 place-items-center"
+                  >
+                    <IgDot size={18} />
+                  </a>
+                ) : (
+                  <Clapperboard size={16} strokeWidth={2} className="shrink-0" style={{ color: "var(--text-tertiary)" }} />
+                )}
                 <input
                   value={reel}
                   onChange={(e) => setReel(e.target.value)}
                   inputMode="url"
-                  placeholder="Instagram reel link — optional"
+                  placeholder="The reel it came from — optional"
                   className="min-w-0 flex-1 bg-transparent py-3 text-[14px] outline-none"
                   style={{ color: "var(--text-primary)" }}
                 />
@@ -647,17 +608,17 @@ export default function AddPlaceSheet({
 
               <button
                 onClick={() => saveConfirm()}
-                className="press mt-3 flex w-full items-center justify-center gap-2 py-3 text-[14.5px] font-bold"
-                style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
+                className="press mt-5 flex h-12 w-full items-center justify-center gap-2 text-[14.5px] font-bold"
+                style={WHITE_ACTION}
               >
                 <Check size={16} strokeWidth={2.75} /> Save to watchlist
               </button>
               <button
                 onClick={() => saveConfirm(true)}
-                className="press mt-2 flex w-full items-center justify-center gap-2 py-3 text-[14.5px] font-semibold"
-                style={{ borderRadius: "var(--radius-chip)", border: "1px solid var(--border-strong)", color: "var(--text-primary)" }}
+                className="press mt-1 flex h-11 w-full items-center justify-center gap-1.5 text-[13.5px] font-semibold"
+                style={{ color: "var(--text-secondary)" }}
               >
-                <CalendarCheck size={16} strokeWidth={2.25} /> I&apos;ve already been here
+                I’ve already been here
               </button>
             </div>
           )}
@@ -667,71 +628,41 @@ export default function AddPlaceSheet({
   );
 }
 
-// One Google result row — shared by search, link, and nearby modes.
+// One Google result — shared by search, link, and nearby. Drawn as the pin it
+// would become: the watchlist disc with the type Google implied, the name, the
+// address, the reference numbers in mono. Rows are separated by a hairline, not
+// boxed: a list of places, not a list of cards.
 function ResultRow({ r, onPick }: { r: GooglePlace; onPick: () => void }) {
+  const glyph = createElement(glyphFor({ tags: tagsFromGoogleTypes(r.googleTypes) }), { size: 18, strokeWidth: 2 });
   return (
     <button
       onClick={onPick}
-      className="press flex items-start gap-2.5 rounded-[var(--radius-sm)] px-3 py-2.5 text-left"
-      style={{ background: "var(--bg-elevated)" }}
+      className="press flex w-full items-center gap-3 py-2.5 text-left"
+      style={{ borderTop: "1px solid var(--ink-line)" }}
     >
-      <MapPin size={16} className="mt-0.5 shrink-0" style={{ color: "var(--accent)" }} />
+      <span className="grid h-10 w-10 shrink-0 place-items-center" style={{ borderRadius: 12, background: "var(--s-watchlist)", color: "#fff" }}>
+        {glyph}
+      </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[14.5px]" style={{ color: "var(--text-primary)" }}>
+        <span className="block truncate text-[15px] font-semibold tracking-[-0.01em]" style={{ color: "var(--text-primary)" }}>
           {r.name}
         </span>
         {r.address && (
-          <span className="block truncate text-[12px]" style={{ color: "var(--text-tertiary)" }}>
+          <span className="block truncate text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>
             {r.address}
           </span>
         )}
       </span>
-      <span className="ml-auto shrink-0 self-center font-[family-name:var(--font-mono)] text-[11.5px]" style={{ color: "var(--text-tertiary)" }}>
-        {r.googleRating != null && (
-          <span className="inline-flex items-center gap-0.5" style={{ color: "var(--text-secondary)" }}>
-            <Star size={10} fill="currentColor" strokeWidth={0} /> {r.googleRating.toFixed(1)}
-          </span>
-        )}
-        {r.googlePriceLevel != null && <span className="ml-1.5">{priceSigns(r.googlePriceLevel)}</span>}
-      </span>
-    </button>
-  );
-}
-
-// One route row on the menu — matches the design: icon tile, title, subtitle,
-// chevron. Every tile shares the same dark background and inverts to white
-// (icon → dark) on hover/press — the state the screenshot captured on row 1.
-function MenuRow({
-  icon,
-  title,
-  sub,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  sub: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="press group flex w-full items-center gap-3.5 rounded-[var(--radius)] px-3.5 py-3.5 text-left"
-      style={{ background: "var(--bg-elevated)", border: "1px solid var(--ink-line)" }}
-    >
-      <span
-        className="grid h-11 w-11 shrink-0 place-items-center rounded-[14px] border border-[var(--ink-line)] bg-[var(--bg-raised)] text-[var(--text-secondary)] transition-colors group-hover:border-transparent group-hover:bg-[oklch(0.97_0_0)] group-hover:text-[oklch(0.16_0.006_260)] group-active:border-transparent group-active:bg-[oklch(0.97_0_0)] group-active:text-[oklch(0.16_0.006_260)]"
-      >
-        {icon}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block text-[16px] font-semibold tracking-[-0.01em]" style={{ color: "var(--text-primary)" }}>
-          {title}
+      {(r.googleRating != null || r.googlePriceLevel != null) && (
+        <span className="ml-auto shrink-0 text-[11.5px]" style={{ fontFamily: "var(--font-mono)", color: "var(--text-tertiary)" }}>
+          {r.googleRating != null && (
+            <span className="inline-flex items-center gap-0.5" style={{ color: "var(--text-secondary)" }}>
+              <Star size={10} fill="currentColor" strokeWidth={0} /> {r.googleRating.toFixed(1)}
+            </span>
+          )}
+          {r.googlePriceLevel != null && <span className="ml-1.5">{priceSigns(r.googlePriceLevel)}</span>}
         </span>
-        <span className="block truncate text-[13px]" style={{ color: "var(--text-tertiary)" }}>
-          {sub}
-        </span>
-      </span>
-      <ChevronRight size={18} className="shrink-0" style={{ color: "var(--text-tertiary)" }} />
+      )}
     </button>
   );
 }
