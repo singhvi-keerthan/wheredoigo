@@ -188,6 +188,7 @@ function saveNew(r: SwiggyRestaurant, seed: UserCoords): string {
     notes: "",
     tags: r.cuisines.map((c) => ({ namespace: "cuisine" as const, value: c })),
     source: "swiggy",
+    swiggyId: r.id,
     enrichedAt: null,
   });
   // Fire-and-forget, but never unhandled: updatePlace writes to localStorage,
@@ -1303,7 +1304,7 @@ export default function SwipeMode({
               />
               <span className="text-[13.5px]" style={{ color: "var(--text-primary)" }}>
                 Don&rsquo;t ask me this again
-                <span style={{ color: "var(--text-tertiary)" }}> · turn it back on from the menu</span>
+                <span style={{ color: "var(--text-tertiary)" }}> · turn it back on under Filters</span>
               </span>
             </label>
           </div>

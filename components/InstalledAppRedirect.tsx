@@ -18,13 +18,18 @@ import { useEffect } from "react";
 //
 // `replace`, not `push`, so the back button doesn't bounce between the two.
 // Once they reinstall, start_url is "/app" and this never fires again.
+export function launchedFromHomeScreen(): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    window.matchMedia?.("(display-mode: standalone)").matches ||
+    // iOS Safari predates display-mode and still reports it here only.
+    (window.navigator as Navigator & { standalone?: boolean }).standalone === true
+  );
+}
+
 export default function InstalledAppRedirect() {
   useEffect(() => {
-    const standalone =
-      window.matchMedia?.("(display-mode: standalone)").matches ||
-      // iOS Safari predates display-mode and still reports it here only.
-      (window.navigator as Navigator & { standalone?: boolean }).standalone === true;
-    if (standalone) window.location.replace("/app");
+    if (launchedFromHomeScreen()) window.location.replace("/app");
   }, []);
   return null;
 }

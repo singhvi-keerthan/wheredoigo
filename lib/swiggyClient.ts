@@ -26,6 +26,75 @@ export function swiggyDirectionsUrl(r: SwiggyRestaurant): string {
   return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}`;
 }
 
+// The restaurant's own Dineout page on swiggy.com — the shape Swiggy's indexed
+// pages use (/restaurants/<name>-<locality>-<id>/dineout); the id is the one
+// Dineout MCP rows carry. The slug is cosmetic to people; the id is what
+// identifies the page. On a phone with the Swiggy app, swiggy.com is the
+// link the app claims.
+export function swiggyRestaurantUrl(id: string, name: string, area?: string | null): string {
+  const slug = [name, area]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  return `https://www.swiggy.com/restaurants/${slug ? `${slug}-` : ""}${encodeURIComponent(id)}/dineout`;
+}
+
+// Letters and digits in any script — an ASCII-only squash turns every
+// Devanagari name into "", and two empty names are not the same name.
+const squash = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+
+// A saved place with no Swiggy id: one search on its name, from where it is,
+// and accept only a row that is unmistakably this place — the same name, and
+// the same locality when the place has one. Chains are why the locality is a
+// requirement and not a tie-break: "Cafe Coffee Day" in Indiranagar must not
+// bank Whitefield's id. Two candidates left is ambiguity, and ambiguity is
+// "not found": a wrong branch opened as "your place on Swiggy" is worse than
+// none — you'd book the wrong table. One metered call, made only on a tap.
+export function pickSwiggyMatch(
+  place: { name: string; area?: string },
+  results: SwiggyRestaurant[]
+): SwiggyRestaurant | null {
+  const want = squash(place.name);
+  if (!want) return null;
+  let same = results.filter((r) => squash(r.name) === want);
+  const area = place.area ? squash(place.area) : "";
+  if (area) {
+    same = same.filter((r) => {
+      const theirs = squash(r.area ?? "");
+      return Boolean(theirs) && (theirs.includes(area) || area.includes(theirs));
+    });
+  }
+  return same.length === 1 ? same[0] : null;
+}
+
+export async function findOnSwiggy(place: {
+  name: string;
+  area?: string;
+  lat: number;
+  lng: number;
+}): Promise<{ restaurant: SwiggyRestaurant | null; error?: SwiggyError }> {
+  const { results, error } = await searchDineout({ terms: [place.name], lat: place.lat, lng: place.lng });
+  if (error) return { restaurant: null, error };
+  return { restaurant: pickSwiggyMatch(place, results) };
+}
+
+// The headline deal is already on the card's face, and the offer list leads
+// with the same offer. Drop that one entry — but only when it says nothing the
+// headline doesn't ("Flat 15% off", or "· total bill", Swiggy's default
+// scope). An offer with a condition of its own ("· max ₹500") stays, and so
+// does every other offer.
+export function offersBesidesDeal(offers: string[], deal: string | null): string[] {
+  if (!deal) return offers;
+  const headline = deal.toLowerCase();
+  const i = offers.findIndex((o) => {
+    const [title, cond] = o.split(" · ");
+    return headline.startsWith(title.toLowerCase()) && (!cond || cond.toLowerCase() === "total bill");
+  });
+  return i === -1 ? offers : offers.filter((_, j) => j !== i);
+}
+
 // The access token lasts 5 days and nothing in the request path renews it —
 // renewal is startSwiggyRenew below (phone + OTP, from any device) — so
 // "reconnect" is a normal state the UI has to be able to say out loud.

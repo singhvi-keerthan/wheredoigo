@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import Link from "next/link";
 import { X, Images, Store, UtensilsCrossed, MapPinned, Pizza, Download, Upload, ChevronRight, Compass, Layers, LifeBuoy } from "lucide-react";
 import { usePlaces, downloadBackup, importData } from "@/lib/store";
@@ -9,7 +9,8 @@ import type { BrowseMode } from "./BrowseSheet";
 import { useSheetDrag } from "./useSheetDrag";
 import SyncSection from "./SyncSection";
 import { PoweredBySwiggy } from "./PoweredBySwiggy";
-import { askOnOpen, setAskOnOpen } from "@/lib/entryPref";
+import { useIsSiteOwner } from "@/lib/sync/client";
+import SwiggyReconnect from "./SwiggyReconnect";
 
 // The menu — one hub over the map. Top half is Browse (five lenses on the same
 // library the map can't give you at a glance); bottom is the v1 backup story.
@@ -26,9 +27,7 @@ export default function MenuSheet({
 }) {
   const places = usePlaces();
   const fileRef = useRef<HTMLInputElement>(null);
-  // Whether swipe mode opens on its two doors. The doors carry their own
-  // "don't ask me again"; this is the way back once someone ticked it.
-  const [askDoors, setAskDoors] = useState(askOnOpen);
+  const owner = useIsSiteOwner();
   const { sheetRef, handleProps } = useSheetDrag(onClose);
   // Escape closes, like every other sheet in the app. It was reachable only by
   // tapping the scrim — which is a mouse/thumb affordance, not a keyboard one,
@@ -144,29 +143,6 @@ export default function MenuSheet({
           </span>
           <ChevronRight size={17} style={{ color: "var(--text-tertiary)" }} />
         </button>
-        <label
-          className="-mt-3 mb-5 flex min-h-[48px] cursor-pointer items-center gap-3 px-3.5 py-2.5"
-          style={{ borderRadius: "var(--radius)" }}
-        >
-          <span className="min-w-0 flex-1">
-            <span className="block text-[14px] font-semibold" style={{ color: "var(--text-primary)" }}>
-              Ask me on open
-            </span>
-            <span className="block text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>
-              Start swipe with &ldquo;go wild&rdquo; or &ldquo;I know what I want&rdquo;
-            </span>
-          </span>
-          <input
-            type="checkbox"
-            checked={askDoors}
-            onChange={(e) => {
-              setAskDoors(e.target.checked);
-              setAskOnOpen(e.target.checked);
-            }}
-            className="h-5 w-5 shrink-0"
-            style={{ accentColor: "var(--accent)" }}
-          />
-        </label>
 
         {/* The way back to the map they arrived from.
             Until now this was a one-way door: the share view offered "Your map"
@@ -223,6 +199,18 @@ export default function MenuSheet({
             </button>
           ))}
         </div>
+
+        {/* Your Swiggy connection — the token behind New lasts days, and this
+            is where the owner renews it without waiting for the deck to fail.
+            Owner-only: it is his consent, and any other device is refused. */}
+        {owner && (
+          <>
+            <p className="mb-2 mt-5 text-[11px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--text-tertiary)" }}>
+              Swiggy
+            </p>
+            <SwiggyReconnect />
+          </>
+        )}
 
         {/* sync — records follow you across devices */}
         <p className="mb-2 mt-5 text-[11px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--text-tertiary)" }}>

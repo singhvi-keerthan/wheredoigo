@@ -12,6 +12,7 @@
 //   • SwipeCard     — the deck card for a `new` (Swiggy) result
 //   • NewCardDetail — the Swiggy detail sheet + table booking
 //   • PlaceDetail   — a saved place whose `source` is "swiggy"
+//   • OpenInSwiggy  — the place screen's Swiggy link / lookup
 //   • MenuSheet     — standing app-level credit, beside the map attribution
 // Add a surface, add a call. See memory/swiggy-integration-agreement.md.
 

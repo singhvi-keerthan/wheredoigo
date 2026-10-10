@@ -11,6 +11,7 @@ import { noteGpsFix, noteMapCenter, onGeoGranted, noteGeoStatus } from "@/lib/bi
 import Pin, { type PinVariant } from "./Pin";
 import PlaceGlyph from "./PlaceGlyph";
 import { useIsSiteOwner } from "@/lib/sync/client";
+import { launchedFromHomeScreen } from "./InstalledAppRedirect";
 
 // Keyless light vector style (CARTO positron), retuned to warm ivory/paper.
 const MAP_STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
@@ -89,6 +90,11 @@ export default function MapView({
   const isSiteOwner = useIsSiteOwner();
   const [me, setMe] = useState<{ lat: number; lng: number } | null>(null);
   useEffect(() => {
+    // An old home-screen install still launches at "/", the share view, and
+    // InstalledAppRedirect reloads it into /app in the same instant. Asking
+    // for location here too meant two prompts per launch — this page's, then
+    // the app's after the reload. The page that is about to leave doesn't ask.
+    if (shared && launchedFromHomeScreen()) return;
     if (typeof navigator === "undefined" || !("geolocation" in navigator)) {
       noteGeoStatus("unavailable");
       return;
@@ -184,7 +190,7 @@ export default function MapView({
       offGrant();
       clearWatch();
     };
-  }, []);
+  }, [shared]);
 
   // ---- where the map opens -------------------------------------------------
   // Your own location first: that is the view you want when the app comes up.

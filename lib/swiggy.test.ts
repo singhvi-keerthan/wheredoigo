@@ -205,3 +205,39 @@ describe("mergeRestaurantDetails — active Swiggy card enrichment", () => {
     expect(merged.photo).toBe(first);
   });
 });
+
+describe("render rows — offers, the headline deal and the rating count", () => {
+  // The shape of a live render_restaurants_dineout row (The Pizza Bakery,
+  // Indiranagar, 2026-10-07), trimmed to the fields under test.
+  const row = {
+    id: "686844",
+    name: "The Pizza Bakery - Indiranagar",
+    cuisine: ["Pizza", "Beverages"],
+    locality: "Indiranagar",
+    rating: { value: "4.3", count: 7008 },
+    costForTwo: "₹1500 for two",
+    offers: [{ offerTitle: "Flat 15% off", offerDescription: "Total bill" }],
+    offerHeadline: { title: "Flat 15% off", kind: "deal", subtitle: "on pre-booking", subtext: "+1 offer" },
+  };
+  const base: SwiggyRestaurant = {
+    id: "686844", name: "x", cuisines: [], area: "", address: "", lat: null, lng: null,
+    rating: null, priceForTwo: null, photo: null,
+  };
+
+  it("reads Swiggy's own offer objects instead of dropping them", () => {
+    expect(mergeRestaurantDetails(base, row).offers).toEqual(["Flat 15% off · total bill"]);
+  });
+
+  it("keeps the headline deal and how many ratings are behind the rating", () => {
+    const r = mergeRestaurantDetails(base, row);
+    expect(r.deal).toBe("Flat 15% off on pre-booking");
+    expect(r.ratingCount).toBe(7008);
+    expect(r.rating).toBe(4.3);
+  });
+
+  it("leaves both empty on a row that has neither", () => {
+    const r = mergeRestaurantDetails(base, { id: "1", name: "Y", rating: { value: "0", count: 0 } });
+    expect(r.deal ?? null).toBeNull();
+    expect(r.ratingCount ?? null).toBeNull();
+  });
+});

@@ -6,6 +6,8 @@ import { X, Search, ChevronLeft, Map as MapIcon, Clock } from "lucide-react";
 import type { DecideQuery } from "@/lib/decide";
 import { buildSearchPlan, type SwiggySearchPlan } from "@/lib/swiggyTerms";
 import type { DeckSource } from "@/lib/deck";
+import { useIsSiteOwner } from "@/lib/sync/client";
+import { askOnOpen, setAskOnOpen } from "@/lib/entryPref";
 import {
   BUDGETS,
   EMPTY_FILTERS,
@@ -37,7 +39,15 @@ import {
 export type Lens = ReturnType<typeof useLens>;
 
 export function useLens() {
-  const [source, setSource] = useState<DeckSource>("saved");
+  // New by default: "go wild" is a promise of somewhere you haven't been, and
+  // opening it on your own saved places breaks it on the first card. Only
+  // where New can run, though — Swiggy answers to the owner's device alone
+  // (lib/swiggy-gate.ts), so anyone else would open on a refusal. The owner
+  // check resolves after mount, so the default is derived, not stored: until
+  // someone picks, the source follows it.
+  const owner = useIsSiteOwner();
+  const [picked, setSource] = useState<DeckSource | null>(null);
+  const source: DeckSource = picked ?? (owner ? "new" : "saved");
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
 
   // Built for every source. The tag half only lands on saved cards (buildDeck
@@ -166,6 +176,7 @@ export default function LensPanel({
   const [draft, setDraft] = useState<Filters>(lens.filters);
   const [source, setSource] = useState<DeckSource>(lens.source);
   const [text, setText] = useState("");
+  const [askDoors, setAskDoors] = useState(askOnOpen);
   const areas = useMemo(() => areasFor(source), [areasFor, source]);
   const suggestions = useMemo(() => suggest(text, source, areas), [text, source, areas]);
   const picked = appliedOf(draft).length;
@@ -319,6 +330,28 @@ export default function LensPanel({
             </span>
           </button>
         </div>
+      )}
+
+      {/* The way back to the two doors once "Don't ask me again" was ticked.
+          It lives in swipe mode's own sheet, not the map's menu: it is a
+          setting of this mode. A device preference, so it saves on the tap
+          rather than waiting for Apply. */}
+      {!isForm && (
+        <label className="mt-3 flex min-h-[44px] cursor-pointer items-center gap-3 px-1">
+          <span className="min-w-0 flex-1 text-[13px]" style={{ color: "var(--text-secondary)" }}>
+            Ask “go wild or I know what I want” when swipe opens
+          </span>
+          <input
+            type="checkbox"
+            checked={askDoors}
+            onChange={(e) => {
+              setAskDoors(e.target.checked);
+              setAskOnOpen(e.target.checked);
+            }}
+            className="h-5 w-5 shrink-0"
+            style={{ accentColor: "var(--accent)" }}
+          />
+        </label>
       )}
     </>
   );

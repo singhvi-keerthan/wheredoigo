@@ -9,9 +9,11 @@ import {
   Navigation,
   CalendarClock,
   SquarePen,
+  BadgePercent,
+  ExternalLink,
 } from "lucide-react";
 import { isOpenNow, type Place, type Visit } from "@/lib/types";
-import { swiggyDirectionsUrl } from "@/lib/swiggyClient";
+import { swiggyDirectionsUrl, swiggyRestaurantUrl, offersBesidesDeal } from "@/lib/swiggyClient";
 import { coverPhoto, photosSorted, leadRating, leadPrice, stateMeta, hoursPill, directionsUrl } from "@/lib/format";
 import type { DeckCard } from "@/lib/deck";
 import { coverShape, coverUsable } from "@/lib/covers";
@@ -68,6 +70,8 @@ type CardView = {
   cover: string | null;
   ratingValue: number | null;
   ratingMine: boolean;
+  ratingCount: number | null; // how many ratings behind it — 4.3 from 12 is not 4.3 from 7,000
+  deal: string | null; // Swiggy's headline offer, the one line worth a glance
   priceLabel: string;
   area: string | null;
   // Whether `area` is all we really know — see Place.approxLocation. Only the
@@ -97,6 +101,8 @@ function savedView(place: Place, reasons: string[], distanceKm: number | null): 
     cover: cover?.dataUrl ?? null,
     ratingValue: rating.value,
     ratingMine: rating.mine,
+    ratingCount: rating.mine ? null : (place.googleReviewCount ?? null),
+    deal: null,
     priceLabel: leadPrice(place).label,
     area: place.area ?? null,
     approx: place.approxLocation === true,
@@ -112,22 +118,77 @@ function savedView(place: Place, reasons: string[], distanceKm: number | null): 
 function newView(card: Extract<DeckCard, { kind: "new" }>): CardView {
   const { r } = card;
   return {
-    name: r.name,
+    name: displayName(r.name, r.area),
     cover: r.photo,
     ratingValue: r.rating,
     ratingMine: false,
+    ratingCount: r.ratingCount ?? null,
+    deal: r.deal ?? null,
     priceLabel: r.priceForTwo != null ? `₹${r.priceForTwo.toLocaleString("en-IN")} for two` : "—",
     area: r.area ?? null,
     approx: false,
     // Swiggy's own figure, parsed — from the coordinates the search ran at,
     // which is what the deck ranked this card on.
     distanceKm: card.distanceKm ?? null,
-    chips: r.cuisines,
+    chips: cuisinesWorthShowing(r.cuisines),
     reasons: card.reasons,
     open: null,
     hours: null,
     badge: { label: "New · Swiggy", color: "var(--accent)" },
   };
+}
+
+// Swiggy names a branch after its locality ("The Pizza Bakery - Indiranagar")
+// and the card already says the locality one line down — so the suffix goes,
+// when it is exactly the area and nothing else.
+function displayName(name: string, area: string | null | undefined): string {
+  if (!area) return name;
+  const m = name.match(/^(.*\S)\s+[-–—|,]\s+(.+)$/);
+  return m && m[2].trim().toLowerCase() === area.trim().toLowerCase() ? m[1] : name;
+}
+
+// "Beverages" and "Desserts" ride along on most Swiggy rows as cuisines. They
+// say nothing about where to eat, so they drop when a real cuisine is there.
+const NON_CUISINES = new Set(["beverages", "desserts", "ice-cream", "bakery", "snacks", "fast-food"]);
+function cuisinesWorthShowing(cuisines: string[]): string[] {
+  const real = cuisines.filter((c) => !NON_CUISINES.has(c));
+  return real.length ? real : cuisines;
+}
+
+// Swiggy lists the same handful of facts on nearly every row — "SwiggyPay
+// accepted" on 82 of 82 rows checked 2026-10-07, "Reservation available" on
+// 80. A fact every place has tells you nothing about this one, so those go,
+// and what's left leads with what changes a plan (drinks, pets, diet).
+const HIGHLIGHT_NOISE = new Set(["swiggypay accepted", "reservation available", "table booking"]);
+const HIGHLIGHT_ORDER = [
+  "alcohol served",
+  "pure veg",
+  "pet friendly",
+  "vegan food",
+  "jain food",
+  "halal for meat",
+  "smoking area",
+  "valet parking",
+  "parking available",
+  "free wifi",
+];
+export function highlightsWorthShowing(highlights: string[]): string[] {
+  const keep = highlights.filter((h) => !HIGHLIGHT_NOISE.has(h.toLowerCase()));
+  const lower = keep.map((h) => h.toLowerCase());
+  // Valet implies parking; saying both is one fact twice.
+  const out = lower.includes("valet parking") ? keep.filter((h) => h.toLowerCase() !== "parking available") : keep;
+  const rank = (h: string) => {
+    const i = HIGHLIGHT_ORDER.indexOf(h.toLowerCase());
+    return i === -1 ? HIGHLIGHT_ORDER.length : i;
+  };
+  return [...out].sort((a, b) => rank(a) - rank(b));
+}
+
+// 7008 → "7k", 1211 → "1.2k", 342 → "342".
+function countLabel(n: number): string {
+  if (n < 1000) return String(n);
+  const k = n / 1000;
+  return `${k < 10 ? k.toFixed(1).replace(/\.0$/, "") : Math.round(k)}k`;
 }
 
 export function cardView(card: DeckCard): CardView {
@@ -332,13 +393,17 @@ function NewBody({
   onBook: () => void;
 }) {
   const { r } = card;
-  const highlights = r.highlights ?? [];
-  const offers = r.offers ?? [];
+  const highlights = highlightsWorthShowing(r.highlights ?? []);
+  const offers = offersBesidesDeal(r.offers ?? [], r.deal ?? null);
+  // The header's chips are the cuisines unless the deck had reasons to show
+  // there instead — only then do the cuisines need a section of their own.
+  const cuisines = cuisinesWorthShowing(r.cuisines);
+  const address = r.address && r.address.trim().toLowerCase() !== (r.area ?? "").trim().toLowerCase() ? r.address : null;
   return (
     <>
-      {r.cuisines.length > 0 && (
+      {card.reasons.length > 0 && cuisines.length > 0 && (
         <Section title="Cuisines">
-          <Chips values={r.cuisines} />
+          <Chips values={cuisines} />
         </Section>
       )}
 
@@ -355,7 +420,7 @@ function NewBody({
       )}
 
       {offers.length > 0 && (
-        <Section title="Dineout">
+        <Section title="Offers">
           <div className="flex flex-col gap-1.5">
             {offers.map((offer) => (
               <p
@@ -370,9 +435,11 @@ function NewBody({
         </Section>
       )}
 
-      <Section title="Where">
-        <Prose>{r.address || r.area || "No address on file"}</Prose>
-      </Section>
+      {address && (
+        <Section title="Where">
+          <Prose>{address}</Prose>
+        </Section>
+      )}
 
       <Section title="Go">
         <div className="flex flex-col gap-2">
@@ -385,6 +452,11 @@ function NewBody({
             onClick={onBook}
             icon={<CalendarClock size={14} strokeWidth={2.5} />}
             label="Book a table"
+          />
+          <ActionButton
+            href={swiggyRestaurantUrl(r.id, r.name, r.area)}
+            icon={<ExternalLink size={14} strokeWidth={2.5} />}
+            label="Open in Swiggy"
           />
         </div>
       </Section>
@@ -614,6 +686,9 @@ export default function SwipeCard({
               >
                 <Star size={11} strokeWidth={0} fill="currentColor" />
                 {v.ratingValue.toFixed(1)}
+                {v.ratingCount != null && (
+                  <span style={{ color: "rgba(255,255,255,0.55)" }}>({countLabel(v.ratingCount)})</span>
+                )}
               </span>
             ) : (
               // Said out loud, in the rating's own slot: a blank there reads as
@@ -637,6 +712,19 @@ export default function SwipeCard({
               </span>
             )}
           </div>
+
+          {/* The deal is Swiggy's own headline offer — the one fact on a row
+              that changes the bill, so it sits up here instead of three
+              sections down. */}
+          {v.deal && (
+            <p
+              className="mt-2.5 inline-flex items-center gap-1.5 text-[12.5px] font-semibold"
+              style={{ color: "oklch(0.82 0.13 150)" }}
+            >
+              <BadgePercent size={13} strokeWidth={2.25} />
+              {v.deal}
+            </p>
+          )}
 
           {(v.reasons.length > 0 || v.chips.length > 0) && (
             <div className="mt-3 flex flex-wrap gap-1.5">

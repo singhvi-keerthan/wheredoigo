@@ -16,6 +16,7 @@ import PlaceWizard from "./PlaceWizard";
 import PhotoViewer from "./PhotoViewer";
 import { useSheetDrag } from "./useSheetDrag";
 import { PoweredBySwiggy } from "./PoweredBySwiggy";
+import OpenInSwiggy from "./OpenInSwiggy";
 
 const STALE_MS = 30 * 24 * 60 * 60 * 1000; // re-enrich after ~30 days
 
@@ -257,6 +258,8 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
               <Ban size={18} />
             </button>
           </div>
+
+          <OpenInSwiggy place={place} />
 
           {/* the reel it came from — most saves start on a reel, so this is the
               "go back and see why" jump. Editable so any place can get a link. */}

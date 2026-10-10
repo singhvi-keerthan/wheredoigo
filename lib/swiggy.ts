@@ -59,6 +59,11 @@ export interface SwiggyRestaurant {
   // term returned from one the locality top-up swept in. Absent on a row no
   // search listed (a render-only record).
   matchedTerms?: string[];
+  // How many ratings sit behind `rating` — rows send `rating: { value, count }`.
+  ratingCount?: number | null;
+  // Swiggy's own headline deal for the row ("Flat 15% off on pre-booking"),
+  // from `offerHeadline`. The single line of the offer list worth a glance.
+  deal?: string | null;
 }
 
 // A bookable slot. book_table needs slotId + itemId + reservationTime together,
@@ -299,6 +304,22 @@ function descriptionOf(o: Rec): string | null {
   return null;
 }
 
+// Swiggy's offer objects are `{ offerTitle, offerDescription }` ("Flat 15%
+// off" / "Total bill") — keys textList doesn't know, so until this every live
+// card's offer list came back empty (checked 2026-10-10 against saved rows).
+function offerLines(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const out: string[] = [];
+  for (const item of v) {
+    if (!isRec(item)) continue;
+    const title = cleanText(item.offerTitle);
+    if (!title) continue;
+    const desc = cleanText(item.offerDescription);
+    out.push(desc ? `${title} · ${desc.toLowerCase()}` : title);
+  }
+  return out;
+}
+
 function textListOf(o: Rec, keys: string[], limit = 6): string[] {
   const out: string[] = [];
   for (const key of keys) {
@@ -360,6 +381,8 @@ export function mergeRestaurantDetails(base: SwiggyRestaurant, detail: unknown):
     highlights: uniq([...(parsed?.highlights ?? []), ...(base.highlights ?? [])], 6),
     offers: uniq([...(parsed?.offers ?? []), ...(base.offers ?? [])], 6),
     distance: parsed?.distance ?? base.distance ?? cleanText(pick(d, "distance", "distanceString", "distanceText")),
+    ratingCount: parsed?.ratingCount ?? base.ratingCount ?? null,
+    deal: parsed?.deal ?? base.deal ?? null,
   };
 }
 
@@ -371,7 +394,7 @@ function withDetails(o: Rec, base: Omit<SwiggyRestaurant, "photo">): SwiggyResta
     photos,
     description: descriptionOf(o),
     highlights: textListOf(o, ["highlights", "facilities", "amenities", "features", "badges", "labels"], 6),
-    offers: textListOf(o, ["offers", "coupons", "deals", "discounts", "dineoutOffers"], 6),
+    offers: uniq([...offerLines(o.offers), ...textListOf(o, ["offers", "coupons", "deals", "discounts", "dineoutOffers"], 6)], 6),
     distance: cleanText(pick(o, "distance", "distanceString", "distanceText")),
   };
 }
@@ -587,8 +610,27 @@ function toRestaurant(o: Rec): SwiggyRestaurant | null {
     // restaurant rather than an unrated one — and the rating filter drops both
     // alike, so nothing is lost by normalising it here.
     rating: asRating(pick(o, "rating", "avgRating", "ratingValue")) || null,
+    ratingCount: ratingCountOf(o),
     priceForTwo: asMoney(pick(o, "costForTwo", "priceForTwo", "costForTwoString", "cft")),
+    deal: dealOf(o),
   });
+}
+
+function ratingCountOf(o: Rec): number | null {
+  const r = o.rating;
+  const n = isRec(r) ? asNum(pick(r, "count", "ratingCount", "totalRatings")) : asNum(pick(o, "ratingCount", "totalRatings"));
+  return n && n > 0 ? n : null;
+}
+
+// `offerHeadline: { title: "Flat 15% off", subtitle: "on pre-booking" }` on
+// render rows, measured 2026-10-07 on 70 of 82 rows.
+function dealOf(o: Rec): string | null {
+  const h = o.offerHeadline;
+  if (!isRec(h)) return null;
+  const title = cleanText(h.title);
+  if (!title) return null;
+  const sub = cleanText(h.subtitle);
+  return sub ? `${title} ${sub}` : title;
 }
 
 // One row of search_restaurants_dineout's prose list, e.g.

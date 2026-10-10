@@ -112,6 +112,10 @@ export interface Place {
   // The Instagram reel (or any link) the place came from — most saves start on a
   // reel, so this is the "go back and see why I saved it" handle. Optional.
   reelUrl?: string;
+  // Swiggy's restaurant id — the same id swiggy.com's own restaurant pages
+  // carry (Vapour, 341385 on both, checked 2026-10-10). Written by a swipe
+  // save, or banked the first time "Open in Swiggy" finds the place by name.
+  swiggyId?: string;
   tags: Tag[];
   photos: Photo[];
   visits: Visit[];
