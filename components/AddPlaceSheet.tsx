@@ -17,7 +17,7 @@ import {
   Clapperboard,
   Play,
 } from "lucide-react";
-import { addPlace, findDuplicate } from "@/lib/store";
+import { addPlace, findDuplicate, getPlace, updatePlace } from "@/lib/store";
 import { parseLocation, isUrl } from "@/lib/capture";
 import { searchPlaces, nearbyPlaces, resolveMapsLink, enrichPlaceFromGoogle, type GooglePlace } from "@/lib/places";
 import { tagsFromGoogleTypes } from "@/lib/googleTags";
@@ -55,18 +55,29 @@ const TITLES: Record<Mode, string> = {
   confirm: "A few details",
 };
 
+export type AddedOpts = {
+  duplicate?: boolean;
+  beenAlready?: boolean;
+  // A shared reel on a place already saved: "added" to it, or "kept" the one it had.
+  reel?: "added" | "kept";
+};
+
 export default function AddPlaceSheet({
   open,
   onClose,
   onAdded,
   initialQuery,
+  initialReel,
 }: {
   open: boolean;
   onClose: () => void;
-  onAdded: (id: string, opts?: { duplicate?: boolean; beenAlready?: boolean }) => void;
+  onAdded: (id: string, opts?: AddedOpts) => void;
   initialQuery?: string;
+  // A reel shared in from another app (Android's share sheet, lib/share.ts):
+  // the link is already known, so the sheet opens straight on the name.
+  initialReel?: string;
 }) {
-  const [mode, setMode] = useState<Mode>(initialQuery ? "search" : "menu");
+  const [mode, setMode] = useState<Mode>(initialQuery || initialReel ? "search" : "menu");
   const [q, setQ] = useState(initialQuery ?? "");
   const [gResults, setGResults] = useState<GooglePlace[]>([]);
   const [gLoading, setGLoading] = useState(false);
@@ -99,7 +110,7 @@ export default function AddPlaceSheet({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, mode, pending, onClose]);
   const [note, setNote] = useState("");
-  const [reel, setReel] = useState(""); // optional Instagram reel link, taken on confirm
+  const [reel, setReel] = useState(initialReel ?? ""); // optional Instagram reel link, taken on confirm
   // What kind of place this is. Seeded from Google's types where it knows, but
   // always editable and always offered — this app maps viewpoints and museums,
   // not only somewhere to eat, and Google is silent on plenty of them.
@@ -177,9 +188,19 @@ export default function AddPlaceSheet({
 
   if (!open) return null;
 
-  const finish = (id: string, opts?: { duplicate?: boolean; beenAlready?: boolean }) => {
+  const finish = (id: string, opts?: AddedOpts) => {
     onAdded(id, opts);
     onClose();
+  };
+
+  // A shared reel that turns out to be about a place already on your map goes
+  // onto that place — unless it already has a reel, which is never replaced
+  // silently (the old link was saved on purpose).
+  const finishDuplicate = (id: string) => {
+    if (!initialReel) return finish(id, { duplicate: true });
+    const existing = getPlace(id)?.reelUrl;
+    if (!existing) updatePlace(id, { reelUrl: initialReel });
+    finish(id, { duplicate: true, reel: existing ? "kept" : "added" });
   };
 
   // Move to the confirm screen (type + optional note), unless it's already saved.
@@ -192,7 +213,8 @@ export default function AddPlaceSheet({
     commit: (notes: string, reelUrl: string | undefined, chosen: string[]) => string
   ) => {
     setNote("");
-    setReel("");
+    // A shared reel is the reason this sheet opened; it survives picking a place.
+    setReel(initialReel ?? "");
     setTypes(seedTypes);
     setPending({ name, sub, backTo, baseTags, seedTypes, commit });
     setMode("confirm");
@@ -200,7 +222,7 @@ export default function AddPlaceSheet({
 
   const addAt = (lat: number, lng: number, name: string, source: CaptureSource, backTo: Mode) => {
     const dup = findDuplicate({ name, lat, lng });
-    if (dup) return finish(dup.id, { duplicate: true });
+    if (dup) return finishDuplicate(dup.id);
     toConfirm(name, undefined, backTo, [], [], (notes, reelUrl, chosen) =>
       addPlace({
         googlePlaceId: null,
@@ -226,7 +248,7 @@ export default function AddPlaceSheet({
   // its first Google photo is pulled once in the background.
   const addGoogle = (r: GooglePlace, backTo: Mode) => {
     const dup = findDuplicate({ googlePlaceId: r.placeId, name: r.name, lat: r.lat, lng: r.lng });
-    if (dup) return finish(dup.id, { duplicate: true });
+    if (dup) return finishDuplicate(dup.id);
     // Google's guess splits two ways: the type seeds the chips (editable), and
     // everything else it inferred (cuisine, staple…) rides along untouched.
     const derived = tagsFromGoogleTypes(r.googleTypes);
@@ -387,6 +409,12 @@ export default function AddPlaceSheet({
 
           {mode === "search" && (
             <div className="pb-2">
+              {initialReel && reel === initialReel && (
+                <p className="mb-2.5 flex items-center gap-1.5 text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>
+                  <Clapperboard size={13} strokeWidth={2.25} style={{ color: "var(--accent)" }} />
+                  Reel attached — now find the place it’s about
+                </p>
+              )}
               <div
                 className="flex items-center gap-2.5 px-3.5"
                 style={{ background: "var(--bg-elevated)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)" }}

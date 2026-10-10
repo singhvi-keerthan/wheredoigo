@@ -21,7 +21,8 @@ import ModeReveal, { BEATS, type RevealSpec } from "./ModeReveal";
 import SignUpSheet, { type SignUpReason } from "./SignUpSheet";
 import LocationNudge from "./LocationNudge";
 import SwiggyRenewLink from "./SwiggyRenewLink";
-import { useSyncStatus } from "@/lib/sync/client";
+import { useSyncStatus, ownerToken } from "@/lib/sync/client";
+import { hasShare, readPendingShare, sharedLink, withoutShare, writePendingShare } from "@/lib/share";
 
 // The app's two ways of looking at the same places. There is no control for
 // this any more: the wordmark IS the toggle, in both modes. Double-tap it or
@@ -86,6 +87,7 @@ export default function AppShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [addQuery, setAddQuery] = useState<string | null>(null); // palette → + sheet carry-over
+  const [addReel, setAddReel] = useState<string | null>(null); // a reel shared in from another app
   // Map or Swipe. Two ways of looking at the same places, switched by ONE
   // control that this shell owns and renders above both of them — not a row in
   // the map's dock, and not a copy at the top of each mode. `swipeClosing` is
@@ -339,6 +341,43 @@ export default function AppShell() {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 2800);
   };
+
+  // Arriving from Android's share sheet (the manifest's share_target sends
+  // /app?shared_text=…). Read once, then dropped from the address so a reload
+  // or Back doesn't open the add sheet again. The reel is the part we know;
+  // the name is still yours to find, so the sheet opens on search. Needs the
+  // same account gate as every other add — read from storage directly,
+  // because on the first render the sync status hasn't booted yet.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const arriving = hasShare(params);
+    // Kept in the tab's session until the sheet closes: the address is
+    // stripped below, and an app update reloads the page (RegisterSW) — mid
+    // sign-up or mid-search — which would otherwise lose the share.
+    const link = arriving ? sharedLink(params) : readPendingShare();
+    if (!arriving && !link) return;
+    if (link) writePendingShare(link);
+    const t = window.setTimeout(() => {
+      // Here, not before the timer: an effect that runs twice (React's dev
+      // check) would otherwise strip the address on the first pass and find
+      // nothing on the second.
+      history.replaceState(history.state, "", withoutShare(window.location.href));
+      if (!link) {
+        showToast("That share had no link in it");
+        return;
+      }
+      const open = () => {
+        setAddReel(link);
+        setAddOpen(true);
+      };
+      if (ownerToken()) open();
+      else {
+        pendingAction.current = open;
+        setSignUp("add");
+      }
+    }, 0);
+    return () => window.clearTimeout(t);
+  }, []);
 
   // ⌘K / Ctrl-K opens the search palette (matches the badge on the search dock).
   useEffect(() => {
@@ -830,15 +869,20 @@ export default function AppShell() {
           onClose={() => {
             setAddOpen(false);
             setAddQuery(null);
+            setAddReel(null);
+            writePendingShare(null);
           }}
           initialQuery={addQuery ?? undefined}
+          initialReel={addReel ?? undefined}
           // Adding drops the pin and selects it. A duplicate just reopens what's
           // already there; "been already" jumps straight into logging that
           // visit; a fresh watchlist add opens no form — Google fills the
           // details, the note was taken on the add sheet.
           onAdded={(id, opts) => {
             setSelectedId(id);
-            if (opts?.duplicate) showToast("Already on your map — opened it");
+            if (opts?.reel === "added") showToast("Already on your map — reel added to it");
+            else if (opts?.reel === "kept") showToast("Already on your map — it has a reel, kept that one");
+            else if (opts?.duplicate) showToast("Already on your map — opened it");
             else if (opts?.beenAlready) setVisitPlaceId(id);
           }}
         />
@@ -910,6 +954,8 @@ export default function AppShell() {
           reason={signUp}
           onClose={() => {
             pendingAction.current = null;
+            // Walking away from sign-up walks away from a share waiting on it.
+            writePendingShare(null);
             setSignUp(null);
           }}
           onDone={() => {

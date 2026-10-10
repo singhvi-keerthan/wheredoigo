@@ -26,5 +26,14 @@
       "purpose": "any"
     }
   ],
-  "scope": "/"
+  "scope": "/",
+  "share_target": {
+    "action": "/app",
+    "method": "GET",
+    "params": {
+      "title": "shared_title",
+      "text": "shared_text",
+      "url": "shared_url"
+    }
+  }
 }

@@ -56,6 +56,9 @@ self.addEventListener("fetch", (e) => {
           // resolves to an opaqueredirect response that cache.put rejects.
           // Without the catch that is an unhandled rejection in the worker on
           // every hit of an old link. The redirect itself is unaffected.
+          // A share arrival (/app?shared_text=…) is a one-off address; caching
+          // it would replay that share on an offline reload.
+          if (url.searchParams.has("shared_text") || url.searchParams.has("shared_url") || url.searchParams.has("shared_title")) return r;
           const copy = r.clone();
           caches
             .open(CACHE)
