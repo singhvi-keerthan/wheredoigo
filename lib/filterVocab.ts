@@ -150,7 +150,10 @@ export function suggest(
   // Only when no area this deck knows matched — otherwise "kor" would offer
   // "Use “kor” as the area" right under Koramangala.
   const knownArea = out.some((s) => s.kind === "area");
-  if (typed.length >= 3 && !knownArea) {
+  // And only for something shaped like a place name — a few words, no commas.
+  // "cheap biryani, not a bar" is a sentence for Ask, not a locality.
+  const placeShaped = /^[\p{L}\p{N} .'-]+$/u.test(typed) && typed.split(/\s+/).length <= 3;
+  if (typed.length >= 3 && !knownArea && placeShaped) {
     trimmed.push({ kind: "area", value: typed, label: `Use “${typed}” as the area`, group: "Area" });
   }
   return trimmed;
@@ -261,4 +264,97 @@ export function searchablePicks(f: Filters): number {
 export function toggleTag(f: Filters, field: TagField, value: string): Filters {
   const has = f[field].includes(value);
   return { ...f, [field]: has ? f[field].filter((v) => v !== value) : [...f[field], value] };
+}
+
+// ---------------------------------------------------------------------------
+// Ask — free text, on the Saved deck only.
+//
+// It came off the deck (2026-10-08) because Swiggy takes one term and most of
+// a sentence reached nothing. Your own places are different: rankPlaces reads
+// the whole DecideQuery, so a sentence can do everything a chip can and more —
+// keywords, "not a bar", "great food". So the ask is back where it can keep
+// its promise. What it understood lands as chips you can see and undo; the
+// rest (keywords, exclusions, rating boosts, the area's centre) rides along
+// as one "your words" chip, so nothing narrows the deck invisibly.
+// ---------------------------------------------------------------------------
+
+export type AskExtras = {
+  said: string;
+  // The area the centre belongs to — it only counts while that area stands.
+  area?: string;
+  areaCenter?: { lat: number; lng: number };
+} & Pick<
+  DecideQuery,
+  | "keywords"
+  | "boostRatings"
+  | "excludeTypes"
+  | "excludeCuisines"
+  | "excludeStaples"
+  | "excludeOccasions"
+  | "excludeVibes"
+  | "excludePractical"
+>;
+
+// What an ask understood, as picks. A group the ask named is replaced by what
+// it named ("italian" after "north indian" means italian); a group it didn't
+// name keeps your picks.
+export function fromAsk(f: Filters, q: DecideQuery, said: string): { filters: Filters; extras: AskExtras } {
+  const filters: Filters = { ...f };
+  for (const g of TAG_GROUPS) {
+    const v = q[g.field];
+    if (v?.length) filters[g.field] = [...new Set(v)];
+  }
+  if (q.area) filters.area = q.area;
+  if (q.maxBudget != null) filters.maxBudget = q.maxBudget;
+  if (q.minRating != null) filters.minRating = q.minRating;
+  if (q.lifecycle && q.lifecycle !== "any") filters.lifecycle = q.lifecycle;
+  if (q.openNow) filters.openNow = true;
+  const extras: AskExtras = { said };
+  if (q.area && q.areaCenter) {
+    extras.area = q.area;
+    extras.areaCenter = q.areaCenter;
+  }
+  for (const k of [
+    "keywords",
+    "boostRatings",
+    "excludeTypes",
+    "excludeCuisines",
+    "excludeStaples",
+    "excludeOccasions",
+    "excludeVibes",
+    "excludePractical",
+  ] as const) {
+    const v = q[k];
+    if (v?.length) (extras as Record<string, unknown>)[k] = [...v];
+  }
+  return { filters, extras };
+}
+
+// The query with an ask's extras on top. The area's centre only while the
+// area it was geocoded for is still the area — pick another and it goes.
+export function withAsk(q: DecideQuery, x: AskExtras | null): DecideQuery {
+  if (!x) return q;
+  const out: DecideQuery = { ...q };
+  if (x.areaCenter && x.area && q.area === x.area) out.areaCenter = x.areaCenter;
+  if (x.keywords?.length) out.keywords = x.keywords;
+  if (x.boostRatings?.length) out.boostRatings = x.boostRatings;
+  if (x.excludeTypes?.length) out.excludeTypes = x.excludeTypes;
+  if (x.excludeCuisines?.length) out.excludeCuisines = x.excludeCuisines;
+  if (x.excludeStaples?.length) out.excludeStaples = x.excludeStaples;
+  if (x.excludeOccasions?.length) out.excludeOccasions = x.excludeOccasions;
+  if (x.excludeVibes?.length) out.excludeVibes = x.excludeVibes;
+  if (x.excludePractical?.length) out.excludePractical = x.excludePractical;
+  return out;
+}
+
+// Whether the extras do anything a chip doesn't already show — an ask fully
+// expressed as chips needs no "your words" chip of its own.
+export function askBites(x: AskExtras | null): boolean {
+  if (!x) return false;
+  // The area and its centre are already the area chip.
+  const { said: _said, area: _area, areaCenter: _centre, ...rest } = x;
+  void _said;
+  void _area;
+  void _centre;
+  return Object.values(rest).some((v) => Array.isArray(v) && v.length > 0);
 }

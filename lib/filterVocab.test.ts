@@ -3,7 +3,10 @@ import {
   EMPTY_FILTERS,
   TAG_GROUPS,
   appliedOf,
+  askBites,
   buildQuery,
+  fromAsk,
+  withAsk,
   chipsFor,
   labelOf,
   offerable,
@@ -54,6 +57,9 @@ describe("the deck's filter vocabulary", () => {
     expect(typed.at(-1)).toMatchObject({ kind: "area", value: "Bandra" });
     expect(suggest("kor", "new", ["Koramangala"]).filter((x) => x.label.startsWith("Use"))).toEqual([]);
     expect(suggest("koramangala", "new", ["Koramangala"]).filter((x) => x.label.startsWith("Use"))).toEqual([]);
+    // A sentence is for Ask, never "Use … as the area".
+    expect(suggest("cheap biryani, not a bar", "saved", []).filter((x) => x.label.startsWith("Use"))).toEqual([]);
+    expect(suggest("HSR Layout", "saved", []).at(-1)).toMatchObject({ kind: "area", value: "HSR Layout" });
   });
 
   it("doesn't suggest a Swiggy-less value on a New deck", () => {
@@ -115,5 +121,45 @@ describe("the deck's filter vocabulary", () => {
     f = toggleTag(f, "cuisines", "italian");
     f = toggleTag(f, "practical", "late-night");
     expect(searchablePicks(f)).toBe(1);
+  });
+
+  it("turns an ask into picks you can see, and keeps the rest as words", () => {
+    const start = toggleTag(EMPTY_FILTERS, "cuisines", "north-indian");
+    const { filters, extras } = fromAsk(
+      start,
+      {
+        lifecycle: "any",
+        cuisines: ["italian"],
+        vibes: ["rooftop"],
+        area: "Indiranagar",
+        areaCenter: { lat: 12.97, lng: 77.64 },
+        maxBudget: 1000,
+        excludeTypes: ["bar"],
+        keywords: ["pasta"],
+      },
+      "rooftop italian in indiranagar under 1000, not a bar"
+    );
+    // The group it named is replaced; the area, budget and vibe become chips.
+    expect(filters.cuisines).toEqual(["italian"]);
+    expect(filters.vibes).toEqual(["rooftop"]);
+    expect(filters.area).toBe("Indiranagar");
+    expect(filters.maxBudget).toBe(1000);
+    // What no chip shows still reaches the ranker.
+    const q = withAsk(buildQuery(filters), extras);
+    expect(q.excludeTypes).toEqual(["bar"]);
+    expect(q.keywords).toEqual(["pasta"]);
+    expect(q.areaCenter).toEqual({ lat: 12.97, lng: 77.64 });
+    expect(askBites(extras)).toBe(true);
+  });
+
+  it("drops the area's centre once another area is picked", () => {
+    const { filters, extras } = fromAsk(
+      EMPTY_FILTERS,
+      { lifecycle: "any", area: "Indiranagar", areaCenter: { lat: 1, lng: 2 } },
+      "indiranagar"
+    );
+    expect(withAsk(buildQuery({ ...filters, area: "Koramangala" }), extras).areaCenter).toBeUndefined();
+    // An ask that only named an area is fully shown by its area chip.
+    expect(askBites(extras)).toBe(false);
   });
 });

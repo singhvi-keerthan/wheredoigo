@@ -960,7 +960,7 @@ export default function SwipeMode({
           {lens.applied.map((a) => (
             <button
               key={a.key}
-              onClick={() => lens.setFilters((f) => a.remove(f))}
+              onClick={() => lens.removeApplied(a)}
               aria-label={`Remove ${a.label}`}
               className="press flex min-h-[32px] shrink-0 items-center gap-1 pl-3 pr-2.5 text-[12.5px] font-semibold"
               style={{ borderRadius: "var(--radius-chip)", background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)" }}

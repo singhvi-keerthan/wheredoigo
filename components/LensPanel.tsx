@@ -8,6 +8,8 @@ import { buildSearchPlan, type SwiggySearchPlan } from "@/lib/swiggyTerms";
 import type { DeckSource } from "@/lib/deck";
 import { useIsSiteOwner } from "@/lib/sync/client";
 import { askOnOpen, setAskOnOpen } from "@/lib/entryPref";
+import { parseFallback } from "@/lib/decide-fallback";
+import { geocodeArea } from "@/lib/places";
 import {
   BUDGETS,
   EMPTY_FILTERS,
@@ -15,7 +17,12 @@ import {
   RATINGS,
   TAG_GROUPS,
   appliedOf,
+  askBites,
   buildQuery,
+  fromAsk,
+  withAsk,
+  type Applied,
+  type AskExtras,
   chipsFor,
   labelOf,
   pruneFor,
@@ -49,12 +56,25 @@ export function useLens() {
   const [picked, setSource] = useState<DeckSource | null>(null);
   const source: DeckSource = picked ?? (owner ? "new" : "saved");
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  // What a Saved-deck ask understood beyond the chips (lib/filterVocab.ts
+  // AskExtras). Saved only — it is ignored, and dropped, anywhere else.
+  const [extras, setExtras] = useState<AskExtras | null>(null);
+  const liveExtras = source === "saved" ? extras : null;
 
   // Built for every source. The tag half only lands on saved cards (buildDeck
   // never ranks Swiggy through rankPlaces), but area/budget/rating gate the
   // Swiggy half too.
-  const query = useMemo<DecideQuery>(() => buildQuery(filters), [filters]);
-  const applied = useMemo(() => appliedOf(filters), [filters]);
+  const query = useMemo<DecideQuery>(() => withAsk(buildQuery(filters), liveExtras), [filters, liveExtras]);
+  const applied = useMemo<Applied[]>(() => {
+    const chips = appliedOf(filters);
+    // Everything else the ask said, as one chip: keywords and "not a bar"
+    // narrow the deck too, and a filter you can't see is one you can't undo.
+    if (askBites(liveExtras)) {
+      const said = liveExtras!.said;
+      chips.push({ key: "ask", label: `“${said.length > 24 ? `${said.slice(0, 23)}…` : said}”`, remove: (f) => f });
+    }
+    return chips;
+  }, [filters, liveExtras]);
   const dirty = applied.length > 0;
 
   // Switching to New drops the picks New can't act on (lib/filterVocab.ts
@@ -62,6 +82,7 @@ export function useLens() {
   const pickSource = (s: DeckSource) => {
     setSource(s);
     setFilters((f) => pruneFor(f, s));
+    if (s !== "saved") setExtras(null);
   };
 
   return {
@@ -74,10 +95,18 @@ export function useLens() {
     // What New mode should actually ask Swiggy for, built from the structured
     // query. See lib/swiggyTerms.ts.
     searchPlan: (source === "saved" ? { terms: [] } : buildSearchPlan(query)) as SwiggySearchPlan,
+    extras,
+    setExtras,
     applied,
+    // One chip's ×. The ask's chip clears the ask's extras; every other chip
+    // edits the filters.
+    removeApplied: (a: Applied) => (a.key === "ask" ? setExtras(null) : setFilters((f) => a.remove(f))),
     summary: applied.map((a) => a.label),
     dirty,
-    clear: () => setFilters(EMPTY_FILTERS),
+    clear: () => {
+      setFilters(EMPTY_FILTERS);
+      setExtras(null);
+    },
   };
 }
 
@@ -177,9 +206,23 @@ export default function LensPanel({
   const [source, setSource] = useState<DeckSource>(lens.source);
   const [text, setText] = useState("");
   const [askDoors, setAskDoors] = useState(askOnOpen);
+  // The Saved-deck ask: free text → the same picks the chips make, plus the
+  // extras no chip expresses. Edits the draft like everything else here.
+  const [draftExtras, setDraftExtras] = useState<AskExtras | null>(lens.extras);
+  const [thinking, setThinking] = useState(false);
+  const [basic, setBasic] = useState(false);
+  // Bumped by every ask and every source change, so an answer that lands
+  // after you've moved on (switched off Saved, asked again) is dropped
+  // instead of overwriting what you did since.
+  const askSeq = useRef(0);
   const areas = useMemo(() => areasFor(source), [areasFor, source]);
   const suggestions = useMemo(() => suggest(text, source, areas), [text, source, areas]);
+  // On Saved the search box also takes a sentence: your own places can
+  // answer one (rankPlaces reads the whole query), Swiggy's search can't.
+  const canAsk = source === "saved" && text.trim().length >= 3;
   const picked = appliedOf(draft).length;
+  // The words chip counts as a pick when it narrows anything a chip doesn't.
+  const picks = picked + (source === "saved" && askBites(draftExtras) ? 1 : 0);
   const isForm = variant === "form";
   // A dialog takes focus when it opens, so the keyboard is in it rather than
   // on the deck it covers.
@@ -203,7 +246,51 @@ export default function LensPanel({
   const apply = () => {
     lens.setFilters(draft);
     lens.setSource(source);
+    lens.setExtras(source === "saved" ? draftExtras : null);
     onApply();
+  };
+
+  // Same route the map's Ask uses (/api/decide). The prompt is only what was
+  // typed — never a place, never anything Swiggy sent. A model failure falls
+  // back to the keyword parser, and the editor says so rather than looking
+  // like it understood.
+  const ask = async () => {
+    const words = text.trim();
+    if (!canAsk || thinking) return;
+    const mine = ++askSeq.current;
+    setThinking(true);
+    let q: DecideQuery;
+    let byModel = false;
+    try {
+      const res = await fetch("/api/decide", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: text }),
+      });
+      const data = await res.json();
+      q = data.query ?? parseFallback(words);
+      byModel = Boolean(data.query) && data.parsedBy === "model";
+    } catch {
+      q = parseFallback(words);
+    }
+    if (q.area && !q.areaCenter) {
+      try {
+        const hit = await geocodeArea(q.area);
+        if (hit) q = { ...q, area: hit.name, areaCenter: { lat: hit.lat, lng: hit.lng } };
+      } catch {
+        // The area name still gates by name.
+      }
+    }
+    setThinking(false);
+    if (mine !== askSeq.current) return;
+    // Merged into the draft as it is NOW — edits made while it was reading
+    // stay, except where the ask named the same thing.
+    const parsed = q;
+    setDraft((d) => fromAsk(d, parsed, words).filters);
+    setDraftExtras(fromAsk(EMPTY_FILTERS, parsed, words).extras);
+    setBasic(!byModel);
+    // Back to the picks, so what it understood is the next thing you see.
+    setText("");
   };
 
   const takeSuggestion = (s: Suggestion) => {
@@ -231,9 +318,33 @@ export default function LensPanel({
           onPick={(s) => {
             setSource(s);
             setDraft((d) => pruneFor(d, s));
+            if (s !== "saved") {
+              setDraftExtras(null);
+              askSeq.current++;
+              setThinking(false);
+            }
           }}
         />
       </Section>
+
+      {source === "saved" && draftExtras && (
+        <div className="mt-3">
+          {draftExtras && (
+            <p className="mt-1.5 text-[12px] leading-snug" style={{ color: "var(--text-tertiary)" }}>
+              {basic ? "Basic matching — the assistant was unavailable. " : ""}
+              Picked below from “{draftExtras.said}”
+              {askBites(draftExtras) ? "; the rest of what you said narrows it too" : ""}.{" "}
+              <button
+                onClick={() => setDraftExtras(null)}
+                className="underline"
+                style={{ color: "var(--text-secondary)" }}
+              >
+                Forget the words
+              </button>
+            </p>
+          )}
+        </div>
+      )}
 
       {areaChips.length > 0 && (
         <Section title="Where" hint="one">
@@ -266,7 +377,7 @@ export default function LensPanel({
       })}
 
       <Section title="Budget per person" hint="one">
-        {BUDGETS.map((n) => (
+        {withValue(BUDGETS, draft.maxBudget).map((n) => (
           <Chip
             key={n}
             label={`Under ₹${n.toLocaleString("en-IN")}`}
@@ -277,7 +388,7 @@ export default function LensPanel({
       </Section>
 
       <Section title="Rating" hint="one">
-        {RATINGS.map((n) => (
+        {withValue(RATINGS, draft.minRating).map((n) => (
           <Chip
             key={n}
             label={`${n.toFixed(1)}+`}
@@ -371,13 +482,17 @@ export default function LensPanel({
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && suggestions[0]) takeSuggestion(suggestions[0]);
           if (e.key === "Escape" && text) {
             e.stopPropagation();
             setText("");
+            return;
           }
+          if (e.key !== "Enter") return;
+          // A sentence asks; a word takes its best match.
+          if (canAsk && (/\s/.test(text.trim()) || !suggestions[0])) void ask();
+          else if (suggestions[0]) takeSuggestion(suggestions[0]);
         }}
-        placeholder="Area, cuisine, dish, vibe…"
+        placeholder={source === "saved" ? "Area, cuisine — or just say it…" : "Area, cuisine, dish, vibe…"}
         className="min-w-0 flex-1 bg-transparent py-2.5 text-[14px] outline-none"
         style={{ color: "var(--text-primary)" }}
       />
@@ -396,7 +511,24 @@ export default function LensPanel({
 
   const results = (
     <ul className="mt-1" aria-label="Suggestions">
-      {suggestions.length === 0 && (
+      {canAsk && (
+        <li>
+          <button
+            onClick={() => void ask()}
+            disabled={thinking}
+            className="press flex min-h-[48px] w-full items-center justify-between gap-3 px-1 text-left"
+            style={{ borderBottom: "1px solid var(--border)" }}
+          >
+            <span className="min-w-0 truncate text-[15px]" style={{ color: "var(--accent)" }}>
+              {thinking ? "Reading…" : `Ask “${text.trim()}”`}
+            </span>
+            <span className="shrink-0 text-[11px] uppercase tracking-[0.06em]" style={{ color: "var(--text-tertiary)", fontFamily: "var(--font-mono)" }}>
+              your words
+            </span>
+          </button>
+        </li>
+      )}
+      {suggestions.length === 0 && !canAsk && (
         <li className="px-1 py-4 text-[13px]" style={{ color: "var(--text-tertiary)" }}>
           Nothing by that name{source === "new" ? " that Swiggy can search for" : ""}.
         </li>
@@ -434,9 +566,14 @@ export default function LensPanel({
       </p>
     )}
     <div className="flex items-center gap-2 pt-3">
-      {picked > 0 && (
+      {(picked > 0 || draftExtras) && (
         <button
-          onClick={() => setDraft(EMPTY_FILTERS)}
+          onClick={() => {
+            setDraft(EMPTY_FILTERS);
+            setDraftExtras(null);
+            askSeq.current++;
+            setThinking(false);
+          }}
           className="press px-4 py-3 text-[13.5px] font-semibold"
           style={{ color: "var(--text-tertiary)" }}
         >
@@ -445,10 +582,17 @@ export default function LensPanel({
       )}
       <button
         onClick={apply}
-        className="press flex-1 py-3 text-[15px] font-bold"
+        disabled={thinking}
+        className="press flex-1 py-3 text-[15px] font-bold disabled:opacity-60"
         style={{ background: "oklch(0.97 0 0)", color: "oklch(0.16 0.006 260)", borderRadius: "var(--radius-chip)" }}
       >
-        {isForm && picked === 0 ? "Just show me places" : picked > 0 ? `Show places · ${picked} picked` : "Show places"}
+        {thinking
+          ? "Reading your words…"
+          : isForm && picks === 0
+            ? "Just show me places"
+            : picks > 0
+              ? `Show places · ${picks} picked`
+              : "Show places"}
       </button>
     </div>
     </>
@@ -542,6 +686,12 @@ export default function LensPanel({
       </div>
     </div>
   );
+}
+
+// The preset ladder, plus a value an ask set that isn't on it ("under 800")
+// — a pick you can't see is a pick you can't take off.
+function withValue(presets: number[], v: number | null): number[] {
+  return v == null || presets.includes(v) ? presets : [...presets, v].sort((a, b) => a - b);
 }
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
