@@ -129,6 +129,7 @@ function settingsProblem(s: Settings): string | null {
 
 export async function scheduleDay(day: string, opts: { force?: boolean } = {}): Promise<string> {
   const s = await getSettings();
+  if (s.paused) return "paused";
   if (!opts.force && !isRunDay(s.days, day)) return "not a run day";
   const problem = settingsProblem(s);
   if (problem) throw new Error(problem);
@@ -348,6 +349,7 @@ function reviewBlocks(s: Settings, day: string, picks: PersonPick[], cart: CartS
 // Returns a message for the tapper when it can't act, or null.
 export async function reviewDay(day: string, channel: string, ts: string, note: string | null = null, opts: { afterUnknown?: boolean } = {}): Promise<string | null> {
   if (day !== today()) return "That's an old coffee run; only today's can be reviewed.";
+  if ((await getSettings()).paused) return "The coffee run is paused. Resume it in /admin first.";
   await recoverStale(day);
   const run = await getRun(day);
   if (!run) return "Today isn't set up.";
@@ -419,6 +421,7 @@ export async function reviewDay(day: string, channel: string, ts: string, note: 
 export async function placeDay(value: string, user: string, channel: string, ts: string): Promise<string | null> {
   const [day, hash, toPayStr, reviewId] = value.split("|");
   if (day !== today()) return "That's an old coffee run; it can't be ordered now.";
+  if ((await getSettings()).paused) return "The coffee run is paused. Resume it in /admin first.";
   await recoverStale(day);
   const claimed = (await sql()`update coffee_runs set status = 'placing', updated_at = now()
     where day = ${day} and status = 'reviewed' and picks_hash = ${hash} and cart->>'reviewId' = ${reviewId ?? ""}

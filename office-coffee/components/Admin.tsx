@@ -6,14 +6,14 @@ import { adminSignIn, chooseRestaurant, searchRestaurants, setUpToday, skipToday
 export function AdminSignIn() {
   const [state, action, pending] = useActionState(adminSignIn, undefined);
   return (
-    <form action={action} className="card">
+    <form action={action} className="panel">
       <div className="field" style={{ marginTop: 0 }}>
         <label htmlFor="code">Admin code</label>
         <input id="code" name="code" type="password" className="input" required />
       </div>
       {state?.error && <p className="err" style={{ marginTop: 12 }}>{state.error}</p>}
-      <div className="row">
-        <button className="btn primary" disabled={pending}>
+      <div className="actions" style={{ marginTop: 14 }}>
+        <button className="btn go" disabled={pending}>
           Open settings
         </button>
       </div>
@@ -27,7 +27,7 @@ export function CafeSearch({ hasAddress }: { hasAddress: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
-  if (!hasAddress) return <p className="hero-extras">Pick the office address first, then search cafés near it.</p>;
+  if (!hasAddress) return <p className="muted">Pick the office address first, then search cafés near it.</p>;
 
   return (
     <div style={{ marginTop: 12 }}>
@@ -56,7 +56,7 @@ export function CafeSearch({ hasAddress }: { hasAddress: boolean }) {
             <div className="sub">
               {[h.area, h.distanceKm !== null ? `${h.distanceKm} km` : null, h.rating ? `${h.rating}★` : null, h.open ? "open" : "closed now"]
                 .filter(Boolean)
-                .join(" · ")}
+                .join(", ")}
             </div>
           </div>
           <input type="hidden" name="restaurantId" value={h.id} />
@@ -78,15 +78,15 @@ export function TodayButtons() {
     });
   return (
     <>
-      <div className="row">
+      <div className="actions" style={{ marginTop: 14 }}>
         <button className="btn" disabled={pending} onClick={() => run(setUpToday, "Today's Slack messages are set up.")}>
           Set up today now
         </button>
-        <button className="btn quiet" disabled={pending} onClick={() => run(skipToday, "Today is cancelled.")}>
+        <button className="btn plain" disabled={pending} onClick={() => run(skipToday, "Today is cancelled.")}>
           Skip today
         </button>
       </div>
-      {msg && <p className={msg.ok ? "hero-extras" : "err"} style={{ marginTop: 10 }}>{msg.text}</p>}
+      {msg && <p className={msg.ok ? "muted" : "err"} style={{ marginTop: 10 }}>{msg.text}</p>}
     </>
   );
 }

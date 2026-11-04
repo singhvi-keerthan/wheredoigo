@@ -2,9 +2,7 @@
 export function PoweredBySwiggy() {
   return (
     <footer className="foot">
-      <span className="swiggy">
-        Menu and ordering powered by <b>Swiggy</b>
-      </span>
+      Menu and ordering powered by <b>Swiggy</b>
     </footer>
   );
 }

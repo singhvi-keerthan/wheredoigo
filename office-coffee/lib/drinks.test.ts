@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isDrink } from "./menu";
+import { isDrink, parseItemDetails } from "./menu";
 import { effectiveOf } from "./people";
 import type { Choice } from "./types";
 
@@ -37,5 +37,22 @@ describe("daily tap-in", () => {
   it("tapped in → the usual, or that day's change", () => {
     expect(effectiveOf({ regular: usual, choice: null, confirmed: true, skip: false })).toEqual(usual);
     expect(effectiveOf({ regular: usual, choice: changed, confirmed: true, skip: false })).toEqual(changed);
+  });
+});
+
+describe("food add-ons", () => {
+  const item = { id: "190844880", name: "Cappuccino", price: 250, isVeg: true, inStock: true, hasVariants: false, hasAddons: true, description: null, imageUrl: null };
+  // Blue Tokai Cappuccino's real add-on groups, 2026-11-04.
+  const raw = {
+    price: 250,
+    addons: [
+      { groupId: "265805347", groupName: "Choice Of Milk", minAddons: 1, maxAddons: 1, choices: [{ id: "146759557", name: "Regular Milk", price: 0 }, { id: "146759595", name: "Oat Milk", price: 20 }] },
+      { groupId: "335103901", groupName: "Best Paired With", maxAddons: 2, choices: [{ id: "154136357", name: "Chocolate Chip Sea Salt Cookie", price: 170 }, { id: "154136358", name: "Almond,oats And Choco Chip Cookie", price: 95 }] },
+    ],
+  };
+  it("drops the optional cookie upsell, keeps the milk choice", () => {
+    const d = parseItemDetails(item, raw);
+    expect(d.addonGroups.map((g) => g.label)).toEqual(["Choice Of Milk"]);
+    expect(d.addonGroups[0].options).toHaveLength(2);
   });
 });

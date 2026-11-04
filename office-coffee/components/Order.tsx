@@ -22,24 +22,42 @@ interface Someone {
 }
 
 const rupees = (n: number) => `₹${Math.round(n)}`;
-const extrasOf = (c: Choice) => [...c.variants, ...c.addons].map((s) => s.name).join(" · ");
+// "Brewed Coffee · Hot Coffee" → "Hot Coffee": the full name only matters to
+// the drinks filter, the short one reads better.
+const shortCat = (t: string) => t.split(" · ").pop() ?? t;
+const extrasOf = (c: Choice) => [...c.variants, ...c.addons].map((s) => s.name).join(", ");
 
-export function Order(props: { day: string | null; dayName: string | null; lockLabel: string | null; locked: boolean; menu: Menu | null; me: Me; everyone: Someone[] }) {
-  const { day, dayName, lockLabel, locked, menu, me, everyone } = props;
+export function Order(props: {
+  day: string | null;
+  dayName: string | null;
+  lockLabel: string | null;
+  locked: boolean;
+  paused: boolean;
+  menu: Menu | null;
+  photos: Record<string, string>;
+  me: Me;
+  everyone: Someone[];
+}) {
+  const { day, dayName, lockLabel, locked, paused, menu, photos, me, everyone } = props;
   const [sheet, setSheet] = useState<{ scope: Scope } | null>(null);
   const [item, setItem] = useState<{ scope: Scope; item: MenuItem } | null>(null);
   const [flash, setFlash] = useState<{ ok: boolean; text: string } | null>(null);
+  const [stamped, setStamped] = useState(false); // stamp lands only on the tap, not on every visit
+  const [imgReady, setImgReady] = useState(false);
   const [pending, start] = useTransition();
 
-  // What they'd get if they're in: today's change, else their usual.
-  const drink = me.override ?? me.regular;
+  // While paused there's no day to order for, so the ticket shows the usual.
+  const drink = paused ? me.regular : me.override ?? me.regular;
   const when = dayName?.toLowerCase() ?? "the next run";
-  const canEditToday = !!day && !locked && !!menu;
+  const canEditToday = !paused && !!day && !locked && !!menu;
+  const photo = drink ? photos[drink.itemId] : undefined;
 
-  const act = (fn: () => Promise<{ ok: boolean; error?: string }>, okText: string) =>
+  const act = (fn: () => Promise<{ ok: boolean; error?: string }>, okText: string | null, stamp = false) =>
     start(async () => {
       const r = await fn();
-      setFlash(r.ok ? { ok: true, text: okText } : { ok: false, text: r.error ?? "Didn't work" });
+      if (r.ok && stamp) setStamped(true);
+      if (!r.ok) setFlash({ ok: false, text: r.error ?? "That didn't save. Try again." });
+      else setFlash(okText ? { ok: true, text: okText } : null);
     });
 
   const inList = everyone.filter((e) => e.in && e.effective);
@@ -48,115 +66,139 @@ export function Order(props: { day: string | null; dayName: string | null; lockL
 
   return (
     <>
-      {flash && <div className={`banner ${flash.ok ? "ok" : "bad"}`}>{flash.text}</div>}
-      {locked && <div className="banner">{dayName}&apos;s order is with the approver now. Changes count for the next run.</div>}
+      {flash && <p className={`flash ${flash.ok ? "" : "bad"}`} role="status">{flash.text}</p>}
 
-      <section className={`card ${me.in ? "is-in" : ""}`} aria-live="polite">
-        <p className="eyebrow">{dayName ? `${dayName}'s coffee` : "Your coffee"}</p>
-        {me.in && drink ? (
-          <>
-            <span className="chip in">✓ You&apos;re in</span>
-            <h1 className="hero-name">{drink.name}</h1>
-            <p className="hero-extras">
-              {extrasOf(drink) || "As it comes"}
-              {drink.note ? ` · “${drink.note}”` : ""} · <span className="price">{rupees(drink.unitPrice)}</span>
-              {me.override ? ` · changed for ${when}` : ""}
-            </p>
-          </>
-        ) : (
-          <>
-            <span className="chip">Not in yet</span>
-            <h1 className="hero-name">Coffee {when}?</h1>
-            <p className="hero-extras">
-              You&apos;re only on the order if you tap in{lockLabel ? ` before ${lockLabel}` : ""}.
-              {drink ? (
-                <>
-                  {" "}
-                  {me.override ? "Your pick" : "Your usual"}: <b>{drink.name}</b>
-                  {extrasOf(drink) ? ` (${extrasOf(drink)})` : ""}.
-                </>
-              ) : null}
-            </p>
-          </>
-        )}
+      <section className="ticket" aria-live="polite">
+        {me.in && drink && !paused && <div className={`stamp ${stamped ? "fresh" : ""}`} aria-hidden>IN</div>}
 
-        {canEditToday && (
-          <div className="row">
-            {!me.in && drink && (
-              <button className="btn accent block" disabled={pending} onClick={() => act(() => setToday("in", day), `You're in for ${when}: ${drink.name}.`)}>
-                I&apos;m in · {drink.name}
-              </button>
-            )}
-            {!me.in && !drink && (
-              <button className="btn accent block" onClick={() => setSheet({ scope: "today" })}>
-                Pick a drink and I&apos;m in
-              </button>
-            )}
-            {drink && (
-              <button className="btn" onClick={() => setSheet({ scope: "today" })}>
-                {me.in ? "Change drink" : "Something else"}
-              </button>
-            )}
-            {me.in && me.override && me.regular && (
-              <button className="btn" disabled={pending} onClick={() => act(() => setToday("regular", day), `Back to your usual for ${when}.`)}>
-                Back to my usual
-              </button>
-            )}
-            {me.in && (
-              <button className="btn quiet" disabled={pending} onClick={() => act(() => setToday("out", day), `You're out for ${when}.`)}>
-                I&apos;m out {when}
-              </button>
-            )}
-          </div>
-        )}
-      </section>
-
-      <section className="card regular">
-        <div>
-          <p className="eyebrow" style={{ margin: 0 }}>Your usual</p>
-          {me.regular ? (
+        <p className="ticket-day">
+          {paused ? (
+            "The coffee run hasn't started yet"
+          ) : locked ? (
             <>
-              <div className="name">{me.regular.name}</div>
-              <div className="sub">{extrasOf(me.regular) || "As it comes"} · pre-picked each day, you still tap in</div>
+              <b>{dayName}</b>, with the approver now
             </>
           ) : (
-            <div className="sub">Set one so tapping in is one tap.</div>
+            <>
+              <b>{dayName}</b>, order locks at {lockLabel}
+            </>
+          )}
+        </p>
+
+        {drink ? (
+          <div className={`drink ${photo ? "" : "no-photo"}`}>
+            {photo && (
+              <img
+                src={photo}
+                alt=""
+                className={imgReady ? "ready" : ""}
+                onLoad={() => setImgReady(true)}
+                // A server-rendered image can finish before React attaches onLoad.
+                ref={(el) => {
+                  if (el?.complete && el.naturalWidth > 0 && !imgReady) setImgReady(true);
+                }}
+              />
+            )}
+            <div>
+              <h1 className="drink-name">{drink.name}</h1>
+              <p className="drink-extras">
+                {extrasOf(drink) || "As it comes"}
+                {drink.note ? `, “${drink.note}”` : ""}
+                {", "}
+                <span className="price">{rupees(drink.unitPrice)}</span>
+              </p>
+            </div>
+          </div>
+        ) : (
+          <>
+            <h1 className="ask">What do you drink?</h1>
+            <p className="ask-sub">
+              {paused ? "Pick your usual now. Tapping in opens when the coffee run starts." : "Pick a usual once. After that, getting coffee is one tap."}
+            </p>
+          </>
+        )}
+
+        {!paused && drink && !me.in && !locked && (
+          <p className="ask-sub">You&apos;re not on {when}&apos;s order until you tap in.</p>
+        )}
+        {paused && drink && <p className="ask-sub">That&apos;s your usual. Tapping in opens when the coffee run starts.</p>}
+
+        <div className="perf" aria-hidden />
+
+        <div className="actions">
+          {canEditToday && !me.in && drink && (
+            <button className="btn go" disabled={pending} onClick={() => act(() => setToday("in", day), null, true)}>
+              Tap in for {when}
+            </button>
+          )}
+          {canEditToday && !drink && (
+            <button className="btn go" onClick={() => setSheet({ scope: "today" })}>
+              Pick a drink and tap in
+            </button>
+          )}
+          {(paused || !canEditToday) && !drink && menu && (
+            <button className="btn go" onClick={() => setSheet({ scope: "regular" })}>
+              Pick my usual
+            </button>
+          )}
+          {canEditToday && drink && (
+            <button className="btn" onClick={() => setSheet({ scope: "today" })}>
+              {me.in ? "Change drink" : "Something else"}
+            </button>
+          )}
+          {canEditToday && me.in && me.override && me.regular && (
+            <button className="btn" disabled={pending} onClick={() => act(() => setToday("regular", day), `Back to your usual for ${when}.`)}>
+              Back to my usual
+            </button>
+          )}
+          {canEditToday && me.in && (
+            <button className="btn plain" disabled={pending} onClick={() => { setStamped(false); act(() => setToday("out", day), `You're off ${when}'s order.`); }}>
+              I&apos;m out {when}
+            </button>
+          )}
+          {(paused || !canEditToday) && drink && menu && (
+            <button className="btn" onClick={() => setSheet({ scope: "regular" })}>
+              Change my usual
+            </button>
           )}
         </div>
-        {menu && (
-          <button className="btn" onClick={() => setSheet({ scope: "regular" })}>
-            {me.regular ? "Edit" : "Set"}
-          </button>
-        )}
       </section>
 
-      {day && (
-        <section className="section">
-          <p className="eyebrow">
-            In {when} · {inList.length}
-          </p>
-          <div className="card">
-            {inList.length === 0 ? (
-              <p className="hero-extras">Nobody&apos;s in yet.</p>
-            ) : (
-              <ul className="receipt">
+      {me.regular && canEditToday && (
+        <p className="note">
+          Your usual is <b>{me.regular.name}</b>
+          {extrasOf(me.regular) ? ` (${extrasOf(me.regular)})` : ""}.
+          <button className="btn plain" onClick={() => setSheet({ scope: "regular" })}>
+            Change it
+          </button>
+        </p>
+      )}
+
+      {day && !paused && (
+        <section className="docket" aria-label={`Going in ${when}`}>
+          <h2>
+            Going in {when} <span>{inList.length}</span>
+          </h2>
+          {inList.length === 0 ? (
+            <p className="empty">Nobody has tapped in yet.</p>
+          ) : (
+            <>
+              <ul>
                 {inList.map((e) => (
                   <li key={e.id} className={e.id === me.id ? "me" : ""}>
                     <span className="who">{e.name}</span>
-                    <span className="what">{e.effective!.name + (e.changed ? " (changed)" : "")}</span>
+                    <span className="what">{e.effective!.name}</span>
                     <span className="price">{rupees(e.effective!.unitPrice)}</span>
                   </li>
                 ))}
               </ul>
-            )}
-            {inList.length > 0 && (
-              <div className="total">
-                <span>Before delivery &amp; taxes</span>
-                <span className="price">~{rupees(estTotal)}</span>
+              <div className="sum">
+                <span>Before delivery and taxes</span>
+                <span className="price">about {rupees(estTotal)}</span>
               </div>
-            )}
-            {notIn.length > 0 && <p className="not-in">Not in yet: {notIn.map((e) => e.name).join(", ")}</p>}
-          </div>
+            </>
+          )}
+          {notIn.length > 0 && <p className="waiting">Not in yet: {notIn.map((e) => e.name).join(", ")}</p>}
         </section>
       )}
 
@@ -217,16 +259,16 @@ function MenuSheet({ menu, title, onClose, onPick }: { menu: Menu; title: string
             </button>
             {menu.categories.map((c) => (
               <button key={c.title} className={cat === c.title ? "on" : ""} onClick={() => setCat(c.title)}>
-                {c.title}
+                {shortCat(c.title)}
               </button>
             ))}
           </div>
         </div>
         <div className="sheet-body">
-          {shown.length === 0 && <p className="hero-extras" style={{ marginTop: 16 }}>Nothing matches “{q}”.</p>}
+          {shown.length === 0 && <p className="muted" style={{ marginTop: 16 }}>Nothing on the menu matches “{q}”.</p>}
           {shown.map((c) => (
             <div key={c.title}>
-              <p className="cat">{c.title}</p>
+              <p className="cat">{shortCat(c.title)}</p>
               {c.items.map((i) => (
                 <button key={`${c.title}-${i.id}`} className="item" disabled={!i.inStock} onClick={() => onPick(i)}>
                   {i.imageUrl ? <img src={i.imageUrl} alt="" loading="lazy" /> : <span className="ph" />}
@@ -320,7 +362,7 @@ function ItemSheet(props: {
     start(async () => {
       setError(null);
       const r = await saveChoice(target, { itemId: item.id, variants, addons, note }, day);
-      if (r.ok) onSaved(target === "regular" ? `${item.name} is your usual now. You still tap in each day.` : `${item.name} for ${when}. You're in.`);
+      if (r.ok) onSaved(target === "regular" ? `${item.name} is your usual now. You still tap in each day.` : `You're in for ${when}: ${item.name}.`);
       else setError(r.error);
     });
 
@@ -330,20 +372,18 @@ function ItemSheet(props: {
       <div className="sheet" role="dialog" aria-modal="true" aria-label={item.name}>
         <div className="sheet-head">
           <div className="sheet-title">
-            <button className="link" onClick={onBack}>
-              ← Menu
+            <button className="back" onClick={onBack}>
+              Back to the menu
             </button>
             <button className="x" onClick={onBack} aria-label="Close">
               ×
             </button>
           </div>
-          <h2 className="hero-name" style={{ fontSize: 28, marginTop: 10 }}>
-            {item.name}
-          </h2>
-          {item.description && <p className="hero-extras">{item.description}</p>}
+          <h2 className="drink-name" style={{ marginTop: 12 }}>{item.name}</h2>
+          {item.description && <p className="lede">{item.description}</p>}
         </div>
         <div className="sheet-body">
-          {loading && <p className="hero-extras" style={{ marginTop: 16 }}>Loading options…</p>}
+          {loading && <p className="muted" style={{ marginTop: 16 }}>Loading options…</p>}
           {loadError && <p className="err" style={{ marginTop: 16 }}>{loadError}</p>}
           {details?.unavailable && <p className="err" style={{ marginTop: 16 }}>{details.unavailable}</p>}
           {details?.variantGroups.map((g) => (
@@ -382,7 +422,7 @@ function ItemSheet(props: {
               <h3>
                 Note <small>goes to the café</small>
               </h3>
-              <textarea className="note" rows={2} maxLength={80} placeholder="Less sugar, extra hot…" value={note} onChange={(e) => setNote(e.target.value)} />
+              <textarea className="notefield" rows={2} maxLength={80} placeholder="Less sugar, extra hot…" value={note} onChange={(e) => setNote(e.target.value)} />
             </div>
           )}
         </div>
@@ -391,12 +431,12 @@ function ItemSheet(props: {
           {details && !details.unavailable && (
             <>
               {scope === "today" && canToday && (
-                <button className="btn accent block" disabled={pending} onClick={() => save("today")}>
-                  {pending ? "Saving…" : `I'm in with this · ${rupees(price)}`}
+                <button className="btn go" disabled={pending} onClick={() => save("today")}>
+                  {pending ? "Saving…" : `Tap in with this, ${rupees(price)}`}
                 </button>
               )}
-              <button className={`btn block ${scope === "regular" ? "accent" : ""}`} disabled={pending} onClick={() => save("regular")}>
-                {scope === "regular" ? (pending ? "Saving…" : `Make it my usual · ${rupees(price)}`) : "Save as my usual instead"}
+              <button className={scope === "regular" ? "btn go" : "btn"} disabled={pending} onClick={() => save("regular")}>
+                {scope === "regular" ? (pending ? "Saving…" : `Make it my usual, ${rupees(price)}`) : "Make it my usual instead"}
               </button>
             </>
           )}

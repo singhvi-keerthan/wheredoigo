@@ -1,4 +1,4 @@
-import { chooseAddress, deactivatePerson, refreshMenu, saveSchedule } from "@/app/actions";
+import { chooseAddress, deactivatePerson, refreshMenu, saveSchedule, setPaused } from "@/app/actions";
 import { AdminSignIn, CafeSearch, TodayButtons } from "@/components/Admin";
 import { PoweredBySwiggy } from "@/components/PoweredBySwiggy";
 import { isAdmin } from "@/lib/auth";
@@ -17,10 +17,9 @@ export default async function Admin() {
   if (!(await isAdmin())) {
     return (
       <main className="wrap">
-        <header className="top">
-          <div className="brand">
-            Coffee <em>run</em> · admin
-          </div>
+        <header className="masthead">
+          <p className="wordmark">Coffee run</p>
+          <p className="where">Admin</p>
         </header>
         <AdminSignIn />
       </main>
@@ -54,30 +53,40 @@ export default async function Admin() {
 
   return (
     <main className="wrap">
-      <header className="top">
-        <div className="brand">
-          Coffee <em>run</em> · admin
-        </div>
-        <div className="meta">
-          <a href="/">Order page</a>
-        </div>
+      <header className="masthead">
+        <p className="wordmark">Coffee run</p>
+        <p className="where">
+          Admin, <a href="/">order page</a>
+        </p>
       </header>
 
-      <section className="card">
-        <p className="eyebrow">Health</p>
+      <section className="panel">
+        <h2>{s.paused ? <span className="paused-flag">Paused</span> : "Running"}</h2>
+        <p className="muted" style={{ margin: "0 0 12px" }}>
+          {s.paused
+            ? "Nothing is posted to Slack and nobody can tap in or order until you start it."
+            : "Each run day, Slack gets the reminder and the lock card, and people can tap in."}
+        </p>
+        <form action={setPaused.bind(null, !s.paused)}>
+          <button className={s.paused ? "btn go" : "btn"}>{s.paused ? "Start the coffee run" : "Pause the coffee run"}</button>
+        </form>
+      </section>
+
+      <section className="panel">
+        <h2>Health</h2>
         <dl className="kv">
           {health.map(([k, v, ok]) => (
             <div key={k} style={{ display: "contents" }}>
               <dt>{k}</dt>
-              <dd style={{ color: ok ? undefined : "var(--chili)" }}>{v}</dd>
+              <dd className={ok ? "" : "bad"}>{v}</dd>
             </div>
           ))}
         </dl>
-        <TodayButtons />
+        {!s.paused && <TodayButtons />}
       </section>
 
-      <section className="card">
-        <p className="eyebrow">Deliver to</p>
+      <section className="panel">
+        <h2>Deliver to</h2>
         {addressError ? (
           <p className="err">{addressError}</p>
         ) : (
@@ -92,24 +101,24 @@ export default async function Admin() {
                 </option>
               ))}
             </select>
-            <div className="row">
+            <div className="actions" style={{ marginTop: 10 }}>
               <button className="btn">Save address</button>
             </div>
           </form>
         )}
       </section>
 
-      <section className="card">
-        <p className="eyebrow">Café</p>
+      <section className="panel">
+        <h2>Café</h2>
         <p style={{ margin: "0 0 4px", fontWeight: 600 }}>{s.restaurantName ?? "None picked"}</p>
         <form action={refreshMenu}>
-          <button className="link">Refresh menu from Swiggy</button>
+          <button className="btn plain" style={{ paddingLeft: 0 }}>Reload the menu from Swiggy</button>
         </form>
         <CafeSearch hasAddress={!!s.addressId} />
       </section>
 
-      <section className="card">
-        <p className="eyebrow">Schedule</p>
+      <section className="panel">
+        <h2>Schedule</h2>
         <form action={saveSchedule}>
           <div className="field">
             <label htmlFor="orderTime">Order time (IST)</label>
@@ -140,22 +149,22 @@ export default async function Admin() {
             <label htmlFor="channel">Slack channel ID</label>
             <input id="channel" name="channel" className="input" placeholder="C0123456789" defaultValue={s.channelId ?? ""} />
           </div>
-          <div className="row">
-            <button className="btn primary">Save schedule</button>
+          <div className="actions" style={{ marginTop: 14 }}>
+            <button className="btn go">Save schedule</button>
           </div>
         </form>
       </section>
 
-      <section className="card">
-        <p className="eyebrow">People · {people.length}</p>
-        <ul className="receipt">
+      <section className="panel">
+        <h2>People ({people.length})</h2>
+        <ul className="people">
           {people.map((p) => (
             <li key={p.id}>
-              <span className="who">{p.name}</span>
-              <span className="what">{p.regular?.name ?? "no regular"}</span>
+              <b>{p.name}</b>
+              <span className="muted">{p.regular?.name ?? "no usual yet"}</span>
               <form action={deactivatePerson}>
                 <input type="hidden" name="personId" value={p.id} />
-                <button className="link">Remove</button>
+                <button className="btn plain">Remove</button>
               </form>
             </li>
           ))}

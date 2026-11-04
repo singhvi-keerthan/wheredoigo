@@ -61,6 +61,8 @@ export function ensureSchema(): Promise<void> {
         updated_at timestamptz not null default now())`;
       await q`alter table coffee_runs add column if not exists order_min int`;
       await q`alter table coffee_day_choice add column if not exists confirmed boolean not null default false`;
+      // Paused = no Slack messages, no tap-ins, no orders until an admin resumes.
+      await q`alter table coffee_settings add column if not exists paused boolean not null default false`;
       await q`create table if not exists coffee_cache (
         key text primary key,
         data jsonb not null,
@@ -87,6 +89,7 @@ interface SettingsRow {
   days: number[];
   payment: string;
   channel_id: string | null;
+  paused: boolean;
 }
 
 export async function getSettings(): Promise<Settings> {
@@ -102,6 +105,9 @@ export async function getSettings(): Promise<Settings> {
     days: r.days,
     payment: r.payment === "Cash" ? "Cash" : "SwiggyPay",
     channelId: r.channel_id ?? process.env.SLACK_CHANNEL_ID ?? null,
+    // DEV_IGNORE_PAUSE lets a local dev server show the running UI against
+    // the shared DB without un-pausing production. Never set it on Vercel.
+    paused: r.paused && !(process.env.NODE_ENV !== "production" && process.env.DEV_IGNORE_PAUSE === "1"),
   };
 }
 

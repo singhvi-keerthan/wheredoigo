@@ -96,4 +96,5 @@ export interface Settings {
   days: number[]; // 0 = Sunday … 6 = Saturday
   payment: "SwiggyPay" | "Cash";
   channelId: string | null;
+  paused: boolean;
 }

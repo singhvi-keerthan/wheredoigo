@@ -21,10 +21,9 @@ export default async function Home() {
     const people = await listPeople();
     return (
       <main className="wrap">
-        <header className="top">
-          <div className="brand">
-            Coffee <em>run</em>
-          </div>
+        <header className="masthead">
+          <p className="wordmark">Coffee run</p>
+          {s.restaurantName && <p className="where">from <b>{s.restaurantName}</b></p>}
         </header>
         <SignIn people={people.map((p) => ({ id: p.id, name: p.name }))} />
         <PoweredBySwiggy />
@@ -45,30 +44,35 @@ export default async function Home() {
   const run = day ? await getRun(day) : null;
   const locked = !!run && ["reviewing", "reviewed", "placing", "placed", "unknown"].includes(run.status);
   const mine = entries.find((e) => e.person.id === person.id) ?? null;
+  const photos: Record<string, string> = {};
+  for (const c of menu?.categories ?? []) for (const i of c.items) if (i.imageUrl) photos[i.id] = i.imageUrl;
 
   return (
     <main className="wrap">
-      <header className="top">
-        <div className="brand">
-          Coffee <em>run</em>
-        </div>
-        <div className="meta">
-          {s.restaurantName ?? "No café picked yet"}
-          <br />
-          {day ? `${dayLabel(day)} · locks ${formatHm(orderMin)}` : "No run days set"}
-
-        </div>
+      <header className="masthead">
+        <p className="wordmark">Coffee run</p>
+        <p className="where">
+          {s.restaurantName ? (
+            <>
+              from <b>{s.restaurantName}</b>
+            </>
+          ) : (
+            "No café picked yet"
+          )}
+        </p>
       </header>
 
-      {menuError && <div className="banner bad">Couldn&apos;t load the menu: {menuError}</div>}
-      {!s.restaurantId && <div className="banner">No café is set up yet. The admin picks one on /admin.</div>}
+      {menuError && <p className="flash bad">The menu didn&apos;t load: {menuError}</p>}
+      {!s.restaurantId && <p className="flash">No café is set up yet. The admin picks one at /admin.</p>}
 
       <Order
         day={day}
         dayName={day ? dayLabel(day) : null}
         lockLabel={formatHm(orderMin)}
         locked={locked}
+        paused={s.paused}
         menu={menu}
+        photos={photos}
         me={{
           id: person.id,
           regular: person.regular,

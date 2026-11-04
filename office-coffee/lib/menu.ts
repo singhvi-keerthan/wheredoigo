@@ -13,6 +13,7 @@ import type { AddonGroup, ItemDetails, Menu, MenuCategory, MenuItem, Option, Set
 
 const MENU_TTL_MIN = 6 * 60;
 const ITEM_TTL_MIN = 12 * 60;
+const ITEM_CACHE_VERSION = 2; // bump when parsing changes so cached items re-parse
 
 type Raw = Record<string, unknown>;
 const str = (v: unknown) => (v === null || v === undefined ? "" : String(v).replace(/\s+/g, " ").trim());
@@ -186,15 +187,22 @@ function v2Groups(v: unknown): VariantGroup[] | null {
   return flat.length ? flat : null;
 }
 
+// Drinks only, add-ons too: optional food upsells ("Best Paired With: Sea
+// Salt Cookie") are dropped. A REQUIRED group keeps every option, so an item
+// can never become unorderable because of this filter.
 function addonGroups(list: Raw[]): AddonGroup[] {
   return list
-    .map((g) => ({
-      id: str(g.groupId ?? g.group_id),
-      label: str(g.groupName ?? g.group_name) || "Add-ons",
-      min: num(g.minAddons),
-      max: g.maxAddons === undefined ? -1 : num(g.maxAddons),
-      options: arr(g.choices).map(toOption).filter((o): o is Option => !!o),
-    }))
+    .map((g) => {
+      const min = num(g.minAddons);
+      const all = arr(g.choices).map(toOption).filter((o): o is Option => !!o);
+      return {
+        id: str(g.groupId ?? g.group_id),
+        label: str(g.groupName ?? g.group_name) || "Add-ons",
+        min,
+        max: g.maxAddons === undefined ? -1 : num(g.maxAddons),
+        options: min > 0 ? all : all.filter((o) => !FOOD_NAME.test(o.name)),
+      };
+    })
     .filter((g) => g.id && g.options.length);
 }
 
@@ -230,7 +238,7 @@ export function parseItemDetails(item: MenuItem, raw: Raw | null): ItemDetails {
 
 export async function getItemDetails(settings: Settings, item: MenuItem): Promise<ItemDetails> {
   if (!item.hasVariants && !item.hasAddons) return parseItemDetails(item, null);
-  const key = `item:${settings.restaurantId}:${item.id}`;
+  const key = `item:v${ITEM_CACHE_VERSION}:${settings.restaurantId}:${item.id}`;
   const hit = await cacheGet<ItemDetails>(key, ITEM_TTL_MIN);
   if (hit) return hit;
   let match: Raw | null = null;

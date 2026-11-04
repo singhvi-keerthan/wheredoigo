@@ -47,6 +47,7 @@ interface Picked {
 // left open across the cutoff must not silently edit the next run instead.
 async function openDay(shown: string | null): Promise<{ day: string } | { error: string }> {
   const s = await getSettings();
+  if (s.paused) return { error: "The coffee run is paused, so there's nothing to tap in to yet." };
   const day = nextRunDay(s.days, (await todayCutoff(s)).orderMin);
   if (!day) return { error: "No run days are set up." };
   if (shown && shown !== day) return { error: "That order just locked. Refresh to change the next one." };
@@ -225,9 +226,20 @@ export async function refreshMenu(): Promise<void> {
   revalidatePath("/admin");
 }
 
+export async function setPaused(paused: boolean): Promise<void> {
+  await requireAdmin();
+  await ensureSchema();
+  await sql()`update coffee_settings set paused = ${paused}, updated_at = now() where id = 1`;
+  // Pausing pulls today's queued Slack messages too.
+  if (paused) await cancelDay(istClock().day, null, undefined, { quiet: true });
+  revalidatePath("/admin");
+  revalidatePath("/");
+}
+
 export async function setUpToday(): Promise<ActionResult> {
   await requireAdmin();
   try {
+    if ((await getSettings()).paused) return { ok: false, error: "The coffee run is paused. Resume it first." };
     await scheduleDay(istClock().day, { force: true });
     revalidatePath("/admin");
     return { ok: true };

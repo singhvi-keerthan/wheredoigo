@@ -1,9 +1,10 @@
 import type { Metadata, Viewport } from "next";
-import { Fraunces, Inter } from "next/font/google";
+import { Bricolage_Grotesque } from "next/font/google";
 import "./globals.css";
 
-const display = Fraunces({ subsets: ["latin"], variable: "--font-display", weight: ["400", "500", "600"], style: ["normal", "italic"] });
-const body = Inter({ subsets: ["latin"], variable: "--font-body" });
+// One family; the width axis does the work (condensed wordmark and drink
+// names, normal body).
+const sans = Bricolage_Grotesque({ subsets: ["latin"], variable: "--font-sans", axes: ["wdth", "opsz"] });
 
 export const metadata: Metadata = {
   title: "Coffee run",
@@ -11,11 +12,11 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-export const viewport: Viewport = { themeColor: "#f6f0e6", width: "device-width", initialScale: 1 };
+export const viewport: Viewport = { themeColor: "#2340b8", width: "device-width", initialScale: 1 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${display.variable} ${body.variable}`}>
+    <html lang="en" className={sans.variable}>
       <body>{children}</body>
     </html>
   );
