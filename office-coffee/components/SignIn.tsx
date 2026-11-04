@@ -11,7 +11,7 @@ export function SignIn({ people }: { people: { id: number; name: string }[] }) {
     <form action={action} className="card">
       <p className="eyebrow">Join the coffee run</p>
       <h1 className="hero-name">Who&apos;s drinking?</h1>
-      <p className="hero-extras">Set your regular once. Change it any day before the order goes in.</p>
+      <p className="hero-extras">Tap in on the days you want coffee. Your usual is pre-picked, so it's one tap.</p>
 
       <div className="field">
         <label htmlFor="code">Office code</label>
