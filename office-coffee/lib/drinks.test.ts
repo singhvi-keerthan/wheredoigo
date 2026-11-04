@@ -40,7 +40,7 @@ describe("daily tap-in", () => {
   });
 });
 
-describe("food add-ons", () => {
+describe("add-ons", () => {
   const item = { id: "190844880", name: "Cappuccino", price: 250, isVeg: true, inStock: true, hasVariants: false, hasAddons: true, description: null, imageUrl: null };
   // Blue Tokai Cappuccino's real add-on groups, 2026-11-04.
   const raw = {
@@ -50,9 +50,9 @@ describe("food add-ons", () => {
       { groupId: "335103901", groupName: "Best Paired With", maxAddons: 2, choices: [{ id: "154136357", name: "Chocolate Chip Sea Salt Cookie", price: 170 }, { id: "154136358", name: "Almond,oats And Choco Chip Cookie", price: 95 }] },
     ],
   };
-  it("drops the optional cookie upsell, keeps the milk choice", () => {
+  it("keeps every add-on the café offers, cookie upsell included", () => {
     const d = parseItemDetails(item, raw);
-    expect(d.addonGroups.map((g) => g.label)).toEqual(["Choice Of Milk"]);
-    expect(d.addonGroups[0].options).toHaveLength(2);
+    expect(d.addonGroups.map((g) => g.label)).toEqual(["Choice Of Milk", "Best Paired With"]);
+    expect(d.addonGroups[1].options.map((o) => o.name)).toContain("Chocolate Chip Sea Salt Cookie");
   });
 });

@@ -13,7 +13,7 @@ import type { AddonGroup, ItemDetails, Menu, MenuCategory, MenuItem, Option, Set
 
 const MENU_TTL_MIN = 6 * 60;
 const ITEM_TTL_MIN = 12 * 60;
-const ITEM_CACHE_VERSION = 2; // bump when parsing changes so cached items re-parse
+const ITEM_CACHE_VERSION = 3; // bump when parsing changes so cached items re-parse
 
 type Raw = Record<string, unknown>;
 const str = (v: unknown) => (v === null || v === undefined ? "" : String(v).replace(/\s+/g, " ").trim());
@@ -187,22 +187,18 @@ function v2Groups(v: unknown): VariantGroup[] | null {
   return flat.length ? flat : null;
 }
 
-// Drinks only, add-ons too: optional food upsells ("Best Paired With: Sea
-// Salt Cookie") are dropped. A REQUIRED group keeps every option, so an item
-// can never become unorderable because of this filter.
+// Add-ons are shown exactly as the café offers them, food upsells included
+// (Keerthan, 2026-11-04): drinks-only applies to the menu list, not to what
+// a drink comes with.
 function addonGroups(list: Raw[]): AddonGroup[] {
   return list
-    .map((g) => {
-      const min = num(g.minAddons);
-      const all = arr(g.choices).map(toOption).filter((o): o is Option => !!o);
-      return {
-        id: str(g.groupId ?? g.group_id),
-        label: str(g.groupName ?? g.group_name) || "Add-ons",
-        min,
-        max: g.maxAddons === undefined ? -1 : num(g.maxAddons),
-        options: min > 0 ? all : all.filter((o) => !FOOD_NAME.test(o.name)),
-      };
-    })
+    .map((g) => ({
+      id: str(g.groupId ?? g.group_id),
+      label: str(g.groupName ?? g.group_name) || "Add-ons",
+      min: num(g.minAddons),
+      max: g.maxAddons === undefined ? -1 : num(g.maxAddons),
+      options: arr(g.choices).map(toOption).filter((o): o is Option => !!o),
+    }))
     .filter((g) => g.id && g.options.length);
 }
 
