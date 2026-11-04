@@ -12,6 +12,8 @@ oauth_config:
   scopes:
     bot:
       - chat:write
+      - channels:read # find #coffee-run's ID
+      - channels:join # join #coffee-run without a manual invite
 settings:
   interactivity:
     is_enabled: true
