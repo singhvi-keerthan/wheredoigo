@@ -48,7 +48,7 @@ export default async function Home() {
   for (const c of menu?.categories ?? []) for (const i of c.items) if (i.imageUrl) photos[i.id] = i.imageUrl;
 
   return (
-    <main className="wrap">
+    <main className="wrap wide">
       <header className="masthead">
         <p className="wordmark">Coffee run</p>
         <p className="where">

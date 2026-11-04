@@ -98,7 +98,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .docket h2 { margin: 0 0 8px; font-size: 18px; font-weight: 700; font-stretch: 85%; }
 .docket h2 span { color: var(--blue-ink); font-weight: 500; }
 .docket ul { list-style: none; margin: 0; padding: 0; }
-.docket li { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; padding: 9px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.16); font-size: 15px; }
+.docket li { display: grid; grid-template-columns: auto 1fr; gap: 10px; padding: 9px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.16); font-size: 15px; }
 .docket .who { font-weight: 600; }
 .docket .what { color: var(--blue-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .docket .me .who::after { content: " (you)"; font-weight: 400; color: var(--blue-ink); }
@@ -122,7 +122,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .chips button { flex: none; border: 1px solid var(--rule); background: #fff; border-radius: 999px; padding: 6px 12px; font-size: 14px; cursor: pointer; white-space: nowrap; }
 .chips button.on { background: var(--blue); border-color: var(--blue); color: #fff; }
 .cat { margin: 18px 0 2px; font-size: 14px; font-weight: 700; color: var(--ink-2); }
-.item { display: grid; grid-template-columns: 56px 1fr auto; gap: 12px; align-items: center; width: 100%; padding: 11px 0; border: 0; border-bottom: 1px solid var(--rule); background: none; text-align: left; cursor: pointer; }
+.item { display: grid; grid-template-columns: 56px 1fr; gap: 12px; align-items: center; width: 100%; padding: 11px 0; border: 0; border-bottom: 1px solid var(--rule); background: none; text-align: left; cursor: pointer; }
 .item:disabled { opacity: 0.4; cursor: default; }
 .item img, .item .ph { width: 56px; height: 56px; border-radius: 4px; object-fit: cover; background: #ece9e2; }
 .item .t { min-width: 0; }
@@ -175,4 +175,42 @@ button, input, select, textarea { font: inherit; color: inherit; }
 @media (prefers-reduced-motion: reduce) {
   .sheet, .scrim, .stamp.fresh { animation: none; }
   .drink img { transition: none; }
+}
+
+/* Wide screens: the ticket holds the left column; the café's drinks fill the
+   rest as a menu board. Phones keep the single column and the menu sheet. */
+.board { display: none; }
+@media (min-width: 960px) {
+  .wrap.wide { max-width: 1180px; padding: 32px 32px 80px; }
+  .wrap.wide .masthead { margin-bottom: 28px; }
+  .wrap.wide .wordmark { font-size: 44px; }
+  .layout { display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: 48px; align-items: start; }
+  .col-ticket { position: sticky; top: 28px; }
+  .wrap.wide .drink { grid-template-columns: 96px 1fr; }
+  .wrap.wide .drink img { width: 96px; height: 96px; }
+  .wrap.wide .drink-name, .wrap.wide .ask { font-size: 36px; }
+
+  .board { display: block; min-width: 0; }
+  .board-head { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; }
+  .board-head h2 { margin: 0; font-size: 26px; font-weight: 700; font-stretch: 85%; }
+  .board-head p { margin: 0; color: var(--blue-ink); font-size: 15px; }
+  .board .chips button { background: transparent; border-color: rgba(255, 255, 255, 0.3); color: #fff; }
+  .board .chips button.on { background: #fff; border-color: #fff; color: var(--blue); }
+  .board-cat { margin-top: 26px; }
+  .board-cat h3 { margin: 0 0 12px; font-size: 15px; font-weight: 600; color: var(--blue-ink); }
+  .board-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 20px 18px; }
+  .tile { display: grid; gap: 8px; padding: 0; border: 0; background: none; color: #fff; text-align: left; cursor: pointer; }
+  .tile img, .tile .ph { width: 100%; aspect-ratio: 1; border-radius: 6px; object-fit: cover; background: var(--blue-deep); transition: transform 160ms ease; }
+  .tile:hover img { transform: translateY(-3px); }
+  .tile:disabled { opacity: 0.4; cursor: default; }
+  .tile:disabled:hover img { transform: none; }
+  .tile-name { display: flex; gap: 6px; align-items: baseline; font-weight: 600; font-size: 15px; line-height: 1.25; }
+  .tile-name .veg { position: relative; top: 1px; background: var(--paper); }
+  .tile-sub { color: var(--blue-ink); font-size: 13px; }
+
+  /* Sheets become a centred dialog on desktop. */
+  .sheet { top: 7vh; bottom: auto; max-height: 86vh; border-radius: 10px; }
+}
+@media (min-width: 960px) and (prefers-reduced-motion: reduce) {
+  .tile img { transition: none; }
 }

@@ -3,11 +3,12 @@ import { AdminSignIn, CafeSearch, TodayButtons } from "@/components/Admin";
 import { PoweredBySwiggy } from "@/components/PoweredBySwiggy";
 import { isAdmin } from "@/lib/auth";
 import { getSettings } from "@/lib/db";
-import { listPeople } from "@/lib/people";
-import { getRun } from "@/lib/run";
+import { dayEntries, listPeople } from "@/lib/people";
+import { describeChoice } from "@/lib/cart";
+import { getRun, todayCutoff } from "@/lib/run";
 import { approvers } from "@/lib/slack";
 import { humanError, read, tokenStatus } from "@/lib/swiggy";
-import { istClock } from "@/lib/time";
+import { dayLabel, istClock, nextRunDay } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +30,15 @@ export default async function Admin() {
   const s = await getSettings();
   const today = istClock().day;
   const [tok, run, people] = await Promise.all([tokenStatus(), getRun(today), listPeople()]);
+
+  // Prices live here, not on the order page. Unit prices are menu estimates;
+  // Swiggy's cart total (delivery, taxes, offers) is on the Slack review card.
+  const orderDay = nextRunDay(s.days, (await todayCutoff(s)).orderMin);
+  const entries = orderDay ? await dayEntries(orderDay) : [];
+  const going = entries.filter((e) => e.in && e.effective);
+  const waiting = entries.filter((e) => !e.in);
+  const rupees = (n: number) => `₹${Math.round(n)}`;
+  const estTotal = going.reduce((sum, e) => sum + (e.effective?.unitPrice ?? 0), 0);
 
   let addresses: { id: string; label: string; line: string }[] = [];
   let addressError: string | null = null;
@@ -83,6 +93,30 @@ export default async function Admin() {
           ))}
         </dl>
         {!s.paused && <TodayButtons />}
+      </section>
+
+      <section className="panel">
+        <h2>{orderDay ? `${dayLabel(orderDay)}'s order` : "Next order"}</h2>
+        {going.length === 0 ? (
+          <p className="muted" style={{ margin: 0 }}>{s.paused ? "Paused, so nobody can tap in yet." : "Nobody has tapped in yet."}</p>
+        ) : (
+          <>
+            <ul className="people">
+              {going.map((e) => (
+                <li key={e.person.id}>
+                  <b>{e.person.name}</b>
+                  <span className="muted">{describeChoice(e.effective!)}</span>
+                  <span className="price">{rupees(e.effective!.unitPrice)}</span>
+                </li>
+              ))}
+            </ul>
+            <p style={{ display: "flex", justifyContent: "space-between", margin: "10px 0 0", fontWeight: 600 }}>
+              <span>Drinks, before delivery and taxes</span>
+              <span className="price">about {rupees(estTotal)}</span>
+            </p>
+          </>
+        )}
+        {waiting.length > 0 && <p className="muted" style={{ margin: "10px 0 0", fontSize: 14 }}>Not in yet: {waiting.map((e) => e.person.name).join(", ")}</p>}
       </section>
 
       <section className="panel">

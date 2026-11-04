@@ -21,7 +21,8 @@ interface Someone {
   in: boolean;
 }
 
-const rupees = (n: number) => `₹${Math.round(n)}`;
+// Prices are deliberately not shown to people (Keerthan, 2026-11-04); the
+// approver sees them on /admin and in the Slack review card.
 // "Brewed Coffee · Hot Coffee" → "Hot Coffee": the full name only matters to
 // the drinks filter, the short one reads better.
 const shortCat = (t: string) => t.split(" · ").pop() ?? t;
@@ -62,10 +63,15 @@ export function Order(props: {
 
   const inList = everyone.filter((e) => e.in && e.effective);
   const notIn = everyone.filter((e) => !e.in);
-  const estTotal = inList.reduce((s, e) => s + (e.effective?.unitPrice ?? 0), 0);
+
+  // On a wide screen the drinks themselves fill the page: pick straight from
+  // the board instead of opening the menu sheet.
+  const boardScope: Scope = canEditToday ? "today" : "regular";
 
   return (
     <>
+      <div className="layout">
+      <div className="col-ticket">
       {flash && <p className={`flash ${flash.ok ? "" : "bad"}`} role="status">{flash.text}</p>}
 
       <section className="ticket" aria-live="polite">
@@ -104,8 +110,6 @@ export function Order(props: {
               <p className="drink-extras">
                 {extrasOf(drink) || "As it comes"}
                 {drink.note ? `, “${drink.note}”` : ""}
-                {", "}
-                <span className="price">{rupees(drink.unitPrice)}</span>
               </p>
             </div>
           </div>
@@ -188,19 +192,24 @@ export function Order(props: {
                   <li key={e.id} className={e.id === me.id ? "me" : ""}>
                     <span className="who">{e.name}</span>
                     <span className="what">{e.effective!.name}</span>
-                    <span className="price">{rupees(e.effective!.unitPrice)}</span>
                   </li>
                 ))}
               </ul>
-              <div className="sum">
-                <span>Before delivery and taxes</span>
-                <span className="price">about {rupees(estTotal)}</span>
-              </div>
             </>
           )}
           {notIn.length > 0 && <p className="waiting">Not in yet: {notIn.map((e) => e.name).join(", ")}</p>}
         </section>
       )}
+      </div>
+
+      {menu && (
+        <MenuBoard
+          menu={menu}
+          hint={boardScope === "today" ? `Tap a drink to have it ${when}.` : "Tap a drink to make it your usual."}
+          onPick={(it) => setItem({ scope: boardScope, item: it })}
+        />
+      )}
+      </div>
 
       {sheet && menu && !item && (
         <MenuSheet
@@ -227,6 +236,48 @@ export function Order(props: {
         />
       )}
     </>
+  );
+}
+
+// The desktop menu board: the café's drinks as photos on the blue, no card
+// boxes. Hidden on phones, where the menu opens as a sheet instead.
+function MenuBoard({ menu, hint, onPick }: { menu: Menu; hint: string; onPick: (i: MenuItem) => void }) {
+  const [cat, setCat] = useState<string | null>(null);
+  const shown = menu.categories.filter((c) => !cat || c.title === cat);
+  return (
+    <section className="board" aria-label={`Drinks at ${menu.restaurantName}`}>
+      <div className="board-head">
+        <h2>Drinks at {menu.restaurantName}</h2>
+        <p>{hint}</p>
+      </div>
+      <div className="chips">
+        <button className={!cat ? "on" : ""} onClick={() => setCat(null)}>
+          All
+        </button>
+        {menu.categories.map((c) => (
+          <button key={c.title} className={cat === c.title ? "on" : ""} onClick={() => setCat(c.title)}>
+            {shortCat(c.title)}
+          </button>
+        ))}
+      </div>
+      {shown.map((c) => (
+        <div key={c.title} className="board-cat">
+          <h3>{shortCat(c.title)}</h3>
+          <div className="board-grid">
+            {c.items.map((i) => (
+              <button key={`${c.title}-${i.id}`} className="tile" disabled={!i.inStock} onClick={() => onPick(i)}>
+                {i.imageUrl ? <img src={i.imageUrl} alt="" loading="lazy" /> : <span className="ph" />}
+                <span className="tile-name">
+                  <span className={`veg ${i.isVeg ? "" : "non"}`} aria-label={i.isVeg ? "Veg" : "Non-veg"} />
+                  {i.name}
+                </span>
+                {!i.inStock && <span className="tile-sub">Out of stock</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </section>
   );
 }
 
@@ -279,7 +330,6 @@ function MenuSheet({ menu, title, onClose, onPick }: { menu: Menu; title: string
                     </span>
                     <span className="d">{i.inStock ? i.description ?? (i.hasVariants || i.hasAddons ? "Customisable" : "") : "Out of stock"}</span>
                   </span>
-                  <span className="price">{rupees(i.price)}</span>
                 </button>
               ))}
             </div>
@@ -343,12 +393,6 @@ function ItemSheet(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item.id]);
 
-  const price = details
-    ? details.basePrice +
-      details.variantGroups.reduce((s, g) => s + (g.options.find((o) => o.id === variants[g.id])?.price ?? 0), 0) +
-      details.addonGroups.reduce((s, g) => s + (addons[g.id] ?? []).reduce((t, id) => t + (g.options.find((o) => o.id === id)?.price ?? 0), 0), 0)
-    : item.price;
-
   const toggleAddon = (gid: string, oid: string, max: number) =>
     setAddons((prev) => {
       const cur = prev[gid] ?? [];
@@ -395,7 +439,6 @@ function ItemSheet(props: {
                 {g.options.map((o) => (
                   <button key={o.id} className={`opt ${variants[g.id] === o.id ? "on" : ""}`} disabled={!o.inStock} onClick={() => setVariants((p) => ({ ...p, [g.id]: o.id }))}>
                     {o.name}
-                    {o.price > 0 && <small>+{rupees(o.price)}</small>}
                   </button>
                 ))}
               </div>
@@ -411,7 +454,6 @@ function ItemSheet(props: {
                 {g.options.map((o) => (
                   <button key={o.id} className={`opt ${(addons[g.id] ?? []).includes(o.id) ? "on" : ""}`} disabled={!o.inStock} onClick={() => toggleAddon(g.id, o.id, g.max)}>
                     {o.name}
-                    {o.price > 0 && <small>+{rupees(o.price)}</small>}
                   </button>
                 ))}
               </div>
@@ -432,11 +474,11 @@ function ItemSheet(props: {
             <>
               {scope === "today" && canToday && (
                 <button className="btn go" disabled={pending} onClick={() => save("today")}>
-                  {pending ? "Saving…" : `Tap in with this, ${rupees(price)}`}
+                  {pending ? "Saving…" : "Tap in with this"}
                 </button>
               )}
               <button className={scope === "regular" ? "btn go" : "btn"} disabled={pending} onClick={() => save("regular")}>
-                {scope === "regular" ? (pending ? "Saving…" : `Make it my usual, ${rupees(price)}`) : "Make it my usual instead"}
+                {scope === "regular" ? (pending ? "Saving…" : "Make it my usual") : "Make it my usual instead"}
               </button>
             </>
           )}
