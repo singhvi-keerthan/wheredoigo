@@ -7,6 +7,7 @@ import type { Choice } from "./types";
 const queries: string[] = [];
 let swiggyCalls: string[] = [];
 let slackFails = false;
+let runRow: Record<string, unknown> | null = null;
 
 const latte: Choice = { itemId: "L", name: "Latte", variantFormat: null, variants: [], addons: [], unitPrice: 300, note: null };
 const settings = { addressId: "A", addressLabel: "Office", restaurantId: "R", restaurantName: "Café", orderTime: "11:30", reminderLeadMin: 10, days: [0, 1, 2, 3, 4, 5, 6], payment: "SwiggyPay", channelId: "C" };
@@ -19,8 +20,11 @@ vi.mock("./db", () => ({
     const q = strings.reduce((acc, s, i) => acc + s + (i < vals.length ? `$${JSON.stringify(vals[i])}` : ""), "");
     queries.push(q);
     if (/set status = 'placing'/.test(q)) {
-      return [{ cart: { lines: [{ key: JSON.stringify(["L", [], []]), quantity: 1 }], toPay: 300, reviewed: { addressId: "A", payment: "SwiggyPay", restaurantId: "R" } } }];
+      // The real WHERE requires cart->>'reviewId' to match the button's.
+      if (!q.includes('$"rid1"')) return [];
+      return [{ cart: { lines: [{ key: JSON.stringify(["L", [], []]), quantity: 1 }], toPay: 300, reviewId: "rid1", reviewed: { addressId: "A", payment: "SwiggyPay", restaurantId: "R" } } }];
     }
+    if (/from coffee_runs where day/.test(q)) return runRow ? [runRow] : [];
     return [];
   },
 }));
@@ -56,7 +60,7 @@ vi.mock("./slack", async (orig) => ({
 }));
 vi.mock("./time", async (orig) => ({ ...(await orig<typeof import("./time")>()), istClock: () => ({ day: "2026-11-04", minutes: 700, weekday: 3 }) }));
 
-const { placeDay } = await import("./run");
+const { placeDay, reviewDay } = await import("./run");
 const { picksHash } = await import("./cart");
 const hash = picksHash([{ personId: 1, personName: "A", choice: latte }]);
 
@@ -67,30 +71,45 @@ describe("placeDay", () => {
     queries.length = 0;
     swiggyCalls = [];
     slackFails = false;
+    runRow = null;
   });
 
   it("places once and records placed", async () => {
-    await placeDay(`2026-11-04|${hash}|300`, "U1", "C", "1.1");
+    await placeDay(`2026-11-04|${hash}|300|rid1`, "U1", "C", "1.1");
     expect(swiggyCalls.filter((c) => c === "place_food_order")).toHaveLength(1);
     expect(statusWrites().some((q) => q.includes('"placed"'))).toBe(true);
   });
 
   it("a Slack failure after a confirmed order never downgrades the run to failed", async () => {
     slackFails = true;
-    await placeDay(`2026-11-04|${hash}|300`, "U1", "C", "1.1");
+    await placeDay(`2026-11-04|${hash}|300|rid1`, "U1", "C", "1.1");
     expect(swiggyCalls.filter((c) => c === "place_food_order")).toHaveLength(1);
     expect(statusWrites().some((q) => q.includes("'failed'") || q.includes('"failed"'))).toBe(false);
     expect(statusWrites().some((q) => q.includes('"placed"'))).toBe(true);
   });
 
   it("refuses an old day's Yes without touching Swiggy", async () => {
-    const why = await placeDay(`2026-11-03|${hash}|300`, "U1", "C", "1.1");
+    const why = await placeDay(`2026-11-03|${hash}|300|rid1`, "U1", "C", "1.1");
     expect(why).toMatch(/old coffee run/);
     expect(swiggyCalls).toEqual([]);
   });
 
   it("a changed total sends it back to review instead of ordering", async () => {
-    await placeDay(`2026-11-04|${hash}|299`, "U1", "C", "1.1");
+    await placeDay(`2026-11-04|${hash}|299|rid1`, "U1", "C", "1.1");
     expect(swiggyCalls).not.toContain("place_food_order");
+  });
+
+  it("a Yes from an older review is dead even with the same picks and total", async () => {
+    const why = await placeDay(`2026-11-04|${hash}|300|old99`, "U1", "C", "1.1");
+    expect(why).toMatch(/already handled or changed/);
+    expect(swiggyCalls).toEqual([]);
+  });
+
+  it("an unknown order can't be rebuilt from the plain Review button", async () => {
+    runRow = { day: "2026-11-04", status: "unknown", order_min: 690, error: "timed out", scheduled_ids: [] };
+    const why = await reviewDay("2026-11-04", "C", "1.1");
+    expect(why).toMatch(/Check Swiggy orders first/);
+    expect(swiggyCalls).toEqual([]);
+    expect(queries.some((q) => /set status = 'reviewing'/.test(q))).toBe(false);
   });
 });

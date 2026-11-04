@@ -7,7 +7,7 @@ import { validateChoice } from "@/lib/cart";
 import { cacheDropPrefix, ensureSchema, getSettings, sql } from "@/lib/db";
 import { findItem, getItemDetails, getMenu } from "@/lib/menu";
 import { getPerson, pinDayIfUnset, removePerson, setDay, setRegular, upsertPerson } from "@/lib/people";
-import { cancelDay, getRun, rescheduleToday, scheduleDay } from "@/lib/run";
+import { cancelDay, getRun, rescheduleToday, scheduleDay, todayCutoff } from "@/lib/run";
 import { humanError, read } from "@/lib/swiggy";
 import { istClock, isRunDay, nextRunDay, parseHm } from "@/lib/time";
 
@@ -47,7 +47,7 @@ interface Picked {
 // left open across the cutoff must not silently edit the next run instead.
 async function openDay(shown: string | null): Promise<{ day: string } | { error: string }> {
   const s = await getSettings();
-  const day = nextRunDay(s.days, parseHm(s.orderTime));
+  const day = nextRunDay(s.days, (await todayCutoff(s)).orderMin);
   if (!day) return { error: "No run days are set up." };
   if (shown && shown !== day) return { error: "That order just locked. Refresh to change the next one." };
   const run = await getRun(day);
@@ -62,10 +62,10 @@ async function openDay(shown: string | null): Promise<{ day: string } | { error:
 async function protectLockedToday(personId: number): Promise<void> {
   const s = await getSettings();
   const clock = istClock();
-  if (!isRunDay(s.days, clock.day)) return;
+  const { orderMin, active } = await todayCutoff(s);
+  if (!isRunDay(s.days, clock.day) && !active) return; // a forced run counts
+  if (clock.minutes < orderMin) return;
   const run = await getRun(clock.day);
-  const cutoff = run?.order_min ?? parseHm(s.orderTime);
-  if (clock.minutes < cutoff) return;
   if (run && ["placed", "cancelled"].includes(run.status)) return;
   const person = await getPerson(personId);
   await pinDayIfUnset(personId, clock.day, person?.regular ?? null);

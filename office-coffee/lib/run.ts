@@ -59,11 +59,13 @@ export interface CartSummary {
   eta: string | null;
   replaced: string[];
   reviewed?: ReviewedSettings;
+  reviewId?: string; // Yes carries it; a newer review makes older Yes buttons dead
 }
 
 interface ScheduledMsg {
   kind: "reminder" | "lock";
   id: string | null; // null = posted immediately
+  channel?: string; // where it was scheduled; settings may change later
   postAt: number;
 }
 
@@ -91,6 +93,15 @@ export async function getRun(day: string): Promise<RunRow | null> {
   const rows = (await sql()`select day::text as day, status, channel_id, scheduled_ids, message_ts, picks,
       picks_hash, cart, order_result, error, order_min from coffee_runs where day = ${day}`) as RunRow[];
   return rows[0] ?? null;
+}
+
+// Today's cutoff as Slack knows it: the saved run snapshot wins over current
+// settings, so changing the time after scheduling can't let the site and
+// Slack disagree. `active` = today has a live run (incl. a forced one).
+export async function todayCutoff(s: Settings): Promise<{ orderMin: number; active: boolean }> {
+  const run = await getRun(today());
+  const active = !!run && run.status !== "cancelled";
+  return { orderMin: active && run!.order_min !== null ? run!.order_min : parseHm(s.orderTime), active };
 }
 
 async function recoverStale(day: string): Promise<void> {
@@ -166,7 +177,7 @@ export async function scheduleDay(day: string, opts: { force?: boolean } = {}): 
         section(`☕ *Coffee run in ${s.reminderLeadMin} min* from *${restaurant}*.\nYour regular goes in unless you change it or skip today.`),
         actions(button("Change today's order", "open_site", day, undefined, siteUrl() || undefined)),
       ]);
-      await record({ kind: "reminder", id: r.scheduledId, postAt: remindAt }, null);
+      await record({ kind: "reminder", id: r.scheduledId, postAt: remindAt, channel: s.channelId! }, null);
     }
 
     if (!done.has("lock")) {
@@ -175,7 +186,7 @@ export async function scheduleDay(day: string, opts: { force?: boolean } = {}): 
         context(`${who.length ? mention(who) : "Approver"}: review the cart, then say yes or no.`),
         actions(button("🛒 Review cart", "review", day, "primary"), button("No coffee today", "cancel", day, "danger")),
       ]);
-      await record({ kind: "lock", id: r.scheduledId, postAt: orderAt }, r.ts);
+      await record({ kind: "lock", id: r.scheduledId, postAt: orderAt, channel: s.channelId! }, r.ts);
     }
 
     await sql()`update coffee_runs set status = 'scheduled', updated_at = now() where day = ${day} and status = 'scheduling'`;
@@ -274,7 +285,8 @@ export function chunkLines(lines: string[], max = 2800): string[] {
   const out: string[] = [];
   let cur = "";
   for (const l of lines) {
-    const line = l.slice(0, max);
+    if (l.length > max) throw new Error("A line is too long to show in Slack");
+    const line = l;
     if (cur && cur.length + 1 + line.length > max) {
       out.push(cur);
       cur = line;
@@ -286,8 +298,14 @@ export function chunkLines(lines: string[], max = 2800): string[] {
 
 function reviewBlocks(s: Settings, day: string, picks: PersonPick[], cart: CartSummary, hash: string, problemsIn: string[], stale: string[], note: string | null): Json[] {
   const problems = [...problemsIn];
-  const people = chunkLines(picks.map((p) => `• *${esc(p.personName)}*: ${esc(describeChoice(p.choice))}${p.choice.note ? ` _“${esc(p.choice.note)}”_` : ""}`));
-  const swiggyLines = chunkLines(cart.lines.map((l) => `${l.quantity}× ${esc(l.name)}  ${rupees(l.price)}`));
+  let people: string[] = [];
+  let swiggyLines: string[] = [];
+  try {
+    people = chunkLines(picks.map((p) => `• *${esc(p.personName)}*: ${esc(describeChoice(p.choice))}${p.choice.note ? ` _“${esc(p.choice.note)}”_` : ""}`));
+    swiggyLines = chunkLines(cart.lines.map((l) => `${l.quantity}× ${esc(l.name)}  ${rupees(l.price)}`));
+  } catch {
+    problems.push("Something in this cart is too long to show in Slack. Order it in the Swiggy app.");
+  }
   const bill = [`Items ${rupees(cart.itemTotal)}`, `Delivery ${cart.delivery === 0 ? "free" : rupees(cart.delivery)}`, `Taxes & charges ${rupees(cart.taxes)}`].join(" · ");
   const pay = s.payment === "Cash" ? "cash on delivery" : "Swiggy Money";
 
@@ -312,7 +330,7 @@ function reviewBlocks(s: Settings, day: string, picks: PersonPick[], cart: CartS
   } else {
     blocks.push(
       actions(
-        button(`✅ Yes, order ${rupees(cart.toPay)}`, "place", `${day}|${hash}|${cart.toPay}`, "primary"),
+        button(`✅ Yes, order ${rupees(cart.toPay)}`, "place", `${day}|${hash}|${cart.toPay}|${cart.reviewId ?? ""}`, "primary"),
         button("🔄 Rebuild cart", "review", day),
         button("No", "cancel", day, "danger")
       )
@@ -322,16 +340,22 @@ function reviewBlocks(s: Settings, day: string, picks: PersonPick[], cart: CartS
 }
 
 // Returns a message for the tapper when it can't act, or null.
-export async function reviewDay(day: string, channel: string, ts: string, note: string | null = null): Promise<string | null> {
+export async function reviewDay(day: string, channel: string, ts: string, note: string | null = null, opts: { afterUnknown?: boolean } = {}): Promise<string | null> {
   if (day !== today()) return "That's an old coffee run; only today's can be reviewed.";
   await recoverStale(day);
   const run = await getRun(day);
   if (!run) return "Today isn't set up.";
+  if (run.status === "unknown" && !opts.afterUnknown) {
+    // The last attempt may have ordered. Put the warning card back and make
+    // the human check before anything can be rebuilt.
+    await safeUpdate({ channel_id: channel, message_ts: ts }, "Swiggy didn't confirm the last order.", unknownBlocks(day, run.error ?? "the last attempt didn't finish", "someone"));
+    return "The last order attempt may have gone through. Check Swiggy orders first, then use “It didn't go through: rebuild”.";
+  }
   if (run.order_min !== null && istClock().minutes < run.order_min) {
     return `Orders are still open until ${formatHm(run.order_min)}; review after that.`;
   }
   const claimed = (await sql()`update coffee_runs set status = 'reviewing', channel_id = ${channel}, message_ts = ${ts}, error = null, updated_at = now()
-    where day = ${day} and status in ('scheduled', 'reviewed', 'failed', 'empty', 'unknown')
+    where day = ${day} and status in ('scheduled', 'reviewed', 'failed', 'empty', ${opts.afterUnknown ? "unknown" : "scheduled"})
     returning day`) as unknown[];
   if (!claimed.length) return run.status === "reviewing" ? "Already building the cart, one sec." : `Can't review now (${run.status}).`;
   const msg = { channel_id: channel, message_ts: ts };
@@ -365,6 +389,7 @@ export async function reviewDay(day: string, channel: string, ts: string, note: 
     const cart: CartSummary = {
       ...parseCart(live.data, replaced),
       reviewed: { addressId: s.addressId, payment: s.payment, restaurantId: s.restaurantId },
+      reviewId: crypto.randomUUID().slice(0, 8),
     };
     const problems = cartProblems(cart, picks);
     const hash = picksHash(picks);
@@ -386,11 +411,11 @@ export async function reviewDay(day: string, channel: string, ts: string, note: 
 // ── Yes: place the order ─────────────────────────────────────────────────
 
 export async function placeDay(value: string, user: string, channel: string, ts: string): Promise<string | null> {
-  const [day, hash, toPayStr] = value.split("|");
+  const [day, hash, toPayStr, reviewId] = value.split("|");
   if (day !== today()) return "That's an old coffee run; it can't be ordered now.";
   await recoverStale(day);
   const claimed = (await sql()`update coffee_runs set status = 'placing', updated_at = now()
-    where day = ${day} and status = 'reviewed' and picks_hash = ${hash}
+    where day = ${day} and status = 'reviewed' and picks_hash = ${hash} and cart->>'reviewId' = ${reviewId ?? ""}
     returning cart`) as { cart: CartSummary }[];
   if (!claimed.length) return "This cart was already handled or changed. Use the latest message.";
   const reviewedCart = claimed[0].cart;
@@ -507,7 +532,7 @@ function unknownBlocks(day: string, why: string, user: string): Json[] {
   return [
     section(`⚠️ *Swiggy didn't confirm the order.* It may or may not have gone through. Check before trying again, so it isn't ordered twice.\n_${esc(why)}_`),
     context(`Tapped by <@${user}>. Check orders in the Swiggy app, or below.`),
-    actions(button("🔎 Check Swiggy orders", "orders", day), button("It didn't go through: rebuild", "review", day, "danger")),
+    actions(button("🔎 Check Swiggy orders", "orders", day), button("It didn't go through: rebuild", "rebuild_unknown", day, "danger")),
   ];
 }
 
@@ -519,6 +544,11 @@ export async function cancelDay(day: string, user: string | null, where?: { chan
   const current = await getRun(day);
   const cancellable = ["scheduled", "reviewed", "failed", "empty", "error_schedule"];
   if (!current || !cancellable.includes(current.status)) return false;
+  if (current.status === "reviewed") {
+    // The coffee is sitting in Keerthan's own Swiggy cart; empty it before the
+    // run reads as cancelled, so a fresh run can't start mid-cleanup.
+    await write("flush_food_cart", {}).catch((e) => console.error("[cancel] flush failed", e));
+  }
   // Conditional on the status just read, so a No that lost the race to a Yes
   // can't undo it.
   const rows = (await sql()`update coffee_runs set status = 'cancelled', updated_at = now()
@@ -528,12 +558,8 @@ export async function cancelDay(day: string, user: string | null, where?: { chan
   if (!r) return false;
   for (const m of r.scheduled_ids ?? []) {
     if (m.id && m.postAt > Date.now() / 1000 + 10) {
-      await slack("chat.deleteScheduledMessage", { channel: r.channel_id, scheduled_message_id: m.id }).catch((e) => console.error("[cancel] delete scheduled failed", e));
+      await slack("chat.deleteScheduledMessage", { channel: m.channel ?? r.channel_id, scheduled_message_id: m.id }).catch((e) => console.error("[cancel] delete scheduled failed", e));
     }
-  }
-  if (current.status === "reviewed") {
-    // The coffee is sitting in Keerthan's own Swiggy cart; don't leave it there.
-    await write("flush_food_cart", {}).catch((e) => console.error("[cancel] flush failed", e));
   }
   if (!opts.quiet) {
     const target = where ? { channel_id: where.channel, message_ts: where.ts } : r;

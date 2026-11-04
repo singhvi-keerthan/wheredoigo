@@ -18,7 +18,7 @@ interface Payload {
 }
 
 // `orders` reads Keerthan's personal Swiggy order history: approvers only.
-const GATED = new Set(["review", "place", "cancel", "orders"]);
+const GATED = new Set(["review", "rebuild_unknown", "place", "cancel", "orders"]);
 
 export async function POST(req: Request) {
   const raw = await req.text();
@@ -49,8 +49,9 @@ export async function POST(req: Request) {
   after(async () => {
     try {
       switch (action.action_id) {
-        case "review": {
-          const why = await reviewDay(value, channel, ts);
+        case "review":
+        case "rebuild_unknown": {
+          const why = await reviewDay(value, channel, ts, null, { afterUnknown: action.action_id === "rebuild_unknown" });
           if (why) await respondEphemeral(payload.response_url, why);
           return;
         }
