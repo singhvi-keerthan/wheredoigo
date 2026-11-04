@@ -5,9 +5,9 @@ import { currentPersonId } from "@/lib/auth";
 import { getSettings } from "@/lib/db";
 import { getMenu } from "@/lib/menu";
 import { dayEntries, getPerson, listPeople } from "@/lib/people";
-import { getRun, todayCutoff } from "@/lib/run";
+import { getRun, openRunDay } from "@/lib/run";
 import { humanError } from "@/lib/swiggy";
-import { dayLabel, formatHm, nextRunDay } from "@/lib/time";
+import { dayLabel, formatHm, istClock } from "@/lib/time";
 import type { Menu } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -31,8 +31,7 @@ export default async function Home() {
     );
   }
 
-  const { orderMin } = await todayCutoff(s);
-  const day = nextRunDay(s.days, orderMin);
+  const { day, orderMin } = await openRunDay(s);
   let menu: Menu | null = null;
   let menuError: string | null = null;
   try {
@@ -70,6 +69,7 @@ export default async function Home() {
         dayName={day ? dayLabel(day) : null}
         lockLabel={formatHm(orderMin)}
         locked={locked}
+        isToday={day === istClock().day}
         paused={s.paused}
         menu={menu}
         photos={photos}

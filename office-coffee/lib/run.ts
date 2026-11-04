@@ -30,7 +30,7 @@ import { getMenu } from "./menu";
 import { dayEntries, picksFor } from "./people";
 import { actions, approvers, button, context, esc, mention, postAt, section, slack } from "./slack";
 import { humanError, read, tokenStatus, write } from "./swiggy";
-import { formatHm, istClock, istEpochSec, isRunDay, parseHm } from "./time";
+import { formatHm, istClock, istEpochSec, isRunDay, nextRunDay, parseHm } from "./time";
 import type { PersonPick, Settings } from "./types";
 
 type Json = Record<string, unknown>;
@@ -60,6 +60,7 @@ export interface CartSummary {
   replaced: string[];
   reviewed?: ReviewedSettings;
   reviewId?: string; // Yes carries it; a newer review makes older Yes buttons dead
+  addressLine?: string | null; // the full saved address the approver saw
 }
 
 interface ScheduledMsg {
@@ -102,6 +103,19 @@ export async function todayCutoff(s: Settings): Promise<{ orderMin: number; acti
   const run = await getRun(today());
   const active = !!run && run.status !== "cancelled";
   return { orderMin: active && run!.order_min !== null ? run!.order_min : parseHm(s.orderTime), active };
+}
+
+// The day the site takes tap-ins for. Today if today has a live run (normal
+// or forced from /admin) and its cutoff hasn't passed; never a day that was
+// cancelled ("Skip today", pause); otherwise the next scheduled run day.
+export async function openRunDay(s: Settings): Promise<{ day: string | null; orderMin: number }> {
+  const clock = istClock();
+  const run = await getRun(clock.day);
+  const closed = !!run && ["cancelled", "cancelling"].includes(run.status);
+  const orderMin = run && !closed && run.order_min !== null ? run.order_min : parseHm(s.orderTime);
+  if (run && !closed && clock.minutes < orderMin) return { day: clock.day, orderMin };
+  // Skipped today: the next run day after today (orderMin 0 rules today out).
+  return { day: nextRunDay(s.days, closed ? 0 : orderMin), orderMin };
 }
 
 async function recoverStale(day: string): Promise<void> {
@@ -322,7 +336,8 @@ function reviewBlocks(s: Settings, day: string, picks: PersonPick[], cart: CartS
     context("In Swiggy's cart:"),
     ...swiggyLines.map(section),
     section(`${bill}\n*To pay ${rupees(cart.toPay)}*`),
-    context(`To ${esc(s.addressLabel ?? "office")}${cart.eta ? ` · ${esc(cart.eta)}` : ""} · paying with ${pay}`),
+    section(`*Delivering to:* ${esc(cart.addressLine ?? s.addressLabel ?? "office")}`),
+    context(`${cart.eta ? `${esc(cart.eta)}, ` : ""}paying with ${pay}`),
   ];
   if (note) blocks.push(context(`ℹ️ ${esc(note)}`));
   if (stale.length) blocks.push(context(`Left out (their pick isn't on this menu any more): ${esc(stale.join(", ")).slice(0, 2900)}`));
@@ -398,6 +413,7 @@ export async function reviewDay(day: string, channel: string, ts: string, note: 
       ...parseCart(live.data, replaced),
       reviewed: { addressId: s.addressId, payment: s.payment, restaurantId: s.restaurantId },
       reviewId: crypto.randomUUID().slice(0, 8),
+      addressLine: await addressLineFor(s.addressId),
     };
     const problems = cartProblems(cart, picks);
     const hash = picksHash(picks);
@@ -414,6 +430,19 @@ export async function reviewDay(day: string, channel: string, ts: string, note: 
     ]).catch((e) => console.error("[review] slack update failed", e));
   }
   return null;
+}
+
+// The full saved address, so the approver can see where it's going.
+async function addressLineFor(addressId: string | null): Promise<string | null> {
+  if (!addressId) return null;
+  try {
+    const { data } = await read("get_addresses", {});
+    const list = Array.isArray(data?.addresses) ? (data!.addresses as Json[]) : [];
+    const hit = list.find((a) => String(a.id) === addressId);
+    return hit ? String(hit.addressLine ?? "").replace(/^[^:]+:\s*/, "") || null : null;
+  } catch {
+    return null;
+  }
 }
 
 // ── Yes: place the order ─────────────────────────────────────────────────
@@ -454,13 +483,6 @@ export async function placeDay(value: string, user: string, channel: string, ts:
       return null;
     }
 
-    const live = parseCart((await read("get_food_cart", { addressId: s.addressId })).data, []);
-    const sameLines = JSON.stringify(live.lines.map((l) => [l.key, l.quantity]).sort()) === JSON.stringify(reviewedCart.lines.map((l) => [l.key, l.quantity]).sort());
-    if (live.toPay === null || String(live.toPay) !== toPayStr || !sameLines || cartProblems(live, picks).length) {
-      await backToReview(`The Swiggy cart changed (now ${rupees(live.toPay)}). Check it again.`);
-      return null;
-    }
-
     const optsReply = await read("get_payment_options", { addressId: s.addressId });
     const view = ((optsReply.data?.data ?? optsReply.data) ?? {}) as Json;
     let paymentMethod: string;
@@ -475,7 +497,23 @@ export async function placeDay(value: string, user: string, channel: string, ts:
     }
 
     // Cosmetic progress note: a Slack failure here must not block the order.
-    await updateMessage(msg, "Placing the order…", [section(`⏳ Placing the order (${rupees(live.toPay)})…`)]).catch((e) => console.error("[place] progress update failed", e));
+    // It keeps a way out if this function dies mid-order (see unknownBlocks).
+    await updateMessage(msg, "Placing the order…", [
+      section("⏳ Placing the order…"),
+      actions(button("🔎 Check Swiggy orders", "orders", day), button("It didn't go through: rebuild", "rebuild_unknown", day)),
+    ]).catch((e) => console.error("[place] progress update failed", e));
+
+    // Last checks, as close to the order call as possible: still not paused,
+    // and Swiggy's cart (Keerthan's personal one) is exactly what was reviewed.
+    // Swiggy's place call can't be made conditional, so this narrows the
+    // window rather than closing it.
+    if ((await getSettings()).paused) throw new Error("The coffee run was paused. Nothing was ordered.");
+    const live = parseCart((await read("get_food_cart", { addressId: s.addressId })).data, []);
+    const sameLines = JSON.stringify(live.lines.map((l) => [l.key, l.quantity]).sort()) === JSON.stringify(reviewedCart.lines.map((l) => [l.key, l.quantity]).sort());
+    if (live.toPay === null || String(live.toPay) !== toPayStr || !sameLines || cartProblems(live, picks).length) {
+      await backToReview(`The Swiggy cart changed (now ${rupees(live.toPay)}). Check it again.`);
+      return null;
+    }
 
     // ── Past this line an order may exist. Never back to a retryable state. ──
     submitted = true;
@@ -575,7 +613,13 @@ export async function cancelDay(day: string, user: string | null, where?: { chan
   }
   if (!opts.quiet) {
     const target = where ? { channel_id: where.channel, message_ts: where.ts } : r;
-    await updateMessage(target, "No coffee today.", [section(`❌ No coffee today${user ? ` (called by <@${user}>)` : ""}.`)]).catch(() => undefined);
+    const blocks = [section(`❌ No coffee today${user ? ` (called by <@${user}>)` : ""}.`)];
+    // A scheduled lock card has no ts we can edit until someone taps it. If it
+    // has already posted, say so in a new message so "Review cart" isn't left
+    // looking live.
+    const lockPosted = (r.scheduled_ids ?? []).some((m) => m.kind === "lock" && m.postAt <= Date.now() / 1000);
+    if (target.message_ts) await updateMessage(target, "No coffee today.", blocks).catch(() => undefined);
+    else if (lockPosted && r.channel_id) await slack("chat.postMessage", { channel: r.channel_id, text: "No coffee today.", blocks }).catch(() => undefined);
   }
   return true;
 }

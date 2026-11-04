@@ -5,10 +5,10 @@ import { isAdmin } from "@/lib/auth";
 import { getSettings } from "@/lib/db";
 import { dayEntries, listPeople } from "@/lib/people";
 import { describeChoice } from "@/lib/cart";
-import { getRun, todayCutoff } from "@/lib/run";
+import { getRun, openRunDay } from "@/lib/run";
 import { approvers } from "@/lib/slack";
 import { humanError, read, tokenStatus } from "@/lib/swiggy";
-import { dayLabel, istClock, nextRunDay } from "@/lib/time";
+import { dayLabel, istClock } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +33,7 @@ export default async function Admin() {
 
   // Prices live here, not on the order page. Unit prices are menu estimates;
   // Swiggy's cart total (delivery, taxes, offers) is on the Slack review card.
-  const orderDay = nextRunDay(s.days, (await todayCutoff(s)).orderMin);
+  const { day: orderDay } = await openRunDay(s);
   const entries = orderDay ? await dayEntries(orderDay) : [];
   const going = entries.filter((e) => e.in && e.effective);
   const waiting = entries.filter((e) => !e.in);

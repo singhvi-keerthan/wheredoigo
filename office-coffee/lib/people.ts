@@ -49,7 +49,7 @@ export async function setRegular(personId: number, choice: Choice | null): Promi
 // A day row means "I'm in": nobody is ordered for unless they opted in that
 // day (people aren't in the office every day). `choice` is an optional
 // change for that day; null = their regular.
-export type DayAction = { in: true } | { in: true; choice: Choice } | { in: true; useRegular: true } | { out: true };
+export type DayAction = { in: true } | { in: true; choice: Choice } | { in: true; useRegular: true } | { choice: Choice } | { out: true };
 
 export async function setDay(personId: number, day: string, action: DayAction): Promise<void> {
   await ensureSchema();
@@ -57,7 +57,11 @@ export async function setDay(personId: number, day: string, action: DayAction): 
     await sql()`delete from coffee_day_choice where day = ${day} and person_id = ${personId}`;
     return;
   }
-  if ("choice" in action) {
+  if ("choice" in action && !("in" in action)) {
+    // A drink picked ahead of the day: saved, but not tapped in.
+    await sql()`insert into coffee_day_choice (day, person_id, choice, confirmed) values (${day}, ${personId}, ${JSON.stringify(action.choice)}::jsonb, false)
+      on conflict (day, person_id) do update set choice = excluded.choice, updated_at = now()`;
+  } else if ("choice" in action) {
     await sql()`insert into coffee_day_choice (day, person_id, choice, confirmed) values (${day}, ${personId}, ${JSON.stringify(action.choice)}::jsonb, true)
       on conflict (day, person_id) do update set choice = excluded.choice, confirmed = true, skip = false, updated_at = now()`;
   } else if ("useRegular" in action) {

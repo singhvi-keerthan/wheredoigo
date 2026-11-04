@@ -33,13 +33,14 @@ export function Order(props: {
   dayName: string | null;
   lockLabel: string | null;
   locked: boolean;
+  isToday: boolean; // tapping in only opens on the day itself
   paused: boolean;
   menu: Menu | null;
   photos: Record<string, string>;
   me: Me;
   everyone: Someone[];
 }) {
-  const { day, dayName, lockLabel, locked, paused, menu, photos, me, everyone } = props;
+  const { day, dayName, lockLabel, locked, isToday, paused, menu, photos, me, everyone } = props;
   const [sheet, setSheet] = useState<{ scope: Scope } | null>(null);
   const [item, setItem] = useState<{ scope: Scope; item: MenuItem } | null>(null);
   const [flash, setFlash] = useState<{ ok: boolean; text: string } | null>(null);
@@ -123,21 +124,25 @@ export function Order(props: {
         )}
 
         {!paused && drink && !me.in && !locked && (
-          <p className="ask-sub">You&apos;re not on {when}&apos;s order until you tap in.</p>
+          <p className="ask-sub">
+            {isToday
+              ? `You're not on ${when}'s order until you tap in.`
+              : `Tapping in opens ${when} at midnight. You can pick your drink now.`}
+          </p>
         )}
         {paused && drink && <p className="ask-sub">That&apos;s your usual. Tapping in opens when the coffee run starts.</p>}
 
         <div className="perf" aria-hidden />
 
         <div className="actions">
-          {canEditToday && !me.in && drink && (
+          {canEditToday && isToday && !me.in && drink && (
             <button className="btn go" disabled={pending} onClick={() => act(() => setToday("in", day), null, true)}>
               Tap in for {when}
             </button>
           )}
           {canEditToday && !drink && (
             <button className="btn go" onClick={() => setSheet({ scope: "today" })}>
-              Pick a drink and tap in
+              {isToday ? "Pick a drink and tap in" : `Pick a drink for ${when}`}
             </button>
           )}
           {(paused || !canEditToday) && !drink && menu && (
@@ -147,7 +152,7 @@ export function Order(props: {
           )}
           {canEditToday && drink && (
             <button className="btn" onClick={() => setSheet({ scope: "today" })}>
-              {me.in ? "Change drink" : "Something else"}
+              {me.in || !isToday ? "Change drink" : "Something else"}
             </button>
           )}
           {canEditToday && me.in && me.override && me.regular && (
@@ -205,7 +210,7 @@ export function Order(props: {
       {menu && (
         <MenuBoard
           menu={menu}
-          hint={boardScope === "today" ? `Tap a drink to have it ${when}.` : "Tap a drink to make it your usual."}
+          hint={boardScope === "today" ? (isToday ? `Tap a drink to have it ${when}.` : `Tap a drink to pick it for ${when}.`) : "Tap a drink to make it your usual."}
           onPick={(it) => setItem({ scope: boardScope, item: it })}
         />
       )}
@@ -225,6 +230,7 @@ export function Order(props: {
           scope={item.scope}
           when={when}
           canToday={canEditToday}
+          isToday={isToday}
           current={(item.scope === "regular" ? me.regular : drink) ?? null}
           day={day}
           onBack={() => setItem(null)}
@@ -345,12 +351,13 @@ function ItemSheet(props: {
   scope: Scope;
   when: string;
   canToday: boolean;
+  isToday: boolean;
   current: Choice | null;
   day: string | null;
   onBack: () => void;
   onSaved: (text: string) => void;
 }) {
-  const { item, scope, when, canToday, current, day, onBack, onSaved } = props;
+  const { item, scope, when, canToday, isToday, current, day, onBack, onSaved } = props;
   const [details, setDetails] = useState<ItemDetails | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [variants, setVariants] = useState<Record<string, string>>({});
@@ -406,7 +413,7 @@ function ItemSheet(props: {
     start(async () => {
       setError(null);
       const r = await saveChoice(target, { itemId: item.id, variants, addons, note }, day);
-      if (r.ok) onSaved(target === "regular" ? `${item.name} is your usual now. You still tap in each day.` : `You're in for ${when}: ${item.name}.`);
+      if (r.ok) onSaved(target === "regular" ? `${item.name} is your usual now. You still tap in each day.` : isToday ? `You're in for ${when}: ${item.name}.` : `${item.name} for ${when}. Tap in on the day to be on the order.`);
       else setError(r.error);
     });
 
@@ -474,7 +481,7 @@ function ItemSheet(props: {
             <>
               {scope === "today" && canToday && (
                 <button className="btn go" disabled={pending} onClick={() => save("today")}>
-                  {pending ? "Saving…" : "Tap in with this"}
+                  {pending ? "Saving…" : isToday ? "Tap in with this" : `Have this ${when}`}
                 </button>
               )}
               <button className={scope === "regular" ? "btn go" : "btn"} disabled={pending} onClick={() => save("regular")}>

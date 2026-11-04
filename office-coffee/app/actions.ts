@@ -7,9 +7,9 @@ import { validateChoice } from "@/lib/cart";
 import { cacheDropPrefix, ensureSchema, getSettings, sql } from "@/lib/db";
 import { findItem, getItemDetails, getMenu } from "@/lib/menu";
 import { dayEntries as dayEntriesFor, getPerson, pinRegularIntoDay, removePerson, setDay, setRegular, upsertPerson } from "@/lib/people";
-import { cancelDay, getRun, rescheduleToday, scheduleDay, todayCutoff } from "@/lib/run";
+import { cancelDay, getRun, openRunDay, rescheduleToday, scheduleDay, todayCutoff } from "@/lib/run";
 import { humanError, read } from "@/lib/swiggy";
-import { istClock, isRunDay, nextRunDay, parseHm } from "@/lib/time";
+import { istClock, isRunDay, parseHm } from "@/lib/time";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -48,7 +48,7 @@ interface Picked {
 async function openDay(shown: string | null): Promise<{ day: string } | { error: string }> {
   const s = await getSettings();
   if (s.paused) return { error: "The coffee run is paused, so there's nothing to tap in to yet." };
-  const day = nextRunDay(s.days, (await todayCutoff(s)).orderMin);
+  const { day } = await openRunDay(s);
   if (!day) return { error: "No run days are set up." };
   if (shown && shown !== day) return { error: "That order just locked. Refresh to change the next one." };
   const run = await getRun(day);
@@ -90,7 +90,8 @@ export async function saveChoice(scope: "today" | "regular", picked: Picked, sho
     } else {
       const open = await openDay(shownDay);
       if ("error" in open) return { ok: false, error: open.error };
-      await setDay(personId, open.day, { in: true, choice: v.choice });
+      // Picking ahead is fine; only on the day itself does it count as tapping in.
+      await setDay(personId, open.day, open.day === istClock().day ? { in: true, choice: v.choice } : { choice: v.choice });
     }
     revalidatePath("/");
     return { ok: true };
@@ -120,6 +121,9 @@ async function setTodayInner(mode: "in" | "out" | "regular", shownDay: string | 
     const day = (await dayEntriesFor(open.day)).find((e) => e.person.id === personId);
     if (mode === "regular" && !me?.regular) return { ok: false, error: "Pick a regular first." };
     if (mode === "in" && !day?.override && !me?.regular) return { ok: false, error: "Pick a drink first." };
+  }
+  if (mode !== "out" && open.day !== istClock().day) {
+    return { ok: false, error: "Tapping in opens on the day itself, from midnight. You can pick your drink now." };
   }
   await setDay(personId, open.day, mode === "out" ? { out: true } : mode === "regular" ? { in: true, useRegular: true } : { in: true });
   revalidatePath("/");
@@ -162,6 +166,10 @@ export async function saveSchedule(form: FormData): Promise<void> {
   // Keep today's Slack messages on the same clock as the site.
   if (after.orderTime !== before.orderTime || after.reminderLeadMin !== before.reminderLeadMin || after.channelId !== before.channelId) {
     await rescheduleToday();
+  }
+  const todayDay = istClock().day;
+  if (isRunDay(before.days, todayDay) && !isRunDay(after.days, todayDay)) {
+    await cancelDay(todayDay, null); // today is no longer a coffee day
   }
   revalidatePath("/admin");
   revalidatePath("/");
@@ -232,6 +240,14 @@ export async function setPaused(paused: boolean): Promise<void> {
   await sql()`update coffee_settings set paused = ${paused}, updated_at = now() where id = 1`;
   // Pausing pulls today's queued Slack messages too.
   if (paused) await cancelDay(istClock().day, null, undefined, { quiet: true });
+  // Starting again before today's cutoff brings today back (a pause earlier
+  // in the day cancelled it).
+  else {
+    const s = await getSettings();
+    if (isRunDay(s.days, istClock().day) && istClock().minutes < parseHm(s.orderTime)) {
+      await scheduleDay(istClock().day).catch((e) => console.error("[setPaused] reschedule today failed", e));
+    }
+  }
   revalidatePath("/admin");
   revalidatePath("/");
 }
