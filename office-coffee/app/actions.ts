@@ -6,7 +6,7 @@ import { clearPerson, codeMatches, currentPersonId, isAdmin, setAdmin, setPerson
 import { validateChoice } from "@/lib/cart";
 import { cacheDropPrefix, ensureSchema, getSettings, sql } from "@/lib/db";
 import { findItem, getItemDetails, getMenu } from "@/lib/menu";
-import { getPerson, pinDayIfUnset, removePerson, setDay, setRegular, upsertPerson } from "@/lib/people";
+import { dayEntries as dayEntriesFor, getPerson, pinRegularIntoDay, removePerson, setDay, setRegular, upsertPerson } from "@/lib/people";
 import { cancelDay, getRun, rescheduleToday, scheduleDay, todayCutoff } from "@/lib/run";
 import { humanError, read } from "@/lib/swiggy";
 import { istClock, isRunDay, nextRunDay, parseHm } from "@/lib/time";
@@ -58,7 +58,7 @@ async function openDay(shown: string | null): Promise<{ day: string } | { error:
 }
 
 // Changing a regular after today's cutoff must not change today's locked
-// order: pin today's pick to what it was before the change.
+// order: someone who's in on their regular keeps the old one for today.
 async function protectLockedToday(personId: number): Promise<void> {
   const s = await getSettings();
   const clock = istClock();
@@ -68,7 +68,7 @@ async function protectLockedToday(personId: number): Promise<void> {
   const run = await getRun(clock.day);
   if (run && ["placed", "cancelled"].includes(run.status)) return;
   const person = await getPerson(personId);
-  await pinDayIfUnset(personId, clock.day, person?.regular ?? null);
+  await pinRegularIntoDay(personId, clock.day, person?.regular ?? null);
 }
 
 export async function saveChoice(scope: "today" | "regular", picked: Picked, shownDay: string | null): Promise<ActionResult> {
@@ -89,7 +89,7 @@ export async function saveChoice(scope: "today" | "regular", picked: Picked, sho
     } else {
       const open = await openDay(shownDay);
       if ("error" in open) return { ok: false, error: open.error };
-      await setDay(personId, open.day, { choice: v.choice });
+      await setDay(personId, open.day, { in: true, choice: v.choice });
     }
     revalidatePath("/");
     return { ok: true };
@@ -98,12 +98,29 @@ export async function saveChoice(scope: "today" | "regular", picked: Picked, sho
   }
 }
 
-export async function setToday(mode: "skip" | "clear", shownDay: string | null): Promise<ActionResult> {
+// in = "I'm in" (keeps any change already made), out = not today,
+// regular = in, but drop today's change and have the regular.
+export async function setToday(mode: "in" | "out" | "regular", shownDay: string | null): Promise<ActionResult> {
+  try {
+    return await setTodayInner(mode, shownDay);
+  } catch (err) {
+    console.error("[setToday]", err);
+    return { ok: false, error: "Couldn't save that. Try again in a moment." };
+  }
+}
+
+async function setTodayInner(mode: "in" | "out" | "regular", shownDay: string | null): Promise<ActionResult> {
   const personId = await currentPersonId();
   if (!personId) return { ok: false, error: "Sign in first." };
   const open = await openDay(shownDay);
   if ("error" in open) return { ok: false, error: open.error };
-  await setDay(personId, open.day, mode === "skip" ? { skip: true } : { clear: true });
+  if (mode !== "out") {
+    const me = await getPerson(personId);
+    const day = (await dayEntriesFor(open.day)).find((e) => e.person.id === personId);
+    if (mode === "regular" && !me?.regular) return { ok: false, error: "Pick a regular first." };
+    if (mode === "in" && !day?.override && !me?.regular) return { ok: false, error: "Pick a drink first." };
+  }
+  await setDay(personId, open.day, mode === "out" ? { out: true } : mode === "regular" ? { in: true, useRegular: true } : { in: true });
   revalidatePath("/");
   return { ok: true };
 }

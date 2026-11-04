@@ -62,7 +62,7 @@ export async function getMenu(settings: Settings, opts: { force?: boolean } = {}
   const key = `menu:${settings.restaurantId}:${settings.addressId}`;
   if (!opts.force) {
     const hit = await cacheGet<Menu>(key, MENU_TTL_MIN);
-    if (hit) return hit;
+    if (hit) return drinksOnly(hit);
   }
   const categories: MenuCategory[] = [];
   let name = settings.restaurantName ?? "";
@@ -94,7 +94,39 @@ export async function getMenu(settings: Settings, opts: { force?: boolean } = {}
     fetchedAt: new Date().toISOString(),
   };
   await cachePut(key, menu);
-  return menu;
+  return drinksOnly(menu);
+}
+
+// Drinks only, no food. Swiggy has no food/drink flag and category names
+// mix ("Recommended", "Summer Specials", a "Dishes" list holding a Flat
+// White), so each ITEM is judged by its category and its own name. Read
+// off Blue Tokai's live menu 2026-11-04; retail packs, capsules, beans and
+// combos with food are out.
+const FOOD_NAME = /sandwich|cake|cookie|croissant|bagel|toast|bowl|fries|salad|pancake|spaghetti|pasta|mousse|brownie|muffin|bread|wrap|burger|pizza|granola|drops|capsule|\bbags?\b|pack of|\[\d+\s*(g|gm|gms)\]|\(\d+\s*(g|gm|gms)\)|\d+\s*(gm|gms)\b|hamper|gift|\bbox\b|sipper|tumbler|pain au|sourdough/i;
+const NON_DRINK_CATEGORY = /roasted coffee|retail|merch|bakehouse|bakery|\bfood\b|combo|hamper|gift|dessert|snack|breakfast|salad|sandwich|capsule|sachet|beans/i;
+const DRINK_CATEGORY = /coffee|beverage|drink|\btea\b|chai|brew|shake|smoothie|juice|cooler|kombucha|chocolate|frapp|matcha|latte|espresso|mocktail|lemonade/i;
+const DRINK_NAME = /coffee|latte|cappuccino|americano|espresso|mocha|frapp|cold brew|\btea\b|chai|matcha|hot chocolate|shake|smoothie|juice|lemonade|cooler|kombucha|tonic|flat white|cortado|macchiato|tisane|cascara|affogato/i;
+
+export function isDrink(itemName: string, categoryTitle: string): boolean {
+  if (FOOD_NAME.test(itemName)) return false;
+  if (NON_DRINK_CATEGORY.test(categoryTitle)) return false;
+  if (DRINK_CATEGORY.test(categoryTitle)) return true;
+  return DRINK_NAME.test(itemName);
+}
+
+export function drinksOnly(menu: Menu): Menu {
+  const seen = new Set<string>();
+  const categories = menu.categories
+    .map((c) => ({
+      ...c,
+      items: c.items.filter((i) => {
+        if (seen.has(i.id) || !isDrink(i.name, c.title)) return false;
+        seen.add(i.id);
+        return true;
+      }),
+    }))
+    .filter((c) => c.items.length);
+  return { ...menu, categories };
 }
 
 function variantLabel(names: string[], i: number): string {

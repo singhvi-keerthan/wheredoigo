@@ -173,9 +173,9 @@ export async function scheduleDay(day: string, opts: { force?: boolean } = {}): 
 
     const remindAt = istEpochSec(day, remindMin);
     if (!done.has("reminder") && s.reminderLeadMin > 0 && remindAt > Date.now() / 1000 - 60 && remindAt < orderAt) {
-      const r = await postAt(s.channelId!, remindAt, `☕ Coffee run in ${s.reminderLeadMin} min from ${restaurant}. Your regular goes in unless you change it.`, [
-        section(`☕ *Coffee run in ${s.reminderLeadMin} min* from *${restaurant}*.\nYour regular goes in unless you change it or skip today.`),
-        actions(button("Change today's order", "open_site", day, undefined, siteUrl() || undefined)),
+      const r = await postAt(s.channelId!, remindAt, `☕ Coffee run in ${s.reminderLeadMin} min from ${restaurant}. Tap "I'm in" on the site or you won't get one.`, [
+        section(`☕ *Coffee run in ${s.reminderLeadMin} min* from *${restaurant}*.\nOnly people who tap *I'm in* today get coffee. Your usual is pre-picked; change it if you like.`),
+        actions(button("I'm in / change my drink", "open_site", day, "primary", siteUrl() || undefined)),
       ]);
       await record({ kind: "reminder", id: r.scheduledId, postAt: remindAt, channel: s.channelId! }, null);
     }
@@ -373,7 +373,7 @@ export async function reviewDay(day: string, channel: string, ts: string, note: 
     if (!picks.length) {
       await sql()`update coffee_runs set status = 'empty', picks = '[]'::jsonb, updated_at = now() where day = ${day} and status = 'reviewing'`;
       await updateMessage(msg, "Nobody's in for coffee today.", [
-        section("☕ Nobody's in for coffee today, so there's nothing to order."),
+        section("☕ Nobody tapped in for coffee today, so there's nothing to order."),
         ...(stale.length ? [context(`Left out (pick not on this menu): ${esc(stale.join(", "))}`)] : []),
         actions(button("🔄 Check again", "review", day)),
       ]);

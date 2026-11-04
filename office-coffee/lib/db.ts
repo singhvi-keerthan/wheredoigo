@@ -60,6 +60,7 @@ export function ensureSchema(): Promise<void> {
         error text,
         updated_at timestamptz not null default now())`;
       await q`alter table coffee_runs add column if not exists order_min int`;
+      await q`alter table coffee_day_choice add column if not exists confirmed boolean not null default false`;
       await q`create table if not exists coffee_cache (
         key text primary key,
         data jsonb not null,

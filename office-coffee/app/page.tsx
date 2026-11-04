@@ -1,4 +1,3 @@
-import { signOut } from "@/app/actions";
 import { Order } from "@/components/Order";
 import { PoweredBySwiggy } from "@/components/PoweredBySwiggy";
 import { SignIn } from "@/components/SignIn";
@@ -57,12 +56,7 @@ export default async function Home() {
           {s.restaurantName ?? "No café picked yet"}
           <br />
           {day ? `${dayLabel(day)} · locks ${formatHm(orderMin)}` : "No run days set"}
-          <br />
-          <form action={signOut}>
-            <button className="link" type="submit">
-              Not {person.name.split(" ")[0]}?
-            </button>
-          </form>
+
         </div>
       </header>
 
@@ -72,20 +66,21 @@ export default async function Home() {
       <Order
         day={day}
         dayName={day ? dayLabel(day) : null}
+        lockLabel={formatHm(orderMin)}
         locked={locked}
         menu={menu}
         me={{
           id: person.id,
           regular: person.regular,
           override: mine?.override ?? null,
-          skip: mine?.skip ?? false,
+          in: mine?.in ?? false,
         }}
         everyone={entries.map((e) => ({
           id: e.person.id,
           name: e.person.name,
           effective: e.effective,
           changed: !!e.override,
-          skip: e.skip,
+          in: e.in,
         }))}
       />
       <PoweredBySwiggy />

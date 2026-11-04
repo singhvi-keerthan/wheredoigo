@@ -1,7 +1,9 @@
 # Coffee run
 
-The office's daily coffee order on Swiggy. People set a regular from the café's
-real menu and change it for a given day on the website. Slack posts a reminder
+The office's daily coffee order on Swiggy. **Nobody is ordered for unless
+they tap "I'm in" on the website that day** (people aren't in the office every
+day). Each person's usual is pre-picked so tapping in is one tap; changing the
+drink for a day is optional. The menu shows drinks only (lib/menu.ts isDrink). Slack posts a reminder
 before the order time, then a review card with the cart. Nothing is ordered
 until an approver taps **Yes**.
 
@@ -15,7 +17,7 @@ where it reads the Swiggy token that app keeps renewed.
 |---|---|
 | ~09:00–09:59 | Vercel cron `/api/cron/morning` (Hobby crons fire anywhere in their hour). It asks Slack to post the next two messages at exact times, warns if the Swiggy token dies before the order, and warms the menu cache. |
 | 11:20 | Slack: "☕ Coffee run in 10 min" with a link to the site. |
-| until 11:30 | People change today's drink or skip on the site. After 11:30, edits go to the next run. |
+| until 11:30 | People tap "I'm in" (and optionally change their drink) on the site. After 11:30, edits go to the next run. |
 | 11:30 | Slack: "⏰ orders are locked" with **Review cart** / **No coffee today**. |
 | tap Review | Builds the Swiggy cart from everyone's picks and shows who/what/total with **Yes, order ₹X** / Rebuild / No. |
 | tap Yes | Re-checks the picks and the live total haven't changed, then pays with Swiggy Money (or cash) and posts the order + Track. |

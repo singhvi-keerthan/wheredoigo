@@ -11,8 +11,8 @@ export interface Person {
 
 export interface DayEntry {
   person: Person;
-  override: Choice | null;
-  skip: boolean;
+  override: Choice | null; // a change for that day (null = regular)
+  in: boolean; // opted in for that day
   effective: Choice | null; // what will actually be ordered
 }
 
@@ -46,29 +46,47 @@ export async function setRegular(personId: number, choice: Choice | null): Promi
   await sql()`update coffee_people set regular = ${choice ? JSON.stringify(choice) : null}::jsonb where id = ${personId}`;
 }
 
-export async function setDay(personId: number, day: string, value: { choice: Choice } | { skip: true } | { clear: true }): Promise<void> {
+// A day row means "I'm in": nobody is ordered for unless they opted in that
+// day (people aren't in the office every day). `choice` is an optional
+// change for that day; null = their regular.
+export type DayAction = { in: true } | { in: true; choice: Choice } | { in: true; useRegular: true } | { out: true };
+
+export async function setDay(personId: number, day: string, action: DayAction): Promise<void> {
   await ensureSchema();
-  if ("clear" in value) {
+  if ("out" in action) {
     await sql()`delete from coffee_day_choice where day = ${day} and person_id = ${personId}`;
     return;
   }
-  const choice = "choice" in value ? JSON.stringify(value.choice) : null;
-  const skip = "skip" in value;
-  await sql()`insert into coffee_day_choice (day, person_id, choice, skip) values (${day}, ${personId}, ${choice}::jsonb, ${skip})
-    on conflict (day, person_id) do update set choice = excluded.choice, skip = excluded.skip, updated_at = now()`;
+  if ("choice" in action) {
+    await sql()`insert into coffee_day_choice (day, person_id, choice, confirmed) values (${day}, ${personId}, ${JSON.stringify(action.choice)}::jsonb, true)
+      on conflict (day, person_id) do update set choice = excluded.choice, confirmed = true, skip = false, updated_at = now()`;
+  } else if ("useRegular" in action) {
+    await sql()`insert into coffee_day_choice (day, person_id, choice, confirmed) values (${day}, ${personId}, null, true)
+      on conflict (day, person_id) do update set choice = null, confirmed = true, skip = false, updated_at = now()`;
+  } else {
+    await sql()`insert into coffee_day_choice (day, person_id, choice, confirmed) values (${day}, ${personId}, null, true)
+      on conflict (day, person_id) do update set confirmed = true, skip = false, updated_at = now()`;
+  }
 }
 
-// Only if the person has no row for that day yet; null regular → skip.
-export async function pinDayIfUnset(personId: number, day: string, choice: Choice | null): Promise<void> {
+// Someone who's in on their regular changes the regular after cutoff: keep
+// today's order as it was by writing the old regular into today's row.
+export async function pinRegularIntoDay(personId: number, day: string, oldRegular: Choice | null): Promise<void> {
   await ensureSchema();
-  await sql()`insert into coffee_day_choice (day, person_id, choice, skip)
-    values (${day}, ${personId}, ${choice ? JSON.stringify(choice) : null}::jsonb, ${choice === null})
-    on conflict (day, person_id) do nothing`;
+  if (!oldRegular) return;
+  await sql()`update coffee_day_choice set choice = ${JSON.stringify(oldRegular)}::jsonb, updated_at = now()
+    where day = ${day} and person_id = ${personId} and confirmed and choice is null`;
+}
+
+export function effectiveOf(row: { regular: Choice | null; choice: Choice | null; confirmed: boolean; skip: boolean }): Choice | null {
+  if (!row.confirmed || row.skip) return null;
+  return row.choice ?? row.regular;
 }
 
 export async function dayEntries(day: string): Promise<DayEntry[]> {
   await ensureSchema();
-  const rows = (await sql()`select p.id, p.name, p.regular, d.choice, coalesce(d.skip, false) as skip
+  const rows = (await sql()`select p.id, p.name, p.regular, d.choice,
+      coalesce(d.confirmed, false) as confirmed, coalesce(d.skip, false) as skip
     from coffee_people p
     left join coffee_day_choice d on d.person_id = p.id and d.day = ${day}
     where p.active order by lower(p.name)`) as {
@@ -76,13 +94,14 @@ export async function dayEntries(day: string): Promise<DayEntry[]> {
     name: string;
     regular: Choice | null;
     choice: Choice | null;
+    confirmed: boolean;
     skip: boolean;
   }[];
   return rows.map((r) => ({
     person: { id: r.id, name: r.name, regular: r.regular },
     override: r.choice,
-    skip: r.skip,
-    effective: r.skip ? null : r.choice ?? r.regular,
+    in: r.confirmed && !r.skip,
+    effective: effectiveOf(r),
   }));
 }
 

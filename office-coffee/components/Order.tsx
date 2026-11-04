@@ -10,7 +10,7 @@ interface Me {
   id: number;
   regular: Choice | null;
   override: Choice | null;
-  skip: boolean;
+  in: boolean;
 }
 
 interface Someone {
@@ -18,20 +18,21 @@ interface Someone {
   name: string;
   effective: Choice | null;
   changed: boolean;
-  skip: boolean;
+  in: boolean;
 }
 
 const rupees = (n: number) => `₹${Math.round(n)}`;
 const extrasOf = (c: Choice) => [...c.variants, ...c.addons].map((s) => s.name).join(" · ");
 
-export function Order(props: { day: string | null; dayName: string | null; locked: boolean; menu: Menu | null; me: Me; everyone: Someone[] }) {
-  const { day, dayName, locked, menu, me, everyone } = props;
+export function Order(props: { day: string | null; dayName: string | null; lockLabel: string | null; locked: boolean; menu: Menu | null; me: Me; everyone: Someone[] }) {
+  const { day, dayName, lockLabel, locked, menu, me, everyone } = props;
   const [sheet, setSheet] = useState<{ scope: Scope } | null>(null);
   const [item, setItem] = useState<{ scope: Scope; item: MenuItem } | null>(null);
   const [flash, setFlash] = useState<{ ok: boolean; text: string } | null>(null);
   const [pending, start] = useTransition();
 
-  const effective = me.skip ? null : me.override ?? me.regular;
+  // What they'd get if they're in: today's change, else their usual.
+  const drink = me.override ?? me.regular;
   const when = dayName?.toLowerCase() ?? "the next run";
   const canEditToday = !!day && !locked && !!menu;
 
@@ -41,98 +42,120 @@ export function Order(props: { day: string | null; dayName: string | null; locke
       setFlash(r.ok ? { ok: true, text: okText } : { ok: false, text: r.error ?? "Didn't work" });
     });
 
-  const inCount = everyone.filter((e) => e.effective).length;
-  const estTotal = everyone.reduce((s, e) => s + (e.effective?.unitPrice ?? 0), 0);
+  const inList = everyone.filter((e) => e.in && e.effective);
+  const notIn = everyone.filter((e) => !e.in);
+  const estTotal = inList.reduce((s, e) => s + (e.effective?.unitPrice ?? 0), 0);
 
   return (
     <>
       {flash && <div className={`banner ${flash.ok ? "ok" : "bad"}`}>{flash.text}</div>}
       {locked && <div className="banner">{dayName}&apos;s order is with the approver now. Changes count for the next run.</div>}
 
-      <section className="card" aria-live="polite">
+      <section className={`card ${me.in ? "is-in" : ""}`} aria-live="polite">
         <p className="eyebrow">{dayName ? `${dayName}'s coffee` : "Your coffee"}</p>
-        {me.skip ? (
+        {me.in && drink ? (
           <>
-            <span className="chip skip">Skipping {when}</span>
-            <p className="hero-empty">No coffee for you {when}.</p>
-          </>
-        ) : effective ? (
-          <>
-            <span className={`chip ${me.override ? "changed" : ""}`}>{me.override ? `Changed for ${when}` : "Your regular"}</span>
-            <h1 className="hero-name">{effective.name}</h1>
+            <span className="chip in">✓ You&apos;re in</span>
+            <h1 className="hero-name">{drink.name}</h1>
             <p className="hero-extras">
-              {extrasOf(effective) || "As it comes"}
-              {effective.note ? ` · “${effective.note}”` : ""} · <span className="price">{rupees(effective.unitPrice)}</span>
+              {extrasOf(drink) || "As it comes"}
+              {drink.note ? ` · “${drink.note}”` : ""} · <span className="price">{rupees(drink.unitPrice)}</span>
+              {me.override ? ` · changed for ${when}` : ""}
             </p>
           </>
         ) : (
-          <p className="hero-empty">Nothing picked yet. Pick a regular and you&apos;re in every day.</p>
+          <>
+            <span className="chip">Not in yet</span>
+            <h1 className="hero-name">Coffee {when}?</h1>
+            <p className="hero-extras">
+              You&apos;re only on the order if you tap in{lockLabel ? ` before ${lockLabel}` : ""}.
+              {drink ? (
+                <>
+                  {" "}
+                  {me.override ? "Your pick" : "Your usual"}: <b>{drink.name}</b>
+                  {extrasOf(drink) ? ` (${extrasOf(drink)})` : ""}.
+                </>
+              ) : null}
+            </p>
+          </>
         )}
 
-        <div className="row">
-          {!me.regular && !me.override && menu && (
-            <button className="btn primary" onClick={() => setSheet({ scope: "regular" })}>
-              Pick my regular
-            </button>
-          )}
-          {canEditToday && (me.regular || me.override) && (
-            <button className="btn primary" onClick={() => setSheet({ scope: "today" })}>
-              Change for {when}
-            </button>
-          )}
-          {canEditToday && (me.override || me.skip) && me.regular && (
-            <button className="btn" disabled={pending} onClick={() => act(() => setToday("clear", day), "Back to your regular.")}>
-              Back to my regular
-            </button>
-          )}
-          {canEditToday && !me.skip && effective && (
-            <button className="btn quiet" disabled={pending} onClick={() => act(() => setToday("skip", day), `Skipping ${when}. Your regular is back next time.`)}>
-              No coffee {when}
-            </button>
-          )}
-        </div>
+        {canEditToday && (
+          <div className="row">
+            {!me.in && drink && (
+              <button className="btn accent block" disabled={pending} onClick={() => act(() => setToday("in", day), `You're in for ${when}: ${drink.name}.`)}>
+                I&apos;m in · {drink.name}
+              </button>
+            )}
+            {!me.in && !drink && (
+              <button className="btn accent block" onClick={() => setSheet({ scope: "today" })}>
+                Pick a drink and I&apos;m in
+              </button>
+            )}
+            {drink && (
+              <button className="btn" onClick={() => setSheet({ scope: "today" })}>
+                {me.in ? "Change drink" : "Something else"}
+              </button>
+            )}
+            {me.in && me.override && me.regular && (
+              <button className="btn" disabled={pending} onClick={() => act(() => setToday("regular", day), `Back to your usual for ${when}.`)}>
+                Back to my usual
+              </button>
+            )}
+            {me.in && (
+              <button className="btn quiet" disabled={pending} onClick={() => act(() => setToday("out", day), `You're out for ${when}.`)}>
+                I&apos;m out {when}
+              </button>
+            )}
+          </div>
+        )}
       </section>
 
-      {me.regular && (
-        <section className="card regular">
-          <div>
-            <p className="eyebrow" style={{ margin: 0 }}>Your regular</p>
-            <div className="name">{me.regular.name}</div>
-            <div className="sub">{extrasOf(me.regular) || "As it comes"}</div>
-          </div>
-          {menu && (
-            <button className="btn" onClick={() => setSheet({ scope: "regular" })}>
-              Edit
-            </button>
+      <section className="card regular">
+        <div>
+          <p className="eyebrow" style={{ margin: 0 }}>Your usual</p>
+          {me.regular ? (
+            <>
+              <div className="name">{me.regular.name}</div>
+              <div className="sub">{extrasOf(me.regular) || "As it comes"} · pre-picked each day, you still tap in</div>
+            </>
+          ) : (
+            <div className="sub">Set one so tapping in is one tap.</div>
           )}
-        </section>
-      )}
+        </div>
+        {menu && (
+          <button className="btn" onClick={() => setSheet({ scope: "regular" })}>
+            {me.regular ? "Edit" : "Set"}
+          </button>
+        )}
+      </section>
 
       {day && (
         <section className="section">
           <p className="eyebrow">
-            Who&apos;s in {when} · {inCount}
+            In {when} · {inList.length}
           </p>
           <div className="card">
-            {everyone.length === 0 ? (
-              <p className="hero-extras">Nobody yet.</p>
+            {inList.length === 0 ? (
+              <p className="hero-extras">Nobody&apos;s in yet.</p>
             ) : (
               <ul className="receipt">
-                {everyone.map((e) => (
-                  <li key={e.id} className={`${e.id === me.id ? "me" : ""} ${e.effective ? "" : "out"}`}>
+                {inList.map((e) => (
+                  <li key={e.id} className={e.id === me.id ? "me" : ""}>
                     <span className="who">{e.name}</span>
-                    <span className="what">{e.skip ? "skipping" : e.effective ? e.effective.name + (e.changed ? " (changed)" : "") : "no regular"}</span>
-                    {e.effective && <span className="price">{rupees(e.effective.unitPrice)}</span>}
+                    <span className="what">{e.effective!.name + (e.changed ? " (changed)" : "")}</span>
+                    <span className="price">{rupees(e.effective!.unitPrice)}</span>
                   </li>
                 ))}
               </ul>
             )}
-            {inCount > 0 && (
+            {inList.length > 0 && (
               <div className="total">
                 <span>Before delivery &amp; taxes</span>
                 <span className="price">~{rupees(estTotal)}</span>
               </div>
             )}
+            {notIn.length > 0 && <p className="not-in">Not in yet: {notIn.map((e) => e.name).join(", ")}</p>}
           </div>
         </section>
       )}
@@ -140,7 +163,7 @@ export function Order(props: { day: string | null; dayName: string | null; locke
       {sheet && menu && !item && (
         <MenuSheet
           menu={menu}
-          title={sheet.scope === "regular" ? "Your regular" : `For ${when}`}
+          title={sheet.scope === "regular" ? "Your usual" : `For ${when}`}
           onClose={() => setSheet(null)}
           onPick={(it) => setItem({ scope: sheet.scope, item: it })}
         />
@@ -151,7 +174,7 @@ export function Order(props: { day: string | null; dayName: string | null; locke
           scope={item.scope}
           when={when}
           canToday={canEditToday}
-          current={(item.scope === "regular" ? me.regular : effective) ?? null}
+          current={(item.scope === "regular" ? me.regular : drink) ?? null}
           day={day}
           onBack={() => setItem(null)}
           onSaved={(text) => {
@@ -297,7 +320,7 @@ function ItemSheet(props: {
     start(async () => {
       setError(null);
       const r = await saveChoice(target, { itemId: item.id, variants, addons, note }, day);
-      if (r.ok) onSaved(target === "regular" ? `${item.name} is your regular now.` : `${item.name} for ${when}. Got it.`);
+      if (r.ok) onSaved(target === "regular" ? `${item.name} is your usual now. You still tap in each day.` : `${item.name} for ${when}. You're in.`);
       else setError(r.error);
     });
 
@@ -369,11 +392,11 @@ function ItemSheet(props: {
             <>
               {scope === "today" && canToday && (
                 <button className="btn accent block" disabled={pending} onClick={() => save("today")}>
-                  {pending ? "Saving…" : `Have this ${when} · ${rupees(price)}`}
+                  {pending ? "Saving…" : `I'm in with this · ${rupees(price)}`}
                 </button>
               )}
               <button className={`btn block ${scope === "regular" ? "accent" : ""}`} disabled={pending} onClick={() => save("regular")}>
-                {scope === "regular" ? (pending ? "Saving…" : `Make it my regular · ${rupees(price)}`) : "Make it my regular instead"}
+                {scope === "regular" ? (pending ? "Saving…" : `Make it my usual · ${rupees(price)}`) : "Save as my usual instead"}
               </button>
             </>
           )}
