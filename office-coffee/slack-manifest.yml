@@ -1,0 +1,21 @@
+# Create the Slack app: api.slack.com/apps → Create New App → From a manifest →
+# paste this → Install to workspace.
+display_information:
+  name: Coffee run
+  description: Daily office coffee order via Swiggy
+  background_color: "#2a1d16"
+features:
+  bot_user:
+    display_name: Coffee run
+    always_online: false
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+settings:
+  interactivity:
+    is_enabled: true
+    request_url: https://office-coffee-nine.vercel.app/api/slack/interact
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
