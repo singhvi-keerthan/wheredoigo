@@ -60,7 +60,7 @@ vi.mock("./slack", async (orig) => ({
 }));
 vi.mock("./time", async (orig) => ({ ...(await orig<typeof import("./time")>()), istClock: () => ({ day: "2026-11-04", minutes: 700, weekday: 3 }) }));
 
-const { placeDay, reviewDay } = await import("./run");
+const { cancelDay, placeDay, reviewDay } = await import("./run");
 const { picksHash } = await import("./cart");
 const hash = picksHash([{ personId: 1, personName: "A", choice: latte }]);
 
@@ -111,5 +111,14 @@ describe("placeDay", () => {
     expect(why).toMatch(/Check Swiggy orders first/);
     expect(swiggyCalls).toEqual([]);
     expect(queries.some((q) => /set status = 'reviewing'/.test(q))).toBe(false);
+  });
+
+  it("a No that loses the race to a Yes never empties the cart", async () => {
+    // getRun says 'reviewed', but the conditional claim finds the row already
+    // moved on (a Yes claimed 'placing'): the fake returns no rows.
+    runRow = { day: "2026-11-04", status: "reviewed", order_min: 690, scheduled_ids: [] };
+    const ok = await cancelDay("2026-11-04", "U1");
+    expect(ok).toBe(false);
+    expect(swiggyCalls).not.toContain("flush_food_cart");
   });
 });

@@ -39,21 +39,27 @@ export function approvers(): string[] {
 
 export const mention = (ids: string[]) => ids.map((id) => `<@${id}>`).join(" ");
 
-// Post now if the moment has passed (or is under a minute away), schedule
-// otherwise. Slack rejects post_at in the past, and the morning cron can fire
-// any time in its hour.
+// Schedule anything still in the future; post now only if the moment has
+// passed, or Slack refuses it as already past. Posting early would announce
+// "orders are locked" while the site still takes orders.
 export async function postAt(channel: string, postAtSec: number, text: string, blocks?: Json[]): Promise<{ scheduledId: string | null; ts: string | null }> {
-  if (postAtSec - Date.now() / 1000 < 60) {
+  const postNow = async () => {
     const r = await slack<{ ts: string }>("chat.postMessage", { channel, text, blocks });
     return { scheduledId: null, ts: r.ts };
+  };
+  if (postAtSec <= Math.floor(Date.now() / 1000) + 2) return postNow();
+  try {
+    const r = await slack<{ scheduled_message_id: string }>("chat.scheduleMessage", { channel, post_at: postAtSec, text, blocks });
+    return { scheduledId: r.scheduled_message_id, ts: null };
+  } catch (err) {
+    if (/time_in_past|time_too_close/.test(String((err as Error).message))) {
+      // Slack's own clock says it's due: wait it out rather than post early.
+      const wait = postAtSec * 1000 - Date.now();
+      if (wait > 0) await new Promise((res) => setTimeout(res, Math.min(wait, 30_000)));
+      return postNow();
+    }
+    throw err;
   }
-  const r = await slack<{ scheduled_message_id: string }>("chat.scheduleMessage", {
-    channel,
-    post_at: postAtSec,
-    text,
-    blocks,
-  });
-  return { scheduledId: r.scheduled_message_id, ts: null };
 }
 
 export async function respondEphemeral(responseUrl: string, text: string): Promise<void> {

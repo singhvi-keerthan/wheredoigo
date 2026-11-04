@@ -107,9 +107,9 @@ export async function todayCutoff(s: Settings): Promise<{ orderMin: number; acti
 async function recoverStale(day: string): Promise<void> {
   await ensureSchema();
   await sql()`update coffee_runs set
-      status = case status when 'placing' then 'unknown' when 'reviewing' then 'failed' else 'error_schedule' end,
+      status = case status when 'placing' then 'unknown' when 'reviewing' then 'failed' when 'cancelling' then 'cancelled' else 'error_schedule' end,
       error = coalesce(error || ' ', '') || '(timed out mid-step)', updated_at = now()
-    where day = ${day} and status in ('placing', 'reviewing', 'scheduling')
+    where day = ${day} and status in ('placing', 'reviewing', 'scheduling', 'cancelling')
       and updated_at < now() - make_interval(mins => ${STALE_MIN})`;
 }
 
@@ -205,6 +205,12 @@ export async function rescheduleToday(): Promise<void> {
   const run = await getRun(day);
   if (!run || run.status !== "scheduled") return;
   if (run.order_min !== null && istClock().minutes >= run.order_min) return; // already locked
+  // Slack can't delete a message scheduled < 60s out, so a reschedule that
+  // close would leave the old lock card queued. Keep today as scheduled; the
+  // site follows today's saved cutoff, so Slack and the site still agree,
+  // and the new time applies from the next run.
+  const lock = (run.scheduled_ids ?? []).find((m) => m.kind === "lock");
+  if (lock && lock.postAt - Date.now() / 1000 < 90) return;
   await cancelDay(day, null, undefined, { quiet: true });
   await scheduleDay(day, { force: true });
 }
@@ -524,7 +530,9 @@ async function safeUpdate(msg: { channel_id: string | null; message_ts: string |
     await updateMessage(msg, text, blocks);
   } catch (err) {
     console.error("[run] chat.update failed", err);
-    if (msg.channel_id) await slack("chat.postMessage", { channel: msg.channel_id, text }).catch((e) => console.error("[run] postMessage failed", e));
+    // A fresh message with the same blocks: the warning and its buttons must
+    // survive (a tap on them carries the new message's ts, so nothing to store).
+    if (msg.channel_id) await slack("chat.postMessage", { channel: msg.channel_id, text, blocks }).catch((e) => console.error("[run] postMessage failed", e));
   }
 }
 
@@ -544,20 +552,21 @@ export async function cancelDay(day: string, user: string | null, where?: { chan
   const current = await getRun(day);
   const cancellable = ["scheduled", "reviewed", "failed", "empty", "error_schedule"];
   if (!current || !cancellable.includes(current.status)) return false;
-  if (current.status === "reviewed") {
-    // The coffee is sitting in Keerthan's own Swiggy cart; empty it before the
-    // run reads as cancelled, so a fresh run can't start mid-cleanup.
-    await write("flush_food_cart", {}).catch((e) => console.error("[cancel] flush failed", e));
-  }
-  // Conditional on the status just read, so a No that lost the race to a Yes
-  // can't undo it.
-  const rows = (await sql()`update coffee_runs set status = 'cancelled', updated_at = now()
+  // Claim the run FIRST (conditional on the status just read), so a No that
+  // lost the race to a Yes never touches the cart. 'cancelling' blocks
+  // review, Yes and rescheduling until the cart is emptied.
+  const rows = (await sql()`update coffee_runs set status = 'cancelling', updated_at = now()
     where day = ${day} and status = ${current.status}
     returning channel_id, scheduled_ids, message_ts`) as { channel_id: string | null; scheduled_ids: ScheduledMsg[]; message_ts: string | null }[];
   const r = rows[0];
   if (!r) return false;
+  if (current.status === "reviewed") {
+    // The coffee is sitting in Keerthan's own Swiggy cart; don't leave it there.
+    await write("flush_food_cart", {}).catch((e) => console.error("[cancel] flush failed", e));
+  }
+  await sql()`update coffee_runs set status = 'cancelled', updated_at = now() where day = ${day} and status = 'cancelling'`;
   for (const m of r.scheduled_ids ?? []) {
-    if (m.id && m.postAt > Date.now() / 1000 + 10) {
+    if (m.id && m.postAt > Date.now() / 1000 + 60) {
       await slack("chat.deleteScheduledMessage", { channel: m.channel ?? r.channel_id, scheduled_message_id: m.id }).catch((e) => console.error("[cancel] delete scheduled failed", e));
     }
   }
