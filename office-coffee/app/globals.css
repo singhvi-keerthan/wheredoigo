@@ -191,21 +191,25 @@ button, input, select, textarea { font: inherit; color: inherit; }
   .wrap.wide .drink-name, .wrap.wide .ask { font-size: 36px; }
 
   .board { display: block; min-width: 0; }
-  .board-head { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; }
-  .board-head h2 { margin: 0; font-size: 26px; font-weight: 700; font-stretch: 85%; }
-  .board-head p { margin: 0; color: var(--blue-ink); font-size: 15px; }
+  /* Heading's cap line sits on the ticket's top edge; the hint reads under it. */
+  .board-head h2 { margin: -4px 0 0; font-size: 28px; line-height: 1; font-weight: 700; font-stretch: 85%; }
+  .board-head p { margin: 6px 0 0; color: var(--blue-ink); font-size: 15px; }
+  /* Chips wrap instead of running off the edge. */
+  .board .chips { flex-wrap: wrap; overflow: visible; padding-top: 14px; }
   .board .chips button { background: transparent; border-color: rgba(255, 255, 255, 0.3); color: #fff; }
   .board .chips button.on { background: #fff; border-color: #fff; color: var(--blue); }
   .board-cat { margin-top: 26px; }
   .board-cat h3 { margin: 0 0 12px; font-size: 15px; font-weight: 600; color: var(--blue-ink); }
   .board-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 20px 18px; }
-  .tile { display: grid; gap: 8px; padding: 0; border: 0; background: none; color: #fff; text-align: left; cursor: pointer; }
+  /* align-content: start keeps every name directly under its photo, whether
+     it runs one line or two (stretch was centring short names in the row). */
+  .tile { display: grid; align-content: start; gap: 10px; padding: 0; border: 0; background: none; color: #fff; text-align: left; cursor: pointer; }
   .tile img, .tile .ph { width: 100%; aspect-ratio: 1; border-radius: 6px; object-fit: cover; background: var(--blue-deep); transition: transform 160ms ease; }
   .tile:hover img { transform: translateY(-3px); }
   .tile:disabled { opacity: 0.4; cursor: default; }
   .tile:disabled:hover img { transform: none; }
-  .tile-name { display: flex; gap: 6px; align-items: baseline; font-weight: 600; font-size: 15px; line-height: 1.25; }
-  .tile-name .veg { position: relative; top: 1px; background: var(--paper); }
+  .tile-name { display: flex; gap: 7px; align-items: flex-start; font-weight: 600; font-size: 15px; line-height: 1.3; }
+  .tile-name .veg { margin-top: 4px; background: var(--paper); }
   .tile-sub { color: var(--blue-ink); font-size: 13px; }
 
   /* Sheets become a centred dialog on desktop. */
