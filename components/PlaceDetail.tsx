@@ -163,7 +163,8 @@ export default function PlaceDetail({ id, onClose }: { id: string | null; onClos
             <div
               onScroll={(e) => {
                 const el = e.currentTarget;
-                setShot(Math.round(el.scrollLeft / el.clientWidth));
+                if (!el.clientWidth) return;
+                setShot(Math.max(0, Math.min(photos.length - 1, Math.round(el.scrollLeft / el.clientWidth))));
               }}
               className="scroll-quiet flex h-full w-full snap-x snap-mandatory overflow-x-auto"
             >

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X, Search, ChevronLeft, ChevronDown, Map as MapIcon, Clock } from "lucide-react";
 import type { DecideQuery } from "@/lib/decide";
@@ -10,6 +10,7 @@ import { useIsSiteOwner } from "@/lib/sync/client";
 import { askOnOpen, setAskOnOpen } from "@/lib/entryPref";
 import { parseFallback } from "@/lib/decide-fallback";
 import { geocodeArea } from "@/lib/places";
+import { useDialogFocus } from "./useDialogFocus";
 import {
   BUDGETS,
   EMPTY_FILTERS,
@@ -231,10 +232,8 @@ export default function LensPanel({
   const isForm = variant === "form";
   // A dialog takes focus when it opens, so the keyboard is in it rather than
   // on the deck it covers.
-  const dialogRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    dialogRef.current?.focus();
-  }, []);
+  // Tab stays inside it, and focus returns to the opener on close.
+  const dialogRef = useDialogFocus<HTMLDivElement>();
   const onDialogKey = (e: React.KeyboardEvent) => {
     if (e.key !== "Escape") return;
     e.preventDefault();
@@ -271,6 +270,9 @@ export default function LensPanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt: text }),
+        // A stalled request must not hold Apply disabled for ever; a timeout
+        // lands in the catch and falls back to the keyword parser.
+        signal: AbortSignal.timeout(15000),
       });
       const data = await res.json();
       q = data.query ?? parseFallback(words);
@@ -280,14 +282,22 @@ export default function LensPanel({
     }
     if (q.area && !q.areaCenter) {
       try {
-        const hit = await geocodeArea(q.area);
+        // Bounded like the ask itself: an unanswered lookup must not hold
+        // "Reading…" and a disabled Apply for ever.
+        const hit = await Promise.race([
+          geocodeArea(q.area),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 8000)),
+        ]);
         if (hit) q = { ...q, area: hit.name, areaCenter: { lat: hit.lat, lng: hit.lng } };
       } catch {
         // The area name still gates by name.
       }
     }
-    setThinking(false);
+    // Ownership first: a superseded ask must not touch the loading state of
+    // the ask that replaced it (Clear all, then a new ask, then the old one
+    // landing would otherwise re-enable Apply mid-read).
     if (mine !== askSeq.current) return;
+    setThinking(false);
     // Merged into the draft as it is NOW — edits made while it was reading
     // stay, except where the ask named the same thing.
     const parsed = q;

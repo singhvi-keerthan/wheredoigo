@@ -25,6 +25,7 @@ import { useCardSwipe, DY_DAMP } from "./useCardSwipe";
 import LensPanel, { SourceSwitch, useLens } from "./LensPanel";
 import PicksSheet from "./PicksSheet";
 import { usePicks, addPick, removePick, clearPicks } from "@/lib/picks";
+import { pushBack } from "@/lib/backStack";
 import { askOnOpen, setAskOnOpen } from "@/lib/entryPref";
 
 const SWIPE_THRESHOLD = 92; // px past which a release commits (horizontal)
@@ -245,6 +246,17 @@ export default function SwipeMode({
   // end of the deck offers them before "Start over".
   const storedPicks = usePicks();
   const [picksOpen, setPicksOpen] = useState(false);
+  // Back closes the sheet on top, not the deck under it (his call, 2026-11-07:
+  // "Just the filters"). Each open sheet holds one Back entry above the deck's;
+  // closing it any other way gives the entry back (lib/backStack.ts).
+  useEffect(() => {
+    if (!lensOpen) return;
+    return pushBack(() => setLensOpen(false));
+  }, [lensOpen]);
+  useEffect(() => {
+    if (!picksOpen) return;
+    return pushBack(() => setPicksOpen(false));
+  }, [picksOpen]);
   // The two doors on opening: "go wild" deals straight away, "I know what I
   // want" opens the filter editor as a form. Shown unless this device said
   // not to ask (lib/entryPref.ts; the map's menu turns it back on). Either way

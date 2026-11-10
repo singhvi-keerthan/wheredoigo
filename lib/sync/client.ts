@@ -14,6 +14,7 @@ import {
   applyRemotePhoto,
   applyRemotePlaces,
   onLocalChange,
+  onPersisted,
   setPhotoBlobUrl,
   snapshotForSync,
   type RemotePlaceRow,
@@ -65,6 +66,9 @@ export interface SyncStatus {
   // said nothing. Surfaced, not silently dropped — /app/recover looks for what
   // is left of them.
   lost: number;
+  // Own photos on this device that are not in Blob yet. "Synced" covers the
+  // records; until this is 0 a photo's only copy is still on this device.
+  photosPending: number;
 }
 
 // ---- status (subscribable) -------------------------------------------------
@@ -75,6 +79,7 @@ let status: SyncStatus = {
   error: null,
   pending: 0,
   lost: 0,
+  photosPending: 0,
 };
 const statusListeners = new Set<() => void>();
 function setStatus(patch: Partial<SyncStatus>) {
@@ -100,11 +105,13 @@ function lsGet(key: string): string | null {
     return null;
   }
 }
-function lsSet(key: string, val: string) {
+function lsSet(key: string, val: string): boolean {
   try {
     localStorage.setItem(key, val);
+    return true;
   } catch {
     /* quota / private mode — sync degrades, local data is unaffected */
+    return false;
   }
 }
 function lsDel(key: string) {
@@ -126,8 +133,13 @@ function loadDirty(): Set<string> {
     return new Set<string>();
   }
 }
+// The queue is what tells the next launch which edits never went up. On a full
+// localStorage this write failed silently: the edit survived, its queue entry
+// did not, and it never synced. A failed write is remembered and retried after
+// the next successful place save — the moment the store has just made room.
+let dirtyUnsaved = false;
 function saveDirty() {
-  lsSet(DIRTY_KEY, JSON.stringify([...dirty]));
+  dirtyUnsaved = !lsSet(DIRTY_KEY, JSON.stringify([...dirty]));
 }
 
 // ---- hashing ---------------------------------------------------------------
@@ -316,7 +328,9 @@ async function pull(full = false): Promise<void> {
   const body = (await res.json()) as { places?: RemotePlaceRow[] };
   const rows = body.places ?? [];
   if (!rows.length) return;
-  applyRemotePlaces(rows);
+  // Not past the cursor until the rows are written: a reload before then
+  // would otherwise skip them on every later incremental pull.
+  await applyRemotePlaces(rows);
   let max = cursor ?? "";
   for (const r of rows) if (r.updated_at > max) max = r.updated_at;
   if (max) lsSet(CURSOR_KEY, max);
@@ -355,6 +369,17 @@ async function uploadPhotos(): Promise<void> {
       }
     }
   }
+}
+
+// Own photos with bytes here and no Blob copy anywhere: the ones a cleared
+// browser or a lost phone would take with it.
+function unbackedPhotos(): number {
+  let n = 0;
+  for (const p of snapshotForSync()) {
+    if (p.deletedAt) continue;
+    for (const ph of p.photos) if (ph.source === "mine" && !ph.blobUrl && ph.dataUrl?.startsWith("data:")) n++;
+  }
+  return n;
 }
 
 // Fetch photos that synced in with a blobUrl but have no local bytes; cache to
@@ -412,11 +437,16 @@ export async function sync(): Promise<void> {
     // Photos after, best-effort: a slow or failed photo never blocks records or
     // the status; failures just retry on the next sync.
     try {
+      setStatus({ photosPending: unbackedPhotos() });
       await uploadPhotos();
+      // Straight after uploads: a slow download must not hold back the news
+      // that a photo still has no copy off this device.
+      setStatus({ photosPending: unbackedPhotos() });
       await downloadPhotos();
     } catch {
       /* retry next sync */
     }
+    setStatus({ photosPending: unbackedPhotos() });
   } catch (e) {
     setStatus({ state: "error", error: e instanceof Error ? e.message : "sync failed", pending: dirty.size });
   } finally {
@@ -445,6 +475,10 @@ export function startSync(): void {
   owner = lsGet(OWNER_KEY);
   dirty = loadDirty();
   setStatus({ connected: !!owner, pending: dirty.size, state: owner ? "idle" : "disabled" });
+
+  onPersisted(() => {
+    if (dirtyUnsaved) saveDirty();
+  });
 
   onLocalChange((ids) => {
     if (!owner) return;
@@ -619,5 +653,5 @@ export function disconnect(): void {
   lsDel(PHRASE_KEY);
   lsDel(ACCOUNT_KEY);
   siteOwner = null;
-  setStatus({ connected: false, state: "disabled", pending: 0, lost: 0, error: null, lastSyncedAt: null });
+  setStatus({ connected: false, state: "disabled", pending: 0, lost: 0, photosPending: 0, error: null, lastSyncedAt: null });
 }

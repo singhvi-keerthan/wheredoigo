@@ -572,3 +572,31 @@ body {
     transform: none;
   }
 }
+
+/* The status-bar strip. iOS 27 draws its own progressive blur over the top
+   edge of an installed web app — the grey haze over the clock and the
+   wordmark — and theme-color no longer changes it (iOS 26). The one observed
+   way out is an opaque fixed element at the very top: iOS reads its colour
+   instead of blurring. Exactly status-bar high, so nothing of the app moves.
+   Paper on the map, where it continues the light wash beneath it; the deck's
+   ink in the deck; turning on the same clock as the canvas. Researched with
+   Codex 2026-11-07 (modernwebweekly "iOS27 blur", WebKit LocalFrameView
+   fixedContainerEdges) — an observed WebKit behaviour, not an API. */
+.app-status-surface {
+  display: none;
+}
+@media (display-mode: standalone) {
+  .app-status-surface {
+    display: block;
+    position: fixed;
+    inset: 0 0 auto;
+    height: max(12px, env(safe-area-inset-top, 0px));
+    z-index: 60;
+    pointer-events: none;
+    background-color: #f3f3f0;
+    transition: background-color 0.42s ease 0.12s;
+  }
+  html[data-ground="deck"] .app-status-surface {
+    background-color: var(--deck-bg);
+  }
+}

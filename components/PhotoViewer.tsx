@@ -63,7 +63,7 @@ export default function PhotoViewer({
   }, [onClose]);
 
   if (photos.length === 0) return null;
-  const current = photos[Math.min(index, photos.length - 1)];
+  const current = photos[Math.max(0, Math.min(index, photos.length - 1))];
 
   // Portal to <body> — a `fixed` element still gets scoped to the nearest
   // transformed/filtered ancestor's box instead of the real viewport, and
@@ -73,8 +73,12 @@ export default function PhotoViewer({
       <div
         ref={trackRef}
         onScroll={(e) => {
+          // Clamped both ways: iOS reports a negative scrollLeft while
+          // rubber-banding past the first photo, which made this -1 and
+          // `current` undefined — a crash on render.
           const el = e.currentTarget;
-          setIndex(Math.round(el.scrollLeft / el.clientWidth));
+          if (!el.clientWidth) return;
+          setIndex(Math.max(0, Math.min(photos.length - 1, Math.round(el.scrollLeft / el.clientWidth))));
         }}
         className="scroll-quiet flex h-full w-full snap-x snap-mandatory overflow-x-auto"
       >

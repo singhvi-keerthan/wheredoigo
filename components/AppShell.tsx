@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Image from "next/image";
-import { Search, Plus, Menu, MapPin, TriangleAlert, X, Layers } from "lucide-react";
+import { Search, Plus, Menu, MapPin, TriangleAlert, X, Layers, Map as MapIcon } from "lucide-react";
 import { usePlaces, usePersistError } from "@/lib/store";
 import { displayState, type DisplayState } from "@/lib/types";
 import { cityLabel } from "@/lib/city";
@@ -22,6 +22,7 @@ import SignUpSheet, { type SignUpReason } from "./SignUpSheet";
 import LocationNudge from "./LocationNudge";
 import SwiggyRenewLink from "./SwiggyRenewLink";
 import { useSyncStatus, ownerToken } from "@/lib/sync/client";
+import { pushBack } from "@/lib/backStack";
 import { hasShare, readPendingShare, sharedLink, withoutShare, writePendingShare } from "@/lib/share";
 
 // The app's two ways of looking at the same places. There is no control for
@@ -120,18 +121,14 @@ export default function AppShell() {
   const titleRef = useRef<HTMLHeadingElement>(null);
   const countRef = useRef<HTMLParagraphElement>(null);
   const flick = useRef<{ x: number; t: number } | null>(null);
-  // The gesture's label: names the way through for a few seconds after you
-  // arrive in a mode, and then goes. Not permanent — an instruction that never
-  // leaves stops being read, and this is the only thing left that says the
-  // name is pressable, so it has to stay worth reading.
-  const [tell, setTell] = useState(true);
-  // Desktop's second chance at the gesture. The timed tell fades, and on a
-  // desktop that faded label was the ONLY thing that ever said the name is
-  // pressable — no thumb ever finds a double-tap by accident with a mouse. A
-  // cursor resting on the name is someone asking what it does, so hovering it
-  // brings the label back for as long as they ask. Mouse only: a finger can't
-  // rest, and some mobile browsers fire enter without ever firing leave.
-  const [hintHover, setHintHover] = useState(false);
+  // The deck's Map pill — measured so the centred name never runs into it.
+  const mapPillRef = useRef<HTMLButtonElement>(null);
+  // The deck's entry on the Back stack while it is open (lib/backStack.ts).
+  const releaseDeckBack = useRef<(() => void) | null>(null);
+  // Set by every way out of the deck, cleared only by the next way in. The
+  // reveal can call onDeal late (a tap skips it); this is what stops that late
+  // call from re-opening a deck the person already asked to leave.
+  const exitAsked = useRef(false);
   // How far the name has to travel to sit in the middle of its row.
   const [centerShift, setCenterShift] = useState(0);
   // Where the wordmark's box actually ends on THIS screen. The deck hangs its
@@ -201,6 +198,17 @@ export default function AppShell() {
     // playing it behind a sign-up sheet would leave the map torn down underneath.
     gate("swipe", () => {
       clearTheStage();
+      exitAsked.current = false;
+      // The phone's Back closes the deck (lib/backStack.ts). The entry is
+      // taken as the deck starts, not once it is dealt, so Back during the
+      // reveal also lands back on the map; a sheet opened over the deck takes
+      // its own entry above this one, so Back closes that sheet first.
+      releaseDeckBack.current?.();
+      releaseDeckBack.current = pushBack(() => {
+        releaseDeckBack.current = null;
+        exitAsked.current = true;
+        setSwipeClosing(true);
+      });
       setReveal({ ox, oy, pins: capturePins() });
     });
   };
@@ -210,24 +218,26 @@ export default function AppShell() {
   // the header has to outrank the reveal layer and turn to light with it.
   const inDeck = mode === "swipe" || !!reveal;
   const onMap = !inDeck;
+  const leaveDeck = () => {
+    exitAsked.current = true;
+    setSwipeClosing(true);
+  };
   const toggleByTitle = (x: number, y: number) => {
     if (inDeck) {
-      if (!swipeClosing) setSwipeClosing(true);
+      leaveDeck();
     } else {
       openSwipe(x, y);
     }
   };
 
-  // Re-armed on every mode change: the cleanup puts the label back up, the
-  // timer takes it down again. Deliberately not set at the head of the effect —
-  // a run shouldn't open by setting state during its own first commit.
+  // clearTheStage() drops the dock through the floor with fill:"both", and the
+  // dock stays mounted under the deck — so without this it came back to the
+  // map invisible (and still catching touches over the bottom of the map).
+  // Released as the deck starts to leave, so its fade-out uncovers the dock.
   useEffect(() => {
-    const t = window.setTimeout(() => setTell(false), 3200);
-    return () => {
-      clearTimeout(t);
-      setTell(true);
-    };
-  }, [inDeck]);
+    if (swipeClosing || !inDeck) dockRef.current?.getAnimations().forEach((a) => a.cancel());
+  }, [swipeClosing, inDeck]);
+
 
   // The strip iOS leaves below a standalone PWA's viewport is painted from the
   // canvas, off <html>, which is outside every React tree in here. So the mode
@@ -261,8 +271,11 @@ export default function AppShell() {
       const h = headerRef.current;
       const t = titleRef.current;
       if (!h || !t) return;
-      // The header's px-5, and nothing else on the row once the deck is open.
-      setCenterShift(Math.max(0, (h.clientWidth - 40 - t.offsetWidth) / 2));
+      // The header's px-5. In the deck the Map pill shares the row, so the
+      // name centres but stops short of the pill on a narrow phone.
+      const free = h.clientWidth - 40 - t.offsetWidth;
+      const pill = mapPillRef.current ? mapPillRef.current.offsetWidth + 8 : 0;
+      setCenterShift(Math.max(0, Math.min(free / 2, free - pill)));
       // Read, not assumed: the safe-area inset and the name's own line box are
       // both device-dependent, and their sum is where the deck has to begin.
       setNameBottom(Math.round(t.getBoundingClientRect().bottom));
@@ -276,6 +289,10 @@ export default function AppShell() {
   }, [inDeck]);
 
   const leaveSwipe = () => {
+    // Left some other way: give the Back entry back, so Back on the map still
+    // means what it meant before. No-op if Back is what closed it.
+    releaseDeckBack.current?.();
+    releaseDeckBack.current = null;
     setMode("map");
     setSwipeClosing(false);
     setReveal(null);
@@ -420,6 +437,10 @@ export default function AppShell() {
       className={`relative w-full overflow-hidden${reveal ? " reveal-on" : ""}`}
       style={{ width: "100dvw", height: "var(--app-viewport-h)", background: "var(--bg-base)" }}
     >
+      {/* Opaque, status-bar high, installed app only (see .app-status-surface
+          in globals.css): iOS 27 blurs the top edge of an installed web app
+          unless something solid sits there. */}
+      <div className="app-status-surface" aria-hidden />
       <MapView places={visible} selectedId={selectedId} onSelect={setSelectedId} />
       <SwiggyRenewLink />
 
@@ -488,12 +509,6 @@ export default function AppShell() {
               onPointerCancel={() => {
                 flick.current = null;
               }}
-              onPointerEnter={(e) => {
-                if (e.pointerType === "mouse") setHintHover(true);
-              }}
-              onPointerLeave={(e) => {
-                if (e.pointerType === "mouse") setHintHover(false);
-              }}
               className="press pointer-events-auto font-medium leading-none tracking-[-0.015em]"
               style={{
                 touchAction: "pan-y",
@@ -555,30 +570,23 @@ export default function AppShell() {
               </button>
             </div>
           )}
-          {/* The way back, said where a desktop user can read it. The deck used
-              to teach nothing: the tell below is the map's, the aria-label is
-              silent to sighted eyes, and a mouse never stumbles into a
-              double-tap — which left desktop stranded in the deck. This takes
-              the empty right half of the name's row (the menu button's seat on
-              the map), fades on the same clock as the map's tell, and comes
-              back whenever the mouse rests on the name. Desktop only — on a
-              phone this row's centre is the wordmark itself, and the lens
-              panel's map row carries the way out there. */}
+          {/* The way back, the way in mirrored: the map's Deck pill becomes the
+              deck's Map pill, same seat, same glass, same height. The name
+              gesture and the filter sheet's row still work; this is the one a
+              thumb can see on every screen. */}
           {inDeck && (
-            <span
-              aria-hidden
-              className="whitespace-nowrap text-[10.5px] max-sm:hidden pointer-coarse:hidden"
-              style={{
-                fontFamily: "var(--font-mono)",
-                letterSpacing: "0.04em",
-                color: "rgba(244,240,238,0.6)",
-                opacity: tell || hintHover ? 1 : 0,
-                transform: tell || hintHover ? "none" : "translateX(4px)",
-                transition: "opacity 0.32s ease, transform 0.32s ease",
+            <button
+              ref={mapPillRef}
+              onClick={() => {
+                if (mode === "swipe" && !reveal && !swipeClosing) leaveDeck();
               }}
+              aria-label="Back to the map"
+              className="press pointer-events-auto flex h-9 shrink-0 items-center gap-1.5 rounded-full pl-3 pr-3.5 text-[12.5px] font-semibold"
+              style={{ ...GLASS, color: "oklch(0.92 0 0)" }}
             >
-              double-click the name for the map
-            </span>
+              <MapIcon size={15} strokeWidth={2.25} style={{ color: "var(--accent)" }} />
+              Map
+            </button>
           )}
         </div>
 
@@ -938,7 +946,8 @@ export default function AppShell() {
           spec={reveal}
           // the flash — the deck is dealt out of it
           onDeal={() => {
-            setSwipeClosing(false);
+            // Mounted already leaving if Back came during the reveal.
+            setSwipeClosing(exitAsked.current);
             setMode("swipe");
           }}
           onDone={() => setReveal(null)}
@@ -971,7 +980,7 @@ export default function AppShell() {
           entrance={reveal ? "fan" : "deal"}
           mastheadBottom={nameBottom}
           closing={swipeClosing}
-          onRequestClose={() => setSwipeClosing(true)}
+          onRequestClose={leaveDeck}
           onClosed={leaveSwipe}
           // The escape hatch at the bottom of a card: returns to the map and
           // opens the place, because PlaceDetail sits below the mode (z-40).
@@ -986,7 +995,9 @@ export default function AppShell() {
         />
       )}
 
-      <PlaceDetail id={detailId} onClose={() => setDetailId(null)} />
+      {/* Keyed per opening: the sheet stays mounted between places, and its
+          photo position, photo shape and editors belonged to the last one. */}
+      <PlaceDetail key={detailId ?? "closed"} id={detailId} onClose={() => setDetailId(null)} />
     </main>
   );
 }

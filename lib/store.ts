@@ -5,7 +5,7 @@ import type { Photo, Place, Tag, TagNamespace, Visit } from "./types";
 import { SEED_PLACES } from "./seed";
 import { idbAvailable, idbDeletePhoto, idbGetAllPhotos, idbPutPhoto } from "./photoStore";
 import { mergeTags, tagsFromGoogleTypes } from "./googleTags";
-import { mergePhotoHandles } from "./photoMerge";
+import { dropBlobBackedBytes, mergePhotoHandles } from "./photoMerge";
 import "./migrate"; // one-time imhungry.* → wheredoigokeerthan.* key copy — must eval before any read
 
 // ---------------------------------------------------------------------------
@@ -24,6 +24,7 @@ const listeners = new Set<() => void>();
 // changed locally so it can push them. applyRemotePlaces() deliberately does
 // NOT notify these — pulled records must not be pushed straight back.
 const localChangeListeners = new Set<(ids: string[]) => void>();
+const persistedListeners = new Set<() => void>(); // see onPersisted()
 // Stable reference for the server/initial snapshot (must not be re-created per call).
 const EMPTY: Place[] = [];
 
@@ -31,6 +32,33 @@ const EMPTY: Place[] = [];
 // localStorage copy, so a photo is never dropped from LS before IDB has it.
 const idbStored = new Set<string>();
 let initStarted = false;
+// Bumped by every snapshot handed to persistLS. Each write path awaits photo
+// stores first, so writes can finish out of order; only the newest snapshot is
+// allowed to land, or an older one (a photo since removed, a pre-pull library)
+// would overwrite it in localStorage.
+let persistGen = 0;
+// Set when the stored library could not be read AND could not be copied aside:
+// the unreadable original is then the only copy, so nothing may overwrite it.
+let holdCorrupt = false;
+// Callers that must not move on until their records are on disk (the sync
+// cursor). Resolved by the first successful write of a generation >= theirs —
+// a superseded snapshot's records are in the newer one — rejected when the
+// store refuses or fails to write, so the cursor stays put and the pull repeats.
+let writtenGen = 0;
+const writeWaiters: { gen: number; resolve: () => void; reject: (e: Error) => void }[] = [];
+function settleWaiters(ok: boolean, why?: string) {
+  for (let i = writeWaiters.length - 1; i >= 0; i--) {
+    const w = writeWaiters[i];
+    if (ok && w.gen > writtenGen) continue;
+    writeWaiters.splice(i, 1);
+    if (ok) w.resolve();
+    else w.reject(new Error(why ?? "places not saved"));
+  }
+}
+function whenWritten(gen: number): Promise<void> {
+  if (gen <= writtenGen) return Promise.resolve();
+  return new Promise((resolve, reject) => writeWaiters.push({ gen, resolve, reject }));
+}
 
 // Surfaced in the UI (AppShell banner) — a silent persist failure is data loss.
 let persistError: string | null = null;
@@ -72,11 +100,17 @@ function read(): Place[] {
         // never let a parse failure silently eat the library.
         try {
           window.localStorage.setItem(`${KEY}.corrupt.${Date.now()}`, raw);
+          setPersistError("Saved data couldn’t be read — a backup copy was kept. Export it before adding places.");
         } catch {
-          /* best effort */
+          // No room for the copy. Then the original is the only copy there is,
+          // and it is left exactly where it is: persistLS will not write over
+          // it, and the message stops claiming a backup that does not exist.
+          holdCorrupt = true;
+          setPersistError(
+            "Saved data couldn’t be read, and there’s no room to keep a copy — so it’s being left untouched. Changes made now aren’t saved on this device (sync still sends them up). Open /app/recover."
+          );
         }
         cache = [];
-        setPersistError("Saved data couldn’t be read — a backup copy was kept. Export it before adding places.");
       }
     } else {
       cache = [];
@@ -172,14 +206,21 @@ function scheduleInit(persistNeeded: boolean) {
         }
 
         if (hydratedAny) {
-          cache = hydrated;
+          // Onto the cache as it is NOW: edits made while the photo store was
+          // being read must not be replaced by the snapshot taken before it.
+          cache = (cache ?? []).map((p) =>
+            p.photos.some((ph) => !ph.dataUrl && stored.has(ph.id))
+              ? { ...p, photos: p.photos.map((ph) => (!ph.dataUrl && stored.has(ph.id) ? { ...ph, dataUrl: stored.get(ph.id)! } : ph)) }
+              : p
+          );
+          visibleMemo = null;
           notify();
         }
       } catch {
         /* IDB unavailable (private mode…) — records stay embedded in LS */
       }
     }
-    if (changed) persistLS(cache ?? []);
+    if (changed) persistLS(cache ?? [], ++persistGen);
   }, 0);
 }
 
@@ -201,7 +242,13 @@ function scheduleInit(persistNeeded: boolean) {
 // from IndexedDB, from Blob once sync uploads them, from the camera roll. A
 // place record is recoverable from nowhere. Given a forced choice between the
 // two, this one is not close.
-function persistLS(places: Place[]) {
+function persistLS(places: Place[], gen: number) {
+  // A newer snapshot was handed over while this one waited on the photo store.
+  if (gen !== persistGen) return;
+  if (holdCorrupt) {
+    settleWaiters(false, "stored library unreadable");
+    return;
+  }
   const serialise = (stripAll: boolean) =>
     JSON.stringify(
       places.map((p) =>
@@ -228,12 +275,16 @@ function persistLS(places: Place[]) {
   try {
     window.localStorage.setItem(KEY, serialise(false));
     setPersistError(null);
+    writtenGen = gen;
+    settleWaiters(true);
+    persistedListeners.forEach((l) => l());
     return;
   } catch (e) {
     if (!isQuota(e)) {
       setPersistError(
         "Couldn’t save — something in your library wouldn’t write. Export a backup now, before adding anything else."
       );
+      settleWaiters(false);
       return;
     }
     /* too big — fall through and try again without any photo bytes */
@@ -242,19 +293,35 @@ function persistLS(places: Place[]) {
   // One more chance at a home for the bytes about to be stripped. Best effort
   // and deliberately not awaited: the records are the thing being rescued here
   // and they must not wait on the photo store to answer.
+  // Once they land, the write runs again: if every photo now has a home the
+  // full write fits and the warning clears instead of outliving the risk it
+  // names. Only when at least one landed, so a photo the store keeps refusing
+  // cannot loop this.
   if (idbAvailable()) {
+    const offers: Promise<boolean>[] = [];
     for (const p of places) {
       for (const ph of p.photos) {
         if (!ph.dataUrl || idbStored.has(ph.id)) continue;
-        idbPutPhoto(ph.id, ph.dataUrl)
-          .then(() => idbStored.add(ph.id))
-          .catch(() => {});
+        offers.push(
+          idbPutPhoto(ph.id, ph.dataUrl).then(
+            () => (idbStored.add(ph.id), true),
+            () => false
+          )
+        );
       }
+    }
+    if (offers.length) {
+      void Promise.all(offers).then((landed) => {
+        if (landed.some(Boolean) && gen === persistGen) persistLS(cache ?? places, ++persistGen);
+      });
     }
   }
 
   try {
     window.localStorage.setItem(KEY, serialise(true));
+    writtenGen = gen;
+    settleWaiters(true);
+    persistedListeners.forEach((l) => l());
     // Careful with this wording: the retry above re-offers the bytes to
     // IndexedDB but cannot wait for the answer, so "your photos are safe" is a
     // promise this line is not in a position to make. It says what is certainly
@@ -266,6 +333,7 @@ function persistLS(places: Place[]) {
     setPersistError(
       "Couldn’t save — device storage is full and nothing new is being kept. Export a backup now, before adding anything else."
     );
+    settleWaiters(false);
   }
 }
 
@@ -280,21 +348,11 @@ function commit(next: Place[]) {
   const changedIds = next.filter((p) => prevById.get(p.id) !== p).map((p) => p.id);
   if (changedIds.length) localChangeListeners.forEach((l) => l(changedIds));
 
+  const gen = ++persistGen;
   void (async () => {
     if (idbAvailable()) {
       // New photos → IDB first, then strip from the LS copy.
-      for (const p of next) {
-        for (const ph of p.photos) {
-          if (ph.dataUrl && !idbStored.has(ph.id)) {
-            try {
-              await idbPutPhoto(ph.id, ph.dataUrl);
-              idbStored.add(ph.id);
-            } catch {
-              /* stays embedded in LS */
-            }
-          }
-        }
-      }
+      await stashPhotoBytes(next);
       // Photos that disappeared → clean out of IDB.
       const nextIds = new Set(next.flatMap((p) => p.photos.map((ph) => ph.id)));
       for (const p of prev) {
@@ -306,8 +364,26 @@ function commit(next: Place[]) {
         }
       }
     }
-    persistLS(next);
+    persistLS(next, gen);
   })();
+}
+
+// Every photo carrying bytes that the photo store has not confirmed goes there
+// first, so persistLS can leave its bytes out of the localStorage copy. One
+// path for local edits and pulled records alike: a pulled row's bytes skipping
+// this is how 5.7M chars of photos reached a ~5MB localStorage.
+async function stashPhotoBytes(places: Place[]): Promise<void> {
+  for (const p of places) {
+    for (const ph of p.photos) {
+      if (!ph.dataUrl || idbStored.has(ph.id)) continue;
+      try {
+        await idbPutPhoto(ph.id, ph.dataUrl);
+        idbStored.add(ph.id);
+      } catch {
+        /* stays embedded in LS */
+      }
+    }
+  }
 }
 
 function subscribe(listener: () => void) {
@@ -450,6 +526,14 @@ export function onLocalChange(cb: (ids: string[]) => void): () => void {
   return () => localChangeListeners.delete(cb);
 }
 
+// Fired after each successful write of the place snapshot — the moment the
+// store has just made room (photo bytes stripped), so small writes that failed
+// for space (the sync queue) can try again.
+export function onPersisted(cb: () => void): () => void {
+  persistedListeners.add(cb);
+  return () => persistedListeners.delete(cb);
+}
+
 export interface RemotePlaceRow {
   id: string;
   data: Place;
@@ -461,11 +545,18 @@ export interface RemotePlaceRow {
 // Local photo *bytes* are preserved (server records carry photo metadata only
 // in this phase, so overwriting would drop them). Persists locally but does NOT
 // emit a local change, so merged records aren't pushed back to the server.
-export function applyRemotePlaces(rows: RemotePlaceRow[]): void {
-  if (!rows.length) return;
+export function applyRemotePlaces(rows: RemotePlaceRow[]): Promise<void> {
+  if (!rows.length) return Promise.resolve();
   const byId = new Map(read().map((p) => [p.id, p]));
   let changed = false;
-  for (const row of rows) {
+  for (const remoteRow of rows) {
+    // Bytes a pulled row carries for a photo already in Blob are never taken:
+    // they are not in IndexedDB on this device, so persistLS would embed them —
+    // 5.7M chars from 8 photos, past the ~5MB localStorage ceiling, which is
+    // the "Storage filled up" banner. downloadPhotos() fetches them into IDB.
+    const remotePhotos = dropBlobBackedBytes(remoteRow.data.photos ?? []);
+    const row =
+      remotePhotos === remoteRow.data.photos ? remoteRow : { ...remoteRow, data: { ...remoteRow.data, photos: remotePhotos } };
     const local = byId.get(row.id);
     const localTs = local ? local.updatedAt ?? local.createdAt ?? "" : "";
     if (local && localTs >= row.updated_at) {
@@ -491,11 +582,29 @@ export function applyRemotePlaces(rows: RemotePlaceRow[]): void {
     });
     changed = true;
   }
-  if (!changed) return;
-  cache = Array.from(byId.values());
-  visibleMemo = null;
-  notify();
-  persistLS(cache);
+  // Nothing new — but "already in the cache" is not "on disk": a retry after
+  // a failed write finds these rows applied in memory only, and resolving here
+  // would let pull move its cursor past records that were never saved. So the
+  // shortcut holds only when the newest snapshot has actually been written.
+  if (!changed && writtenGen >= persistGen) return Promise.resolve();
+  if (changed) {
+    cache = Array.from(byId.values());
+    visibleMemo = null;
+    notify();
+  }
+  // Not dirtied — pulled records are not pushed back — but their bytes take
+  // the same road into the photo store as a local edit's.
+  const snapshot = read();
+  const gen = ++persistGen;
+  // Registered BEFORE the write starts: without IndexedDB the write below runs
+  // synchronously, and a waiter added after a failed one would never settle.
+  const written = whenWritten(gen);
+  void (async () => {
+    if (idbAvailable()) await stashPhotoBytes(snapshot);
+    persistLS(snapshot, gen);
+  })();
+  // The caller (pull) moves its cursor only once these records are on disk.
+  return written;
 }
 
 // Full snapshot including tombstones — what the engine pushes. Non-hook read.
@@ -648,6 +757,9 @@ export function importData(text: string): number {
       throw new Error("That file doesn’t look like a wheredoigokeerthan backup.");
     }
   }
+  // Importing replaces the library by definition — the explicit way out of a
+  // held, unreadable store (see holdCorrupt).
+  holdCorrupt = false;
   commit(b.places as Place[]);
   if (b.tags && typeof b.tags === "object") {
     commitTags({ ...EMPTY_VOCAB, ...(b.tags as Partial<TagVocab>) });
@@ -668,6 +780,9 @@ export function importData(text: string): number {
 // point: these are records that never reached the server.
 export function restorePlaces(found: Place[]): number {
   if (!found.length) return 0;
+  // The records being put back are salvaged from the very store the hold was
+  // protecting; restoring them is the recovery the hold was waiting for.
+  holdCorrupt = false;
   const byId = new Map(read().map((p) => [p.id, p]));
   const ts = (p: Place) => p.updatedAt ?? p.createdAt ?? "";
   const now = new Date().toISOString();

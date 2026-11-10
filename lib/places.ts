@@ -97,7 +97,22 @@ export async function resolveMapsLink(
 // if you don't already have one. Google-derived fields are a cached reference —
 // this never touches your own rating/notes/photos. Fire-and-forget; a miss just
 // leaves the last-known values in place. Called on save and on a stale re-open.
+// In flight per place, for the module's life rather than a component's: the
+// place sheet remounts on every opening, so close-and-reopen during a fetch
+// would otherwise start a second one and attach a second cover photo.
+const enriching = new Set<string>();
+
 export async function enrichPlaceFromGoogle(placeId: string, googlePlaceId: string) {
+  if (enriching.has(placeId)) return;
+  enriching.add(placeId);
+  try {
+    await enrichOnce(placeId, googlePlaceId);
+  } finally {
+    enriching.delete(placeId);
+  }
+}
+
+async function enrichOnce(placeId: string, googlePlaceId: string) {
   const g = await getPlaceDetails(googlePlaceId);
   if (!g) return;
   updatePlace(placeId, {
@@ -116,7 +131,7 @@ export async function enrichPlaceFromGoogle(placeId: string, googlePlaceId: stri
   // Google photo yet (your own uploads always lead; this is the fallback).
   const p = getPlace(placeId);
   if (g.photoName && p && !p.photos.some((ph) => ph.source === "google")) {
-    void attachGooglePhoto(placeId, g.photoName);
+    await attachGooglePhoto(placeId, g.photoName);
   }
 }
 
@@ -129,6 +144,9 @@ export async function attachGooglePhoto(placeId: string, photoName: string | nul
       `/api/places/photo?name=${encodeURIComponent(photoName)}`
     );
     const data = await res.json();
+    // Checked again on arrival: another attach may have landed while this one
+    // was in flight, and a place gets one Google cover, not two.
+    if (getPlace(placeId)?.photos.some((ph) => ph.source === "google")) return;
     if (typeof data.dataUrl === "string" && data.dataUrl.startsWith("data:image/")) {
       addPhoto(placeId, { dataUrl: data.dataUrl, source: "google", scope: "place", visitId: null });
     }

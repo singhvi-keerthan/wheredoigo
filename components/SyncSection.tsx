@@ -180,6 +180,9 @@ export default function SyncSection({ onToast }: { onToast: (m: string) => void 
               <span className="block text-[12.5px]" style={{ color: "var(--text-tertiary)" }}>
                 {detail}
                 {status.pending > 0 ? ` · ${status.pending} pending` : ""}
+                {status.photosPending > 0
+                  ? ` · ${status.photosPending} photo${status.photosPending > 1 ? "s" : ""} not backed up yet`
+                  : ""}
               </span>
             </span>
           </button>

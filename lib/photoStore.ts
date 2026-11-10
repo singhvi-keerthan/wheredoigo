@@ -86,14 +86,29 @@ function request<T>(req: IDBRequest<T>): Promise<T> {
   });
 }
 
+// Resolves when the transaction COMMITS, not when its request succeeds: a
+// transaction can still abort after the put's onsuccess (quota, eviction), and
+// the caller strips the localStorage copy of the bytes on our say-so.
+function committed(t: IDBTransaction): Promise<void> {
+  return new Promise((resolve, reject) => {
+    t.oncomplete = () => resolve();
+    t.onabort = () => reject(t.error ?? new Error("photo store transaction aborted"));
+    t.onerror = () => reject(t.error ?? new Error("photo store transaction failed"));
+  });
+}
+
 export async function idbPutPhoto(id: string, dataUrl: string): Promise<void> {
   const db = await openDb();
-  await request(tx(db, "readwrite").put(dataUrl, id));
+  const store = tx(db, "readwrite");
+  store.put(dataUrl, id);
+  await committed(store.transaction);
 }
 
 export async function idbDeletePhoto(id: string): Promise<void> {
   const db = await openDb();
-  await request(tx(db, "readwrite").delete(id));
+  const store = tx(db, "readwrite");
+  store.delete(id);
+  await committed(store.transaction);
 }
 
 // All photos as { id → dataUrl }, loaded once at boot to hydrate the in-memory

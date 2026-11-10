@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useRef } from "react";
 import { Navigation, X, Star, MapPin } from "lucide-react";
 import type { Place } from "@/lib/types";
 import type { Pick } from "@/lib/picks";
+import { useDialogFocus } from "./useDialogFocus";
 import { coverPhoto, leadRating, leadPrice, stateMeta, directionsUrl } from "@/lib/format";
 
 // The picks — what a run of the deck earned. A right swipe used to toast
@@ -42,12 +42,8 @@ export default function PicksSheet({
   // A dialog takes focus when it opens and hands it back when it closes, so
   // the keyboard is in the sheet rather than on the deck it covers (the deck's
   // own controls are inert meanwhile — see SwipeMode `covered`).
-  const dialogRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const prev = document.activeElement as HTMLElement | null;
-    dialogRef.current?.focus();
-    return () => prev?.focus?.();
-  }, []);
+  // Tab stays inside the sheet too (useDialogFocus).
+  const dialogRef = useDialogFocus<HTMLDivElement>();
 
   return (
     <div
